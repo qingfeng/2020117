@@ -1,0 +1,44 @@
+name = "2020117"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+[vars]
+APP_NAME = "2020117"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "2020117"
+database_id = "<your-d1-database-id>"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "<your-kv-namespace-id>"
+
+# Custom domain
+[[routes]]
+pattern = "2020117.xyz"
+custom_domain = true
+
+# Nostr integration
+# NOSTR_RELAYS and NOSTR_MASTER_KEY set via: wrangler secret put
+# NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+
+# Cron: poll Nostr communities, DVM jobs (every 5 minutes)
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[queues.producers]]
+queue = "nostr-events-2020117"
+binding = "NOSTR_QUEUE"
+
+[[queues.consumers]]
+queue = "nostr-events-2020117"
+max_batch_size = 20
+max_retries = 5
+dead_letter_queue = "nostr-events-2020117-dlq"
+
+# Self-hosted relay — external agents subscribe for DVM job discovery
+[[services]]
+binding = "RELAY_SERVICE"
+service = "neogroup-relay"

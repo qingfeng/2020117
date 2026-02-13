@@ -1,0 +1,2096 @@
+import { Hono } from 'hono'
+import { eq, desc, and, or, sql, inArray } from 'drizzle-orm'
+import type { AppContext } from '../types'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, ledgerEntries, deposits } from '../db/schema'
+import { generateId, generateApiKey, ensureUniqueUsername, stripHtml, isSuperAdmin } from '../lib/utils'
+import { requireApiAuth } from '../middleware/auth'
+import { createNotification } from '../lib/notifications'
+import { escrowFreeze, escrowRelease, escrowRefund, getBalance, transfer, creditBalance, recordLedger, publishLedgerEvents } from '../lib/balance'
+import type { LedgerEventInfo } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub } from '../services/nostr'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
+import { createInvoice, checkPayment, payInvoice, payLightningAddress } from '../services/lnbits'
+
+const api = new Hono<AppContext>()
+
+// ─── 公开端点：注册 ───
+
+api.post('/auth/register', async (c) => {
+  const db = c.get('db')
+  const body = await c.req.json().catch(() => ({})) as { name?: string }
+  const name = body.name?.trim()
+
+  if (!name || name.length < 1 || name.length > 50) {
+    return c.json({ error: 'name is required (1-50 chars)' }, 400)
+  }
+
+  // KV 限流：每 IP 5 分钟 1 次
+  const kv = c.env.KV
+  const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown'
+  const rateKey = `api_reg:${ip}`
+  const existing = await kv.get(rateKey)
+  if (existing) {
+    return c.json({ error: 'Rate limited. Try again in 5 minutes.' }, 429)
+  }
+  await kv.put(rateKey, '1', { expirationTtl: 300 })
+
+  // 生成 username（slug 化 name）
+  const baseUsername = name.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
+  const username = await ensureUniqueUsername(db, baseUsername)
+
+  // 生成 API key
+  const { key, hash, keyId } = await generateApiKey()
+
+  const userId = generateId()
+  const now = new Date()
+
+  // 创建用户
+  await db.insert(users).values({
+    id: userId,
+    username,
+    displayName: name,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // 创建 authProvider
+  await db.insert(authProviders).values({
+    id: keyId,
+    userId,
+    providerType: 'apikey',
+    providerId: `apikey:${username}`,
+    accessToken: hash,
+    createdAt: now,
+  })
+
+  // 自动生成 Nostr 密钥并开启同步
+  if (c.env.NOSTR_MASTER_KEY) {
+    try {
+      const { pubkey, privEncrypted, iv } = await generateNostrKeypair(c.env.NOSTR_MASTER_KEY)
+      await db.update(users).set({
+        nostrPubkey: pubkey,
+        nostrPrivEncrypted: privEncrypted,
+        nostrPrivIv: iv,
+        nostrKeyVersion: 1,
+        nostrSyncEnabled: 1,
+        updatedAt: new Date(),
+      }).where(eq(users.id, userId))
+
+      // 广播 Kind 0 metadata
+      if (c.env.NOSTR_QUEUE) {
+        const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+        const host = new URL(baseUrl).host
+        const metaEvent = await buildSignedEvent({
+          privEncrypted, iv, masterKey: c.env.NOSTR_MASTER_KEY,
+          kind: 0,
+          content: JSON.stringify({
+            name,
+            about: '',
+            picture: '',
+            nip05: `${username}@${host}`,
+            ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
+          }),
+          tags: [],
+        })
+        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [metaEvent] }))
+      }
+    } catch (e) {
+      console.error('[API] Failed to generate Nostr keys:', e)
+    }
+  }
+
+  return c.json({
+    user_id: userId,
+    username,
+    api_key: key,
+    message: 'Save your API key — it will not be shown again.',
+  }, 201)
+})
+
+// ─── 认证端点 ───
+
+// GET /api/me
+api.get('/me', requireApiAuth, async (c) => {
+  const user = c.get('user')!
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  return c.json({
+    id: user.id,
+    username: user.username,
+    display_name: user.displayName,
+    avatar_url: user.avatarUrl,
+    bio: user.bio,
+    profile_url: `${baseUrl}/user/${user.id}`,
+  })
+})
+
+// PUT /api/me
+api.put('/me', requireApiAuth, async (c) => {
+  const user = c.get('user')!
+  const db = c.get('db')
+  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string }
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() }
+  if (body.display_name !== undefined) updates.displayName = body.display_name.slice(0, 100)
+  if (body.bio !== undefined) updates.bio = body.bio.slice(0, 500)
+
+  await db.update(users).set(updates).where(eq(users.id, user.id))
+
+  // 更新 Nostr Kind 0 if enabled
+  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    try {
+      const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+      const host = new URL(baseUrl).host
+      const metaEvent = await buildSignedEvent({
+        privEncrypted: user.nostrPrivEncrypted!,
+        iv: user.nostrPrivIv!,
+        masterKey: c.env.NOSTR_MASTER_KEY,
+        kind: 0,
+        content: JSON.stringify({
+          name: (body.display_name !== undefined ? body.display_name.slice(0, 100) : user.displayName) || user.username,
+          about: body.bio !== undefined ? stripHtml(body.bio.slice(0, 500)) : (user.bio ? stripHtml(user.bio) : ''),
+          picture: user.avatarUrl || '',
+          nip05: `${user.username}@${host}`,
+          ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
+        }),
+        tags: [],
+      })
+      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [metaEvent] }))
+    } catch (e) {
+      console.error('[API] Failed to update Nostr metadata:', e)
+    }
+  }
+
+  return c.json({ ok: true })
+})
+
+// GET /api/groups
+api.get('/groups', requireApiAuth, async (c) => {
+  const db = c.get('db')
+
+  const allGroups = await db
+    .select({
+      id: groups.id,
+      name: groups.name,
+      description: groups.description,
+      icon_url: groups.iconUrl,
+      member_count: sql<number>`(SELECT COUNT(*) FROM group_member WHERE group_member.group_id = "group".id)`,
+      topic_count: sql<number>`(SELECT COUNT(*) FROM topic WHERE topic.group_id = "group".id)`,
+    })
+    .from(groups)
+    .orderBy(desc(groups.updatedAt))
+
+  return c.json({ groups: allGroups })
+})
+
+// GET /api/groups/:id/topics
+api.get('/groups/:id/topics', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const groupId = c.req.param('id')
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  // Check group exists
+  const group = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, groupId)).limit(1)
+  if (group.length === 0) return c.json({ error: 'Group not found' }, 404)
+
+  const topicList = await db
+    .select({
+      id: topics.id,
+      title: topics.title,
+      content: topics.content,
+      created_at: topics.createdAt,
+      author: {
+        id: users.id,
+        username: users.username,
+        display_name: users.displayName,
+      },
+      comment_count: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
+      like_count: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
+    })
+    .from(topics)
+    .innerJoin(users, eq(topics.userId, users.id))
+    .where(eq(topics.groupId, groupId))
+    .orderBy(desc(topics.updatedAt))
+    .limit(limit)
+    .offset(offset)
+
+  const result = topicList.map(t => ({
+    ...t,
+    content: t.content ? stripHtml(t.content).slice(0, 300) : null,
+  }))
+
+  return c.json({ topics: result, page, limit })
+})
+
+// GET /api/topics/:id
+api.get('/topics/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const topicId = c.req.param('id')
+
+  const topicResult = await db
+    .select({
+      id: topics.id,
+      title: topics.title,
+      content: topics.content,
+      group_id: topics.groupId,
+      created_at: topics.createdAt,
+      author: {
+        id: users.id,
+        username: users.username,
+        display_name: users.displayName,
+      },
+    })
+    .from(topics)
+    .innerJoin(users, eq(topics.userId, users.id))
+    .where(eq(topics.id, topicId))
+    .limit(1)
+
+  if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
+
+  const topicData = topicResult[0]
+
+  // 获取评论
+  const commentList = await db
+    .select({
+      id: comments.id,
+      content: comments.content,
+      reply_to_id: comments.replyToId,
+      created_at: comments.createdAt,
+      author: {
+        id: users.id,
+        username: users.username,
+        display_name: users.displayName,
+      },
+    })
+    .from(comments)
+    .innerJoin(users, eq(comments.userId, users.id))
+    .where(eq(comments.topicId, topicId))
+    .orderBy(comments.createdAt)
+
+  return c.json({
+    topic: {
+      ...topicData,
+      content: topicData.content ? stripHtml(topicData.content) : null,
+    },
+    comments: commentList.map(cm => ({
+      ...cm,
+      content: cm.content ? stripHtml(cm.content) : null,
+    })),
+  })
+})
+
+// POST /api/groups/:id/topics — 发帖
+api.post('/groups/:id/topics', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const groupId = c.req.param('id')
+
+  const body = await c.req.json().catch(() => ({})) as { title?: string; content?: string }
+  const title = body.title?.trim()
+  const content = body.content?.trim() || null
+
+  if (!title || title.length < 1 || title.length > 200) {
+    return c.json({ error: 'title is required (1-200 chars)' }, 400)
+  }
+
+  // Check group exists
+  const groupData = await db.select({ id: groups.id, name: groups.name, nostrSyncEnabled: groups.nostrSyncEnabled, nostrPubkey: groups.nostrPubkey })
+    .from(groups).where(eq(groups.id, groupId)).limit(1)
+  if (groupData.length === 0) return c.json({ error: 'Group not found' }, 404)
+
+  // 自动加入小组
+  const membership = await db.select({ id: groupMembers.id })
+    .from(groupMembers)
+    .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, user.id)))
+    .limit(1)
+
+  if (membership.length === 0) {
+    await db.insert(groupMembers).values({
+      id: generateId(),
+      groupId,
+      userId: user.id,
+      createdAt: new Date(),
+    })
+  }
+
+  const topicId = generateId()
+  const now = new Date()
+
+  await db.insert(topics).values({
+    id: topicId,
+    groupId,
+    userId: user.id,
+    title,
+    content,
+    type: 0,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+
+  // Nostr: broadcast Kind 1
+  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const textContent = content ? stripHtml(content) : ''
+        const noteContent = textContent
+          ? `${title}\n\n${textContent}\n\n🔗 ${baseUrl}/topic/${topicId}`
+          : `${title}\n\n🔗 ${baseUrl}/topic/${topicId}`
+
+        const nostrTags: string[][] = [
+          ['r', `${baseUrl}/topic/${topicId}`],
+          ['client', c.env.APP_NAME || 'NeoGroup'],
+        ]
+
+        // NIP-72 community a-tag
+        if (groupData[0].nostrSyncEnabled === 1 && groupData[0].nostrPubkey && groupData[0].name) {
+          const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+          nostrTags.push(['a', `34550:${groupData[0].nostrPubkey}:${groupData[0].name}`, relayUrl])
+        }
+
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 1,
+          content: noteContent,
+          tags: nostrTags,
+        })
+
+        await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API/Nostr] Failed to publish topic:', e)
+      }
+    })())
+  }
+
+  return c.json({
+    id: topicId,
+    url: `${baseUrl}/topic/${topicId}`,
+  }, 201)
+})
+
+// POST /api/topics/:id/comments — 评论
+api.post('/topics/:id/comments', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  const body = await c.req.json().catch(() => ({})) as { content?: string; reply_to_id?: string }
+  const content = body.content?.trim()
+  const replyToId = body.reply_to_id || null
+
+  if (!content || content.length < 1 || content.length > 5000) {
+    return c.json({ error: 'content is required (1-5000 chars)' }, 400)
+  }
+
+  // Check topic exists
+  const topicResult = await db.select().from(topics).where(eq(topics.id, topicId)).limit(1)
+  if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
+
+  // Validate reply_to_id
+  if (replyToId) {
+    const parent = await db.select({ id: comments.id }).from(comments)
+      .where(and(eq(comments.id, replyToId), eq(comments.topicId, topicId))).limit(1)
+    if (parent.length === 0) return c.json({ error: 'reply_to_id not found in this topic' }, 400)
+  }
+
+  const commentId = generateId()
+  const now = new Date()
+  const htmlContent = `<p>${content.replace(/\n/g, '</p><p>')}</p>`
+
+  await db.insert(comments).values({
+    id: commentId,
+    topicId,
+    userId: user.id,
+    content: htmlContent,
+    replyToId,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // 更新话题 updatedAt
+  await db.update(topics).set({ updatedAt: now }).where(eq(topics.id, topicId))
+
+  // 通知话题作者
+  await createNotification(db, {
+    userId: topicResult[0].userId,
+    actorId: user.id,
+    type: 'reply',
+    topicId,
+  })
+
+  // 如果是回复评论，通知该评论作者
+  if (replyToId) {
+    const replyComment = await db.select({ userId: comments.userId }).from(comments).where(eq(comments.id, replyToId)).limit(1)
+    if (replyComment.length > 0 && replyComment[0].userId !== topicResult[0].userId) {
+      await createNotification(db, {
+        userId: replyComment[0].userId,
+        actorId: user.id,
+        type: 'comment_reply',
+        topicId,
+        commentId: replyToId,
+      })
+    }
+  }
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+
+  // Nostr: broadcast comment as Kind 1
+  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const textContent = stripHtml(htmlContent)
+        const noteContent = `${textContent}\n\n🔗 ${baseUrl}/topic/${topicId}#comment-${commentId}`
+
+        const tags: string[][] = [
+          ['r', `${baseUrl}/topic/${topicId}`],
+          ['client', c.env.APP_NAME || 'NeoGroup'],
+        ]
+
+        // Thread: root = topic nostr event
+        if (topicResult[0].nostrEventId) {
+          tags.push(['e', topicResult[0].nostrEventId, '', 'root'])
+        }
+
+        // Thread: reply = parent comment nostr event
+        if (replyToId) {
+          const parentComment = await db.select({ nostrEventId: comments.nostrEventId })
+            .from(comments).where(eq(comments.id, replyToId)).limit(1)
+          if (parentComment.length > 0 && parentComment[0].nostrEventId) {
+            tags.push(['e', parentComment[0].nostrEventId, '', 'reply'])
+          }
+        }
+
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 1,
+          content: noteContent,
+          tags,
+        })
+
+        await db.update(comments).set({ nostrEventId: event.id }).where(eq(comments.id, commentId))
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API/Nostr] Failed to publish comment:', e)
+      }
+    })())
+  }
+
+  return c.json({
+    id: commentId,
+    url: `${baseUrl}/topic/${topicId}#comment-${commentId}`,
+  }, 201)
+})
+
+// ─── Timeline: 个人动态 ───
+
+// POST /api/posts — 发布个人动态
+api.post('/posts', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const body = await c.req.json().catch(() => ({})) as { content?: string }
+  const content = body.content?.trim()
+
+  if (!content || content.length < 1 || content.length > 5000) {
+    return c.json({ error: 'content is required (1-5000 chars)' }, 400)
+  }
+
+  const topicId = generateId()
+  const now = new Date()
+  const htmlContent = `<p>${content.replace(/\n/g, '</p><p>')}</p>`
+
+  await db.insert(topics).values({
+    id: topicId,
+    groupId: null,
+    userId: user.id,
+    title: '',
+    content: htmlContent,
+    type: 0,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+
+  // Nostr: broadcast Kind 1
+  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const textContent = stripHtml(htmlContent).trim()
+        const noteContent = textContent
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 1,
+          content: noteContent,
+          tags: [
+            ['client', c.env.APP_NAME || 'NeoGroup'],
+          ],
+        })
+        await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API/Nostr] Failed to publish personal post:', e)
+      }
+    })())
+  }
+
+  return c.json({
+    id: topicId,
+    url: `${baseUrl}/topic/${topicId}`,
+  }, 201)
+})
+
+// POST /api/topics/:id/like — 点赞话题
+api.post('/topics/:id/like', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  const existing = await db.select({ id: topicLikes.id })
+    .from(topicLikes)
+    .where(and(eq(topicLikes.topicId, topicId), eq(topicLikes.userId, user.id)))
+    .limit(1)
+
+  if (existing.length > 0) {
+    // Unlike
+    await db.delete(topicLikes)
+      .where(and(eq(topicLikes.topicId, topicId), eq(topicLikes.userId, user.id)))
+    return c.json({ liked: false })
+  }
+
+  await db.insert(topicLikes).values({
+    id: generateId(),
+    topicId,
+    userId: user.id,
+    createdAt: new Date(),
+  })
+
+  // Notification
+  const topicData = await db.select({ userId: topics.userId }).from(topics).where(eq(topics.id, topicId)).limit(1)
+  if (topicData.length > 0) {
+    await createNotification(db, {
+      userId: topicData[0].userId,
+      actorId: user.id,
+      type: 'topic_like',
+      topicId,
+    })
+  }
+
+  return c.json({ liked: true })
+})
+
+// DELETE /api/topics/:id/like — 取消点赞
+api.delete('/topics/:id/like', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  await db.delete(topicLikes)
+    .where(and(eq(topicLikes.topicId, topicId), eq(topicLikes.userId, user.id)))
+
+  return c.json({ liked: false })
+})
+
+// DELETE /api/topics/:id — 删除话题
+api.delete('/topics/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  const topicResult = await db.select().from(topics).where(eq(topics.id, topicId)).limit(1)
+  if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
+
+  if (topicResult[0].userId !== user.id) {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+
+  // Nostr Kind 5: deletion event
+  if (topicResult[0].nostrEventId && user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 5,
+          content: '',
+          tags: [['e', topicResult[0].nostrEventId!]],
+        })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API/Nostr] Failed to send Kind 5 deletion:', e)
+      }
+    })())
+  }
+
+  // 级联删除
+  const topicComments = await db.select({ id: comments.id }).from(comments).where(eq(comments.topicId, topicId))
+  for (const comment of topicComments) {
+    await db.delete(commentLikes).where(eq(commentLikes.commentId, comment.id))
+    await db.delete(commentReposts).where(eq(commentReposts.commentId, comment.id))
+  }
+  await db.delete(comments).where(eq(comments.topicId, topicId))
+  await db.delete(topicLikes).where(eq(topicLikes.topicId, topicId))
+  await db.delete(topicReposts).where(eq(topicReposts.topicId, topicId))
+  await db.delete(topics).where(eq(topics.id, topicId))
+
+  return c.json({ success: true })
+})
+
+// ─── Nostr Follow ───
+
+// POST /api/nostr/follow
+api.post('/nostr/follow', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
+  const { getOrCreateNostrUser } = await import('../services/nostr-community')
+
+  const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
+  const target = body.pubkey?.trim()
+  if (!target) return c.json({ error: 'pubkey is required' }, 400)
+
+  let pubkey: string | null = null
+  let npub: string | null = null
+
+  if (target.startsWith('npub1')) {
+    pubkey = npubToPubkey(target)
+    npub = target
+  } else if (/^[0-9a-f]{64}$/i.test(target)) {
+    pubkey = target.toLowerCase()
+    npub = pubkeyToNpub(pubkey)
+  }
+
+  if (!pubkey) return c.json({ error: 'Invalid pubkey or npub' }, 400)
+
+  const existing = await db.select({ id: nostrFollows.id })
+    .from(nostrFollows)
+    .where(and(eq(nostrFollows.userId, user.id), eq(nostrFollows.targetPubkey, pubkey)))
+    .limit(1)
+
+  if (existing.length > 0) return c.json({ ok: true, already_following: true })
+
+  await db.insert(nostrFollows).values({
+    id: generateId(),
+    userId: user.id,
+    targetPubkey: pubkey,
+    targetNpub: npub,
+    createdAt: new Date(),
+  })
+
+  // Create shadow user + user_follow
+  try {
+    const shadowUser = await getOrCreateNostrUser(db, pubkey)
+    const existingFollow = await db.select({ id: userFollows.id })
+      .from(userFollows)
+      .where(and(eq(userFollows.followerId, user.id), eq(userFollows.followeeId, shadowUser.id)))
+      .limit(1)
+    if (existingFollow.length === 0) {
+      await db.insert(userFollows).values({
+        id: generateId(),
+        followerId: user.id,
+        followeeId: shadowUser.id,
+        createdAt: new Date(),
+      })
+    }
+  } catch (e) {
+    console.error('[API] Failed to create shadow user for Nostr follow:', e)
+  }
+
+  return c.json({ ok: true })
+})
+
+// DELETE /api/nostr/follow/:pubkey
+api.delete('/nostr/follow/:pubkey', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const pubkey = c.req.param('pubkey')
+
+  await db.delete(nostrFollows)
+    .where(and(eq(nostrFollows.userId, user.id), eq(nostrFollows.targetPubkey, pubkey)))
+
+  return c.json({ ok: true })
+})
+
+// GET /api/nostr/following
+api.get('/nostr/following', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const list = await db.select({
+    id: nostrFollows.id,
+    target_pubkey: nostrFollows.targetPubkey,
+    target_npub: nostrFollows.targetNpub,
+    target_display_name: nostrFollows.targetDisplayName,
+    created_at: nostrFollows.createdAt,
+  })
+    .from(nostrFollows)
+    .where(eq(nostrFollows.userId, user.id))
+    .orderBy(desc(nostrFollows.createdAt))
+
+  return c.json({ following: list })
+})
+
+// ─── DVM (NIP-90 Data Vending Machine) ───
+
+// GET /api/dvm/market — 公开：可接单的任务列表（无需认证）
+api.get('/dvm/market', async (c) => {
+  const db = c.get('db')
+  const kindFilter = c.req.query('kind') // 可选 kind 过滤
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const page = parseInt(c.req.query('page') || '1')
+  const offset = (page - 1) * limit
+
+  const conditions = [
+    eq(dvmJobs.role, 'customer'),
+    inArray(dvmJobs.status, ['open', 'error']),
+  ]
+  if (kindFilter) {
+    const k = parseInt(kindFilter)
+    if (k >= 5000 && k <= 5999) {
+      conditions.push(eq(dvmJobs.kind, k))
+    }
+  }
+
+  const jobs = await db
+    .select({
+      id: dvmJobs.id,
+      kind: dvmJobs.kind,
+      status: dvmJobs.status,
+      input: dvmJobs.input,
+      inputType: dvmJobs.inputType,
+      output: dvmJobs.output,
+      bidMsats: dvmJobs.bidMsats,
+      params: dvmJobs.params,
+      createdAt: dvmJobs.createdAt,
+    })
+    .from(dvmJobs)
+    .where(and(...conditions))
+    .orderBy(desc(dvmJobs.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    jobs: jobs.map(j => ({
+      id: j.id,
+      kind: j.kind,
+      status: j.status,
+      input: j.input,
+      input_type: j.inputType,
+      output: j.output,
+      bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
+      params: j.params ? JSON.parse(j.params) : null,
+      created_at: j.createdAt,
+      accept_url: `/api/dvm/jobs/${j.id}/accept`,
+    })),
+    page,
+    limit,
+  })
+})
+
+// POST /api/dvm/request — Customer: 发布 Job Request
+api.post('/dvm/request', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    kind?: number
+    input?: string
+    input_type?: string
+    output?: string
+    bid_sats?: number
+    params?: Record<string, string>
+  }
+
+  const kind = body.kind
+  if (!kind || kind < 5000 || kind > 5999) {
+    return c.json({ error: 'kind must be between 5000 and 5999' }, 400)
+  }
+
+  const input = body.input?.trim()
+  if (!input) {
+    return c.json({ error: 'input is required' }, 400)
+  }
+
+  const inputType = body.input_type || 'text'
+  const bidSats = body.bid_sats || 0
+  const bidMsats = bidSats ? bidSats * 1000 : undefined
+
+  // Escrow freeze if bid_sats > 0
+  let freezeEntries: LedgerEventInfo[] = []
+  if (bidSats > 0) {
+    const freezeResult = await escrowFreeze(db, user.id, bidSats, 'pending')
+    if (!freezeResult.ok) {
+      return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
+    }
+    freezeEntries = freezeResult.entries
+  }
+
+  const relays = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+
+  const event = await buildJobRequestEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY!,
+    kind,
+    input,
+    inputType,
+    output: body.output,
+    bidMsats,
+    extraParams: body.params,
+    relays,
+  })
+
+  // Save to DB
+  const jobId = generateId()
+  const now = new Date()
+  await db.insert(dvmJobs).values({
+    id: jobId,
+    userId: user.id,
+    role: 'customer',
+    kind,
+    eventId: event.id,
+    status: 'open',
+    input,
+    inputType,
+    output: body.output || null,
+    bidMsats: bidMsats || null,
+    customerPubkey: event.pubkey,
+    requestEventId: event.id,
+    params: body.params ? JSON.stringify(body.params) : null,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Update escrow ledger ref_id with actual job ID
+  if (bidSats > 0) {
+    await db.update(ledgerEntries)
+      .set({ refId: jobId })
+      .where(and(eq(ledgerEntries.userId, user.id), eq(ledgerEntries.refId, 'pending'), eq(ledgerEntries.type, 'escrow_freeze')))
+    for (const e of freezeEntries) e.memo = `Escrow freeze for job ${jobId}`
+  }
+
+  // Publish to relay
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  // Publish ledger events (GEP-0009)
+  if (freezeEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, freezeEntries, userKeys))
+  }
+
+  // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const activeServices = await db
+        .select({ userId: dvmServices.userId, kinds: dvmServices.kinds })
+        .from(dvmServices)
+        .where(eq(dvmServices.active, 1))
+
+      for (const svc of activeServices) {
+        if (svc.userId === user.id) continue // 不给自己投递
+        try {
+          const svcKinds = JSON.parse(svc.kinds) as number[]
+          if (!svcKinds.includes(kind)) continue
+
+          // 检查是否已存在（防重复）
+          const existing = await db
+            .select({ id: dvmJobs.id })
+            .from(dvmJobs)
+            .where(and(
+              eq(dvmJobs.requestEventId, event.id),
+              eq(dvmJobs.userId, svc.userId),
+            ))
+            .limit(1)
+          if (existing.length > 0) continue
+
+          await db.insert(dvmJobs).values({
+            id: generateId(),
+            userId: svc.userId,
+            role: 'provider',
+            kind,
+            status: 'open',
+            input,
+            inputType,
+            output: body.output || null,
+            bidMsats: bidMsats || null,
+            customerPubkey: event.pubkey,
+            requestEventId: event.id,
+            params: body.params ? JSON.stringify(body.params) : null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          console.log(`[DVM] Local delivery: job ${event.id} → provider ${svc.userId}`)
+        } catch {}
+      }
+    } catch (e) {
+      console.error('[DVM] Local delivery failed:', e)
+    }
+  })())
+
+  return c.json({
+    job_id: jobId,
+    event_id: event.id,
+    status: 'open',
+    kind,
+  }, 201)
+})
+
+// GET /api/dvm/jobs — 查看自己的任务列表
+api.get('/dvm/jobs', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const role = c.req.query('role') // customer | provider
+  const status = c.req.query('status') // comma-separated
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  const conditions = [eq(dvmJobs.userId, user.id)]
+  if (role === 'customer' || role === 'provider') {
+    conditions.push(eq(dvmJobs.role, role))
+  }
+  if (status) {
+    const statuses = status.split(',').map(s => s.trim()).filter(Boolean)
+    if (statuses.length > 0) {
+      conditions.push(inArray(dvmJobs.status, statuses))
+    }
+  }
+
+  const jobs = await db
+    .select()
+    .from(dvmJobs)
+    .where(and(...conditions))
+    .orderBy(desc(dvmJobs.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    jobs: jobs.map(j => ({
+      id: j.id,
+      role: j.role,
+      kind: j.kind,
+      status: j.status,
+      input: j.input,
+      input_type: j.inputType,
+      output: j.output,
+      result: j.result,
+      bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : null,
+      customer_pubkey: j.customerPubkey,
+      provider_pubkey: j.providerPubkey,
+      request_event_id: j.requestEventId,
+      result_event_id: j.resultEventId,
+      params: j.params ? JSON.parse(j.params) : null,
+      created_at: j.createdAt,
+      updated_at: j.updatedAt,
+    })),
+    page,
+    limit,
+  })
+})
+
+// GET /api/dvm/jobs/:id — 任务详情（查看任意 job）
+api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  // 先查自己名下的 job（包含 provider 视角）
+  let job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id)))
+    .limit(1)
+
+  // 如果不是自己的，查 customer 的原始 job（公开需求）
+  if (job.length === 0) {
+    job = await db.select().from(dvmJobs)
+      .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+      .limit(1)
+  }
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+
+  const j = job[0]
+  return c.json({
+    id: j.id,
+    role: j.role,
+    kind: j.kind,
+    status: j.status,
+    input: j.input,
+    input_type: j.inputType,
+    output: j.output,
+    result: j.result,
+    bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : null,
+    price_sats: j.priceMsats ? Math.floor(j.priceMsats / 1000) : null,
+    customer_pubkey: j.customerPubkey,
+    provider_pubkey: j.providerPubkey,
+    request_event_id: j.requestEventId,
+    result_event_id: j.resultEventId,
+    params: j.params ? JSON.parse(j.params) : null,
+    created_at: j.createdAt,
+    updated_at: j.updatedAt,
+  })
+})
+
+// POST /api/dvm/jobs/:id/accept — Provider: 接单（为自己创建 provider job）
+api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  // 查 customer 的原始 job
+  const customerJob = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (customerJob.length === 0) return c.json({ error: 'Job not found' }, 404)
+
+  const cj = customerJob[0]
+  if (cj.userId === user.id) return c.json({ error: 'Cannot accept your own job' }, 400)
+  if (cj.status === 'cancelled') return c.json({ error: 'Job is cancelled' }, 400)
+  if (cj.status === 'completed') return c.json({ error: 'Job is already completed' }, 400)
+
+  // error 状态允许重新接单，重置为 open
+  if (cj.status === 'error') {
+    await db.update(dvmJobs)
+      .set({ status: 'open', updatedAt: new Date() })
+      .where(eq(dvmJobs.id, jobId))
+  }
+
+  // 检查是否已有活跃的 provider job（open/processing）
+  const existing = await db.select({ id: dvmJobs.id, status: dvmJobs.status }).from(dvmJobs)
+    .where(and(
+      eq(dvmJobs.requestEventId, cj.requestEventId!),
+      eq(dvmJobs.userId, user.id),
+      eq(dvmJobs.role, 'provider'),
+      inArray(dvmJobs.status, ['open', 'processing']),
+    ))
+    .limit(1)
+
+  if (existing.length > 0) {
+    return c.json({ job_id: existing[0].id, status: 'already_accepted' })
+  }
+
+  // 创建 provider job
+  const providerJobId = generateId()
+  const now = new Date()
+  await db.insert(dvmJobs).values({
+    id: providerJobId,
+    userId: user.id,
+    role: 'provider',
+    kind: cj.kind,
+    status: 'open',
+    input: cj.input,
+    inputType: cj.inputType,
+    output: cj.output,
+    bidMsats: cj.bidMsats,
+    customerPubkey: cj.customerPubkey,
+    requestEventId: cj.requestEventId,
+    params: cj.params,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  return c.json({ job_id: providerJobId, status: 'accepted', kind: cj.kind })
+})
+
+// POST /api/dvm/jobs/:id/reject — Customer: 拒绝结果，重新开放接单
+api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (job[0].status !== 'result_available') {
+    return c.json({ error: `Cannot reject job with status: ${job[0].status}` }, 400)
+  }
+
+  // 重置 customer job 为 open
+  await db.update(dvmJobs)
+    .set({
+      status: 'open',
+      result: null,
+      resultEventId: null,
+      providerPubkey: null,
+      priceMsats: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(dvmJobs.id, jobId))
+
+  // 把对应的 provider job 标记为 rejected
+  if (job[0].requestEventId) {
+    await db.update(dvmJobs)
+      .set({ status: 'rejected', updatedAt: new Date() })
+      .where(and(
+        eq(dvmJobs.requestEventId, job[0].requestEventId),
+        eq(dvmJobs.role, 'provider'),
+        inArray(dvmJobs.status, ['completed', 'result_available']),
+      ))
+  }
+
+  // 重新同站直投：给注册了对应 Kind 的 Provider 创建新的 provider job（排除已被拒绝的）
+  const cj = job[0]
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const activeServices = await db
+        .select({ userId: dvmServices.userId, kinds: dvmServices.kinds })
+        .from(dvmServices)
+        .where(eq(dvmServices.active, 1))
+
+      for (const svc of activeServices) {
+        if (svc.userId === user.id) continue
+        try {
+          const svcKinds = JSON.parse(svc.kinds) as number[]
+          if (!svcKinds.includes(cj.kind)) continue
+
+          // 检查该 Provider 是否已有此 request 的 rejected 记录（不重复投递给已被拒绝的）
+          // 但如果同一 Provider 想重新接单，accept 接口仍然可用
+          const existing = await db.select({ id: dvmJobs.id }).from(dvmJobs)
+            .where(and(
+              eq(dvmJobs.requestEventId, cj.requestEventId!),
+              eq(dvmJobs.userId, svc.userId),
+              eq(dvmJobs.role, 'provider'),
+              inArray(dvmJobs.status, ['open', 'processing']),
+            ))
+            .limit(1)
+          if (existing.length > 0) continue
+
+          await db.insert(dvmJobs).values({
+            id: generateId(),
+            userId: svc.userId,
+            role: 'provider',
+            kind: cj.kind,
+            status: 'open',
+            input: cj.input,
+            inputType: cj.inputType,
+            output: cj.output,
+            bidMsats: cj.bidMsats,
+            customerPubkey: cj.customerPubkey,
+            requestEventId: cj.requestEventId,
+            params: cj.params,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          console.log(`[DVM] Re-delivery after reject: job ${cj.requestEventId} → provider ${svc.userId}`)
+        } catch {}
+      }
+    } catch (e) {
+      console.error('[DVM] Re-delivery after reject failed:', e)
+    }
+  })())
+
+  return c.json({ ok: true, status: 'open' })
+})
+
+// POST /api/dvm/jobs/:id/cancel — Customer: 取消任务
+api.post('/dvm/jobs/:id/cancel', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (job[0].status === 'completed' || job[0].status === 'cancelled') {
+    return c.json({ error: `Cannot cancel job with status: ${job[0].status}` }, 400)
+  }
+
+  // Refund escrow if bid > 0
+  const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
+  let refundEntries: LedgerEventInfo[] = []
+  if (bidSats > 0) {
+    const refundResult = await escrowRefund(db, user.id, bidSats, jobId)
+    refundEntries = refundResult.entries
+  }
+
+  await db.update(dvmJobs)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(eq(dvmJobs.id, jobId))
+
+  // Publish ledger events (GEP-0009)
+  if (refundEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, refundEntries))
+  }
+
+  // Send Kind 5 deletion event for the request
+  if (job[0].requestEventId && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 5,
+          content: '',
+          tags: [['e', job[0].requestEventId!]],
+        })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[DVM] Failed to send deletion event:', e)
+      }
+    })())
+  }
+
+  return c.json({ ok: true, status: 'cancelled', ...(bidSats > 0 ? { refunded_sats: bidSats, balance_sats: await getBalance(db, user.id) } : {}) })
+})
+
+// POST /api/dvm/services — Provider: 注册服务
+api.post('/dvm/services', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    kinds?: number[]
+    description?: string
+    pricing?: { min_sats?: number; max_sats?: number }
+  }
+
+  if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
+    return c.json({ error: 'kinds array is required' }, 400)
+  }
+
+  for (const k of body.kinds) {
+    if (k < 5000 || k > 5999) {
+      return c.json({ error: `Invalid kind ${k}: must be between 5000 and 5999` }, 400)
+    }
+  }
+
+  const pricingMin = body.pricing?.min_sats ? body.pricing.min_sats * 1000 : null
+  const pricingMax = body.pricing?.max_sats ? body.pricing.max_sats * 1000 : null
+
+  // Build NIP-89 Handler Info (Kind 31990)
+  const handlerEvent = await buildHandlerInfoEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY!,
+    kinds: body.kinds,
+    name: user.displayName || user.username,
+    about: body.description,
+    pricingMin: pricingMin || undefined,
+    pricingMax: pricingMax || undefined,
+  })
+
+  const serviceId = generateId()
+  const now = new Date()
+
+  await db.insert(dvmServices).values({
+    id: serviceId,
+    userId: user.id,
+    kinds: JSON.stringify(body.kinds),
+    description: body.description || null,
+    pricingMin,
+    pricingMax,
+    eventId: handlerEvent.id,
+    active: 1,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Publish Handler Info to relay
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [handlerEvent] }))
+  }
+
+  return c.json({
+    service_id: serviceId,
+    event_id: handlerEvent.id,
+    kinds: body.kinds,
+  }, 201)
+})
+
+// GET /api/dvm/services — Provider: 查看自己注册的服务
+api.get('/dvm/services', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const services = await db.select().from(dvmServices)
+    .where(eq(dvmServices.userId, user.id))
+    .orderBy(desc(dvmServices.createdAt))
+
+  return c.json({
+    services: services.map(s => ({
+      id: s.id,
+      kinds: JSON.parse(s.kinds),
+      description: s.description,
+      pricing_min_sats: s.pricingMin ? Math.floor(s.pricingMin / 1000) : null,
+      pricing_max_sats: s.pricingMax ? Math.floor(s.pricingMax / 1000) : null,
+      active: !!s.active,
+      created_at: s.createdAt,
+    })),
+  })
+})
+
+// DELETE /api/dvm/services/:id — Provider: 停用服务
+api.delete('/dvm/services/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const serviceId = c.req.param('id')
+
+  const svc = await db.select({ id: dvmServices.id }).from(dvmServices)
+    .where(and(eq(dvmServices.id, serviceId), eq(dvmServices.userId, user.id)))
+    .limit(1)
+
+  if (svc.length === 0) return c.json({ error: 'Service not found' }, 404)
+
+  await db.update(dvmServices)
+    .set({ active: 0, updatedAt: new Date() })
+    .where(eq(dvmServices.id, serviceId))
+
+  return c.json({ ok: true })
+})
+
+// GET /api/dvm/inbox — Provider: 查看收到的 Job Request
+api.get('/dvm/inbox', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const kindFilter = c.req.query('kind')
+  const statusFilter = c.req.query('status') || 'open'
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  const conditions = [eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'provider')]
+  if (kindFilter) {
+    conditions.push(eq(dvmJobs.kind, parseInt(kindFilter)))
+  }
+  if (statusFilter) {
+    const statuses = statusFilter.split(',').map(s => s.trim()).filter(Boolean)
+    if (statuses.length > 0) {
+      conditions.push(inArray(dvmJobs.status, statuses))
+    }
+  }
+
+  const jobs = await db
+    .select()
+    .from(dvmJobs)
+    .where(and(...conditions))
+    .orderBy(desc(dvmJobs.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    jobs: jobs.map(j => ({
+      id: j.id,
+      kind: j.kind,
+      status: j.status,
+      input: j.input,
+      input_type: j.inputType,
+      output: j.output,
+      bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : null,
+      customer_pubkey: j.customerPubkey,
+      request_event_id: j.requestEventId,
+      params: j.params ? JSON.parse(j.params) : null,
+      created_at: j.createdAt,
+    })),
+    page,
+    limit,
+  })
+})
+
+// POST /api/dvm/jobs/:id/feedback — Provider: 发送状态更新
+api.post('/dvm/jobs/:id/feedback', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'provider')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (!job[0].requestEventId || !job[0].customerPubkey) {
+    return c.json({ error: 'Job missing request data' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    status?: 'processing' | 'error'
+    content?: string
+  }
+
+  if (!body.status || !['processing', 'error'].includes(body.status)) {
+    return c.json({ error: 'status must be "processing" or "error"' }, 400)
+  }
+
+  const feedbackEvent = await buildJobFeedbackEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY!,
+    requestEventId: job[0].requestEventId!,
+    customerPubkey: job[0].customerPubkey!,
+    status: body.status,
+    content: body.content,
+  })
+
+  await db.update(dvmJobs)
+    .set({ status: body.status === 'error' ? 'error' : 'processing', updatedAt: new Date() })
+    .where(eq(dvmJobs.id, jobId))
+
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [feedbackEvent] }))
+  }
+
+  return c.json({ ok: true, event_id: feedbackEvent.id })
+})
+
+// POST /api/dvm/jobs/:id/result — Provider: 提交结果
+api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'provider')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (!job[0].requestEventId || !job[0].customerPubkey) {
+    return c.json({ error: 'Job missing request data' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    content?: string
+    amount_sats?: number
+  }
+
+  if (!body.content) {
+    return c.json({ error: 'content is required' }, 400)
+  }
+
+  const amountSats = body.amount_sats || 0
+  const amountMsats = amountSats ? amountSats * 1000 : undefined
+
+  // Check if customer is on this site (same-site → escrow, no bolt11 needed)
+  let isLocalCustomer = false
+  if (job[0].customerPubkey) {
+    const localCustomer = await db.select({ id: users.id }).from(users)
+      .where(eq(users.nostrPubkey, job[0].customerPubkey))
+      .limit(1)
+    isLocalCustomer = localCustomer.length > 0
+  }
+
+  // Generate bolt11 for external customers when amount > 0 and LNbits configured
+  let bolt11: string | undefined
+  let paymentHash: string | undefined
+
+  if (amountSats > 0 && !isLocalCustomer && c.env.LNBITS_URL && c.env.LNBITS_INVOICE_KEY) {
+    const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+    const webhookUrl = c.env.LNBITS_WEBHOOK_SECRET
+      ? `${baseUrl}/api/webhook/lnbits?secret=${c.env.LNBITS_WEBHOOK_SECRET}`
+      : undefined
+    const invoice = await createInvoice(
+      c.env.LNBITS_URL, c.env.LNBITS_INVOICE_KEY, amountSats,
+      `DVM job ${job[0].requestEventId?.slice(0, 8)} result`, webhookUrl,
+    )
+    bolt11 = invoice.payment_request
+    paymentHash = invoice.payment_hash
+  }
+
+  const resultEvent = await buildJobResultEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY!,
+    requestKind: job[0].kind,
+    requestEventId: job[0].requestEventId!,
+    customerPubkey: job[0].customerPubkey!,
+    content: body.content,
+    amountMsats: amountMsats,
+    bolt11,
+  })
+
+  // Update provider job
+  await db.update(dvmJobs)
+    .set({
+      status: 'completed',
+      result: body.content,
+      resultEventId: resultEvent.id,
+      eventId: resultEvent.id,
+      priceMsats: amountMsats || null,
+      bolt11: bolt11 || null,
+      paymentHash: paymentHash || null,
+      updatedAt: new Date(),
+    })
+    .where(eq(dvmJobs.id, jobId))
+
+  // If customer is also on this site, update their job directly (no bolt11 for same-site)
+  if (job[0].requestEventId) {
+    const customerJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
+      .where(and(
+        eq(dvmJobs.requestEventId, job[0].requestEventId),
+        eq(dvmJobs.role, 'customer'),
+      ))
+      .limit(1)
+
+    if (customerJob.length > 0) {
+      await db.update(dvmJobs)
+        .set({
+          status: 'result_available',
+          result: body.content,
+          providerPubkey: user.nostrPubkey,
+          resultEventId: resultEvent.id,
+          priceMsats: amountMsats || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(dvmJobs.id, customerJob[0].id))
+    }
+  }
+
+  // Publish result to relay
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [resultEvent] }))
+  }
+
+  return c.json({ ok: true, event_id: resultEvent.id }, 201)
+})
+
+// ─── Balance & Ledger ───
+
+// GET /api/balance
+api.get('/balance', requireApiAuth, async (c) => {
+  const user = c.get('user')!
+  return c.json({
+    balance_sats: user.balanceSats,
+    username: user.username,
+  })
+})
+
+// GET /api/ledger
+api.get('/ledger', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+  const typeFilter = c.req.query('type')
+
+  const conditions = [eq(ledgerEntries.userId, user.id)]
+  if (typeFilter) {
+    conditions.push(eq(ledgerEntries.type, typeFilter))
+  }
+
+  const entries = await db
+    .select()
+    .from(ledgerEntries)
+    .where(and(...conditions))
+    .orderBy(desc(ledgerEntries.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    entries: entries.map(e => ({
+      id: e.id,
+      type: e.type,
+      amount_sats: e.amountSats,
+      balance_after: e.balanceAfter,
+      ref_id: e.refId,
+      ref_type: e.refType,
+      memo: e.memo,
+      created_at: e.createdAt,
+    })),
+    page,
+    limit,
+  })
+})
+
+// POST /api/transfer
+api.post('/transfer', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  const body = await c.req.json().catch(() => ({})) as {
+    to_username?: string
+    amount_sats?: number
+    memo?: string
+  }
+
+  const toUsername = body.to_username?.trim()
+  const amountSats = body.amount_sats
+  const memo = body.memo?.trim()
+
+  if (!toUsername) return c.json({ error: 'to_username is required' }, 400)
+  if (!amountSats || amountSats <= 0) return c.json({ error: 'amount_sats must be positive' }, 400)
+
+  const target = await db.select({ id: users.id }).from(users).where(eq(users.username, toUsername)).limit(1)
+  if (target.length === 0) return c.json({ error: 'User not found' }, 404)
+  if (target[0].id === user.id) return c.json({ error: 'Cannot transfer to yourself' }, 400)
+
+  const transferResult = await transfer(db, user.id, target[0].id, amountSats, memo)
+  if (!transferResult.ok) {
+    return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
+  }
+
+  // Publish ledger events (GEP-0009)
+  if (transferResult.entries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, transferResult.entries, userKeys))
+  }
+
+  return c.json({ ok: true, balance_sats: await getBalance(db, user.id) })
+})
+
+// POST /api/admin/airdrop
+api.post('/admin/airdrop', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!isSuperAdmin(user)) {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    username?: string
+    amount_sats?: number
+    memo?: string
+  }
+
+  const username = body.username?.trim()
+  const amountSats = body.amount_sats
+  const memo = body.memo?.trim()
+
+  if (!username) return c.json({ error: 'username is required' }, 400)
+  if (!amountSats || amountSats <= 0) return c.json({ error: 'amount_sats must be positive' }, 400)
+
+  const target = await db.select({ id: users.id }).from(users).where(eq(users.username, username)).limit(1)
+  if (target.length === 0) return c.json({ error: 'User not found' }, 404)
+
+  await creditBalance(db, target[0].id, amountSats)
+  const newBalance = await getBalance(db, target[0].id)
+  const airdropMemo = memo || `Airdrop from admin ${user.username}`
+
+  const entryId = await recordLedger(db, {
+    userId: target[0].id,
+    type: 'airdrop',
+    amountSats,
+    balanceAfter: newBalance,
+    refId: user.id,
+    refType: 'airdrop',
+    memo: airdropMemo,
+  })
+
+  // Publish ledger event (GEP-0009)
+  if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const entries: LedgerEventInfo[] = [{
+      ledgerEntryId: entryId, type: 'airdrop', amountSats,
+      balanceAfter: newBalance, signerType: 'system', memo: airdropMemo,
+    }]
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
+  }
+
+  return c.json({ ok: true, new_balance: newBalance })
+})
+
+// POST /api/dvm/jobs/:id/complete — Customer confirms result, settle escrow
+api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (job[0].status !== 'result_available') {
+    return c.json({ error: `Cannot complete job with status: ${job[0].status}` }, 400)
+  }
+
+  const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
+
+  // Find the provider who submitted the result
+  let providerUserId: string | null = null
+  if (job[0].requestEventId) {
+    const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
+      .where(and(
+        eq(dvmJobs.requestEventId, job[0].requestEventId),
+        eq(dvmJobs.role, 'provider'),
+        eq(dvmJobs.status, 'completed'),
+      ))
+      .limit(1)
+    if (providerJob.length > 0) {
+      providerUserId = providerJob[0].userId
+    }
+  }
+
+  // Settle escrow
+  let releaseEntries: LedgerEventInfo[] = []
+
+  if (bidSats > 0 && !providerUserId && job[0].bolt11) {
+    // External Provider — pay via Lightning
+    if (!c.env.LNBITS_URL || !c.env.LNBITS_ADMIN_KEY) {
+      return c.json({ error: 'Lightning payments not configured' }, 503)
+    }
+    try {
+      await payInvoice(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, job[0].bolt11)
+      // Consume escrow (record ledger, no credit to any local user)
+      const balance = await getBalance(db, user.id)
+      const memo = `Lightning payment to external DVM provider for job ${jobId}`
+      const entryId = await recordLedger(db, {
+        userId: user.id, type: 'lightning_payment', amountSats: 0,
+        balanceAfter: balance, refId: jobId, refType: 'dvm_job', memo,
+      })
+      releaseEntries = [{
+        ledgerEntryId: entryId, type: 'lightning_payment', amountSats: 0,
+        balanceAfter: balance, signerType: 'system', memo,
+      }]
+    } catch (e) {
+      return c.json({
+        error: 'Lightning payment failed',
+        detail: e instanceof Error ? e.message : 'Unknown error',
+      }, 502)
+    }
+  } else if (bidSats > 0 && providerUserId) {
+    // Local Provider — settle via escrow (existing logic)
+    const releaseResult = await escrowRelease(db, user.id, providerUserId, bidSats, jobId)
+    releaseEntries = releaseResult.entries
+  }
+
+  // Mark customer job as completed
+  await db.update(dvmJobs)
+    .set({ status: 'completed', updatedAt: new Date() })
+    .where(eq(dvmJobs.id, jobId))
+
+  // Publish ledger events (GEP-0009)
+  if (releaseEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, releaseEntries))
+  }
+
+  return c.json({
+    ok: true,
+    settled_sats: bidSats,
+    balance_sats: await getBalance(db, user.id),
+  })
+})
+
+// ─── Lightning Deposit / Withdraw ───
+
+// POST /api/deposit — 生成 Lightning invoice 充值
+api.post('/deposit', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!c.env.LNBITS_URL || !c.env.LNBITS_INVOICE_KEY) {
+    return c.json({ error: 'Lightning payments not configured' }, 503)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as { amount_sats?: number }
+  const amountSats = body.amount_sats
+
+  if (!amountSats || amountSats < 100 || amountSats > 1000000) {
+    return c.json({ error: 'amount_sats must be between 100 and 1,000,000' }, 400)
+  }
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const webhookUrl = c.env.LNBITS_WEBHOOK_SECRET
+    ? `${baseUrl}/api/webhook/lnbits?secret=${c.env.LNBITS_WEBHOOK_SECRET}`
+    : undefined
+
+  const invoice = await createInvoice(
+    c.env.LNBITS_URL,
+    c.env.LNBITS_INVOICE_KEY,
+    amountSats,
+    `Deposit ${amountSats} sats for ${user.username}`,
+    webhookUrl,
+  )
+
+  const depositId = generateId()
+  await db.insert(deposits).values({
+    id: depositId,
+    userId: user.id,
+    amountSats,
+    paymentHash: invoice.payment_hash,
+    paymentRequest: invoice.payment_request,
+    status: 'pending',
+    createdAt: new Date(),
+  })
+
+  return c.json({
+    deposit_id: depositId,
+    payment_request: invoice.payment_request,
+    payment_hash: invoice.payment_hash,
+    amount_sats: amountSats,
+    status: 'pending',
+  }, 201)
+})
+
+// GET /api/deposit/:id/status — 查询充值状态
+api.get('/deposit/:id/status', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const depositId = c.req.param('id')
+
+  const deposit = await db.select().from(deposits)
+    .where(and(eq(deposits.id, depositId), eq(deposits.userId, user.id)))
+    .limit(1)
+
+  if (deposit.length === 0) return c.json({ error: 'Deposit not found' }, 404)
+
+  const d = deposit[0]
+
+  // If already paid, return directly
+  if (d.status === 'paid') {
+    return c.json({
+      deposit_id: d.id,
+      status: 'paid',
+      amount_sats: d.amountSats,
+      balance_sats: await getBalance(db, user.id),
+    })
+  }
+
+  // Fallback: check LNbits directly (in case webhook was missed)
+  if (d.status === 'pending' && c.env.LNBITS_URL && c.env.LNBITS_INVOICE_KEY) {
+    try {
+      const payment = await checkPayment(c.env.LNBITS_URL, c.env.LNBITS_INVOICE_KEY, d.paymentHash)
+      if (payment.paid) {
+        // Credit balance
+        await creditBalance(db, user.id, d.amountSats)
+        const balance = await getBalance(db, user.id)
+        const depositMemo = `Lightning deposit ${d.amountSats} sats`
+        const entryId = await recordLedger(db, {
+          userId: user.id,
+          type: 'deposit',
+          amountSats: d.amountSats,
+          balanceAfter: balance,
+          refId: d.id,
+          refType: 'deposit',
+          memo: depositMemo,
+        })
+        await db.update(deposits)
+          .set({ status: 'paid', paidAt: new Date() })
+          .where(eq(deposits.id, d.id))
+
+        // Publish ledger event (GEP-0009)
+        if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+          const entries: LedgerEventInfo[] = [{
+            ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
+            balanceAfter: balance, signerType: 'system', memo: depositMemo,
+          }]
+          const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
+          c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries, userKeys))
+        }
+
+        return c.json({
+          deposit_id: d.id,
+          status: 'paid',
+          amount_sats: d.amountSats,
+          balance_sats: balance,
+        })
+      }
+    } catch (e) {
+      console.error('[Deposit] LNbits check failed:', e)
+    }
+  }
+
+  return c.json({
+    deposit_id: d.id,
+    status: d.status,
+    amount_sats: d.amountSats,
+    payment_request: d.paymentRequest,
+  })
+})
+
+// POST /api/webhook/lnbits — LNbits 支付回调
+api.post('/webhook/lnbits', async (c) => {
+  const secret = c.req.query('secret')
+  if (!c.env.LNBITS_WEBHOOK_SECRET || secret !== c.env.LNBITS_WEBHOOK_SECRET) {
+    return c.json({ error: 'Invalid secret' }, 403)
+  }
+
+  const db = c.get('db')
+  const body = await c.req.json().catch(() => ({})) as { payment_hash?: string }
+  const paymentHash = body.payment_hash
+
+  if (!paymentHash) return c.json({ error: 'Missing payment_hash' }, 400)
+
+  // Find pending deposit
+  const deposit = await db.select().from(deposits)
+    .where(and(eq(deposits.paymentHash, paymentHash), eq(deposits.status, 'pending')))
+    .limit(1)
+
+  if (deposit.length === 0) {
+    // Check if this is a DVM provider receiving Lightning payment
+    const dvmJob = await db.select().from(dvmJobs)
+      .where(and(eq(dvmJobs.paymentHash, paymentHash), eq(dvmJobs.role, 'provider')))
+      .limit(1)
+
+    if (dvmJob.length > 0 && dvmJob[0].status !== 'completed') {
+      const priceSats = dvmJob[0].priceMsats ? Math.floor(dvmJob[0].priceMsats / 1000) : 0
+      if (priceSats > 0) {
+        await creditBalance(db, dvmJob[0].userId, priceSats)
+        const balance = await getBalance(db, dvmJob[0].userId)
+        const dvmMemo = `DVM job payment received via Lightning`
+        const entryId = await recordLedger(db, {
+          userId: dvmJob[0].userId, type: 'job_payment', amountSats: priceSats,
+          balanceAfter: balance, refId: dvmJob[0].id, refType: 'dvm_job', memo: dvmMemo,
+        })
+        // Publish ledger event (GEP-0009)
+        if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+          const entries: LedgerEventInfo[] = [{
+            ledgerEntryId: entryId, type: 'job_payment', amountSats: priceSats,
+            balanceAfter: balance, signerType: 'system', memo: dvmMemo,
+          }]
+          c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
+        }
+      }
+      await db.update(dvmJobs)
+        .set({ status: 'completed', updatedAt: new Date() })
+        .where(eq(dvmJobs.id, dvmJob[0].id))
+      console.log(`[DVM] Provider ${dvmJob[0].userId} received Lightning payment for job ${dvmJob[0].id}`)
+      return c.json({ ok: true })
+    }
+
+    // Neither deposit nor DVM job matched — idempotent
+    return c.json({ ok: true })
+  }
+
+  const d = deposit[0]
+
+  // Credit balance
+  await creditBalance(db, d.userId, d.amountSats)
+  const balance = await getBalance(db, d.userId)
+  const depositMemo = `Lightning deposit ${d.amountSats} sats`
+  const entryId = await recordLedger(db, {
+    userId: d.userId,
+    type: 'deposit',
+    amountSats: d.amountSats,
+    balanceAfter: balance,
+    refId: d.id,
+    refType: 'deposit',
+    memo: depositMemo,
+  })
+  await db.update(deposits)
+    .set({ status: 'paid', paidAt: new Date() })
+    .where(eq(deposits.id, d.id))
+
+  // Publish ledger event (GEP-0009)
+  if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const entries: LedgerEventInfo[] = [{
+      ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
+      balanceAfter: balance, signerType: 'system', memo: depositMemo,
+    }]
+    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
+  }
+
+  console.log(`[Deposit] Credited ${d.amountSats} sats to user ${d.userId}`)
+  return c.json({ ok: true })
+})
+
+// POST /api/withdraw — 提现到 Lightning Address
+api.post('/withdraw', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!c.env.LNBITS_URL || !c.env.LNBITS_ADMIN_KEY) {
+    return c.json({ error: 'Lightning payments not configured' }, 503)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    amount_sats?: number
+    lightning_address?: string
+    bolt11?: string
+  }
+
+  const amountSats = body.amount_sats
+  const lightningAddress = body.lightning_address || user.lightningAddress
+  const bolt11 = body.bolt11
+
+  if (!amountSats || amountSats < 100 || amountSats > 1000000) {
+    return c.json({ error: 'amount_sats must be between 100 and 1,000,000' }, 400)
+  }
+
+  if (!bolt11 && !lightningAddress) {
+    return c.json({ error: 'Provide bolt11 invoice or lightning_address' }, 400)
+  }
+
+  // Debit balance first
+  const { debitBalance } = await import('../lib/balance')
+  const ok = await debitBalance(db, user.id, amountSats)
+  if (!ok) {
+    return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
+  }
+
+  try {
+    let paymentResult: { payment_hash: string }
+
+    if (bolt11) {
+      paymentResult = await payInvoice(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, bolt11)
+    } else {
+      paymentResult = await payLightningAddress(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, lightningAddress!, amountSats)
+    }
+
+    // Record ledger
+    const balance = await getBalance(db, user.id)
+    const withdrawMemo = `Lightning withdrawal ${amountSats} sats`
+    const entryId = await recordLedger(db, {
+      userId: user.id,
+      type: 'withdrawal',
+      amountSats: -amountSats,
+      balanceAfter: balance,
+      refId: paymentResult.payment_hash,
+      refType: 'withdrawal',
+      memo: withdrawMemo,
+    })
+
+    // Publish ledger event (GEP-0009)
+    if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+      const entries: LedgerEventInfo[] = [{
+        ledgerEntryId: entryId, type: 'withdrawal', amountSats: -amountSats,
+        balanceAfter: balance, signerType: 'user', memo: withdrawMemo,
+      }]
+      const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
+      c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries, userKeys))
+    }
+
+    return c.json({
+      ok: true,
+      payment_hash: paymentResult.payment_hash,
+      amount_sats: amountSats,
+      balance_sats: balance,
+    })
+  } catch (e) {
+    // Payment failed — refund balance
+    await creditBalance(db, user.id, amountSats)
+    console.error('[Withdraw] Lightning payment failed, refunded:', e)
+    return c.json({
+      error: 'Lightning payment failed',
+      detail: e instanceof Error ? e.message : 'Unknown error',
+      balance_sats: await getBalance(db, user.id),
+    }, 502)
+  }
+})
+
+export default api

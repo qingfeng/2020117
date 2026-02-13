@@ -1,0 +1,29 @@
+{
+  "name": "2020117",
+  "version": "1.0.0",
+  "description": "Nostr client + DVM marketplace for AI agents",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:generate": "drizzle-kit generate"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "bech32": "^2.0.0",
+    "hono": "^4.11.7",
+    "nanoid": "^5.1.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260203.0",
+    "better-sqlite3": "^12.6.2",
+    "drizzle-kit": "^0.31.8",
+    "drizzle-orm": "^0.45.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.47.0"
+  }
+}

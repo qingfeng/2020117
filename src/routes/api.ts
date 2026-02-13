@@ -5,7 +5,7 @@ import { users, authProviders, groups, groupMembers, topics, comments, topicLike
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent, eventIdToNevent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
@@ -22,15 +22,15 @@ api.post('/auth/register', async (c) => {
     return c.json({ error: 'name is required (1-50 chars)' }, 400)
   }
 
-  // KV 限流：每 IP 5 分钟 1 次
-  const kv = c.env.KV
-  const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown'
-  const rateKey = `api_reg:${ip}`
-  const existing = await kv.get(rateKey)
-  if (existing) {
-    return c.json({ error: 'Rate limited. Try again in 5 minutes.' }, 429)
-  }
-  await kv.put(rateKey, '1', { expirationTtl: 300 })
+  // KV 限流：每 IP 5 分钟 1 次（暂时关闭用于调试）
+  // const kv = c.env.KV
+  // const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown'
+  // const rateKey = `api_reg:${ip}`
+  // const existing = await kv.get(rateKey)
+  // if (existing) {
+  //   return c.json({ error: 'Rate limited. Try again in 5 minutes.' }, 429)
+  // }
+  // await kv.put(rateKey, '1', { expirationTtl: 300 })
 
   // 生成 username（slug 化 name）
   const baseUsername = name.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
@@ -43,23 +43,35 @@ api.post('/auth/register', async (c) => {
   const now = new Date()
 
   // 创建用户
-  await db.insert(users).values({
-    id: userId,
-    username,
-    displayName: name,
-    createdAt: now,
-    updatedAt: now,
-  })
+  try {
+    await db.insert(users).values({
+      id: userId,
+      username,
+      displayName: name,
+      createdAt: now,
+      updatedAt: now,
+    })
+  } catch (e) {
+    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : ''
+    const cause2 = e instanceof Error && e.cause instanceof Error && e.cause.cause instanceof Error ? e.cause.cause.message : ''
+    console.error('[Register] insert user failed:', e instanceof Error ? e.message : e)
+    return c.json({ error: 'Failed to create user', detail: e instanceof Error ? e.message : 'unknown', cause, cause2 }, 500)
+  }
 
   // 创建 authProvider
-  await db.insert(authProviders).values({
-    id: keyId,
-    userId,
-    providerType: 'apikey',
-    providerId: `apikey:${username}`,
-    accessToken: hash,
-    createdAt: now,
-  })
+  try {
+    await db.insert(authProviders).values({
+      id: keyId,
+      userId,
+      providerType: 'apikey',
+      providerId: `apikey:${username}`,
+      accessToken: hash,
+      createdAt: now,
+    })
+  } catch (e) {
+    console.error('[Register] insert authProvider failed:', e instanceof Error ? e.message : e, e instanceof Error ? e.cause : '')
+    return c.json({ error: 'Failed to create auth', detail: e instanceof Error ? e.message : 'unknown' }, 500)
+  }
 
   // 自动生成 Nostr 密钥并开启同步
   if (c.env.NOSTR_MASTER_KEY) {
@@ -581,35 +593,38 @@ api.post('/posts', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-
-  // Nostr: broadcast Kind 1
-  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const textContent = stripHtml(htmlContent).trim()
-        const noteContent = textContent
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 1,
-          content: noteContent,
-          tags: [
-            ['client', c.env.APP_NAME || 'NeoGroup'],
-          ],
-        })
-        await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API/Nostr] Failed to publish personal post:', e)
+  // Nostr: build Kind 1 event synchronously so we can return nevent
+  let nostrEventId: string | null = null
+  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY) {
+    try {
+      const textContent = stripHtml(htmlContent).trim()
+      const event = await buildSignedEvent({
+        privEncrypted: user.nostrPrivEncrypted!,
+        iv: user.nostrPrivIv!,
+        masterKey: c.env.NOSTR_MASTER_KEY!,
+        kind: 1,
+        content: textContent,
+        tags: [['client', c.env.APP_NAME || 'NeoGroup']],
+      })
+      nostrEventId = event.id
+      await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
+      if (c.env.NOSTR_QUEUE) {
+        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
       }
-    })())
+    } catch (e) {
+      console.error('[API/Nostr] Failed to publish personal post:', e)
+    }
   }
+
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const relays = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
 
   return c.json({
     id: topicId,
     url: `${baseUrl}/topic/${topicId}`,
+    ...(nostrEventId
+      ? { nevent: eventIdToNevent(nostrEventId, relays, user.nostrPubkey || undefined) }
+      : {}),
   }, 201)
 })
 

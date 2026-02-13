@@ -540,6 +540,45 @@ app.get('/.well-known/nostr.json', async (c) => {
   })
 })
 
+// GET /topic/:id — public topic view (JSON)
+app.get('/topic/:id', async (c) => {
+  const db = c.get('db')
+  const { topics, users } = await import('./db/schema')
+  const result = await db.select({
+    id: topics.id,
+    title: topics.title,
+    content: topics.content,
+    nostrEventId: topics.nostrEventId,
+    nostrAuthorPubkey: topics.nostrAuthorPubkey,
+    createdAt: topics.createdAt,
+    userId: topics.userId,
+    username: users.username,
+    displayName: users.displayName,
+    avatarUrl: users.avatarUrl,
+    nostrPubkey: users.nostrPubkey,
+  }).from(topics).leftJoin(users, eq(topics.userId, users.id)).where(eq(topics.id, c.req.param('id'))).limit(1)
+
+  if (!result.length) return c.json({ error: 'not found' }, 404)
+
+  const t = result[0]
+  const { stripHtml } = await import('./lib/utils')
+  const { pubkeyToNpub, eventIdToNevent } = await import('./services/nostr')
+  const relays = (c.env.NOSTR_RELAYS || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+  const authorPubkey = t.nostrPubkey || t.nostrAuthorPubkey || undefined
+
+  return c.json({
+    id: t.id,
+    content: stripHtml(t.content || '').trim(),
+    author: t.userId
+      ? { username: t.username, display_name: t.displayName, avatar_url: t.avatarUrl }
+      : { pubkey: t.nostrAuthorPubkey, npub: t.nostrAuthorPubkey ? pubkeyToNpub(t.nostrAuthorPubkey) : null },
+    created_at: t.createdAt,
+    ...(t.nostrEventId
+      ? { nostr_event_id: t.nostrEventId, nevent: eventIdToNevent(t.nostrEventId, relays, authorPubkey) }
+      : {}),
+  })
+})
+
 // API routes
 app.route('/api', apiRoutes)
 

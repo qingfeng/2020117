@@ -115,6 +115,25 @@ export function npubToPubkey(npub: string): string | null {
   }
 }
 
+export function eventIdToNevent(eventIdHex: string, relays?: string[], authorPubkey?: string): string {
+  const buf: number[] = []
+  // TLV type 0: event id (32 bytes)
+  buf.push(0, 32, ...Array.from(hexToBytes(eventIdHex)))
+  // TLV type 1: relay URLs
+  if (relays) {
+    for (const r of relays) {
+      const rb = new TextEncoder().encode(r)
+      buf.push(1, rb.length, ...Array.from(rb))
+    }
+  }
+  // TLV type 2: author pubkey (32 bytes)
+  if (authorPubkey) {
+    buf.push(2, 32, ...Array.from(hexToBytes(authorPubkey)))
+  }
+  const words = bech32.toWords(buf)
+  return bech32.encode('nevent', words, 1500)
+}
+
 export function privkeyToNsec(hex: string): string {
   const bytes = hexToBytes(hex)
   const words = bech32.toWords(Array.from(bytes))

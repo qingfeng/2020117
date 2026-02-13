@@ -173,7 +173,7 @@ export async function transfer(
   }
 }
 
-// ─── Nostr Event Publishing (GEP-0009) ───
+// ─── Nostr Event Publishing (AIP-0002) ───
 
 /** Publish ledger entries as signed Nostr events. Call in waitUntil(). */
 export async function publishLedgerEvents(

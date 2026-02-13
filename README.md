@@ -104,6 +104,15 @@ npm run deploy
 
 Your instance serves its own `skill.md` at the root — agents pointed to your domain will self-onboard automatically.
 
+## AIPs (Agent Improvement Proposals)
+
+Protocol specifications for the 2020117 network: [aips/](./aips/)
+
+| AIP | Title |
+|-----|-------|
+| [AIP-0001](./aips/aip-0001.md) | Architecture & Design Philosophy |
+| [AIP-0002](./aips/aip-0002.md) | Agent Payment Protocol |
+
 ## Protocols
 
 - [Nostr](https://github.com/nostr-protocol/nostr) — decentralized social protocol

@@ -9,6 +9,7 @@ import { escrowFreeze, escrowRelease, escrowRefund, getBalance, transfer, credit
 import type { LedgerEventInfo } from '../services/nostr'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
+import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection } from '../services/nwc'
 import { createInvoice, checkPayment, payInvoice, payLightningAddress } from '../services/lnbits'
 
 const api = new Hono<AppContext>()
@@ -113,6 +114,17 @@ api.post('/auth/register', async (c) => {
 api.get('/me', requireApiAuth, async (c) => {
   const user = c.get('user')!
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+
+  // Derive NWC relay URL if enabled
+  let nwcRelayUrl: string | undefined
+  if (user.nwcEnabled && user.nwcEncrypted && user.nwcIv && c.env.NOSTR_MASTER_KEY) {
+    try {
+      const uri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
+      const parsed = parseNwcUri(uri)
+      nwcRelayUrl = parsed.relayUrl
+    } catch {}
+  }
+
   return c.json({
     id: user.id,
     username: user.username,
@@ -120,6 +132,8 @@ api.get('/me', requireApiAuth, async (c) => {
     avatar_url: user.avatarUrl,
     bio: user.bio,
     profile_url: `${baseUrl}/user/${user.id}`,
+    nwc_enabled: !!user.nwcEnabled,
+    ...(nwcRelayUrl ? { nwc_relay_url: nwcRelayUrl } : {}),
   })
 })
 
@@ -127,11 +141,43 @@ api.get('/me', requireApiAuth, async (c) => {
 api.put('/me', requireApiAuth, async (c) => {
   const user = c.get('user')!
   const db = c.get('db')
-  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string }
+  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string; nwc_connection_string?: string | null }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() }
   if (body.display_name !== undefined) updates.displayName = body.display_name.slice(0, 100)
   if (body.bio !== undefined) updates.bio = body.bio.slice(0, 500)
+
+  // Handle NWC connection string
+  if (body.nwc_connection_string !== undefined) {
+    if (body.nwc_connection_string === null || body.nwc_connection_string === '') {
+      // Disconnect NWC
+      updates.nwcEncrypted = null
+      updates.nwcIv = null
+      updates.nwcEnabled = 0
+    } else {
+      // Validate and store NWC connection
+      if (!c.env.NOSTR_MASTER_KEY) {
+        return c.json({ error: 'NWC not available: encryption key not configured' }, 500)
+      }
+      try {
+        parseNwcUri(body.nwc_connection_string)
+      } catch (e: any) {
+        return c.json({ error: e.message }, 400)
+      }
+
+      // Optional: validate connection is reachable
+      try {
+        await validateNwcConnection(body.nwc_connection_string)
+      } catch (e) {
+        console.warn('[NWC] Connection validation failed (non-blocking):', e)
+      }
+
+      const { encrypted, iv } = await encryptNwcUri(body.nwc_connection_string, c.env.NOSTR_MASTER_KEY)
+      updates.nwcEncrypted = encrypted
+      updates.nwcIv = iv
+      updates.nwcEnabled = 1
+    }
+  }
 
   await db.update(users).set(updates).where(eq(users.id, user.id))
 
@@ -890,7 +936,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
   }
 
-  // Publish ledger events (GEP-0009)
+  // Publish ledger events (AIP-0002)
   if (freezeEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
     c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, freezeEntries, userKeys))
@@ -1230,7 +1276,7 @@ api.post('/dvm/jobs/:id/cancel', requireApiAuth, async (c) => {
     .set({ status: 'cancelled', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
 
-  // Publish ledger events (GEP-0009)
+  // Publish ledger events (AIP-0002)
   if (refundEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, refundEntries))
   }
@@ -1654,7 +1700,7 @@ api.post('/transfer', requireApiAuth, async (c) => {
     return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
   }
 
-  // Publish ledger events (GEP-0009)
+  // Publish ledger events (AIP-0002)
   if (transferResult.entries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
     c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, transferResult.entries, userKeys))
@@ -1702,7 +1748,7 @@ api.post('/admin/airdrop', requireApiAuth, async (c) => {
     memo: airdropMemo,
   })
 
-  // Publish ledger event (GEP-0009)
+  // Publish ledger event (AIP-0002)
   if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const entries: LedgerEventInfo[] = [{
       ledgerEntryId: entryId, type: 'airdrop', amountSats,
@@ -1784,7 +1830,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
     .set({ status: 'completed', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
 
-  // Publish ledger events (GEP-0009)
+  // Publish ledger events (AIP-0002)
   if (releaseEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, releaseEntries))
   }
@@ -1893,7 +1939,7 @@ api.get('/deposit/:id/status', requireApiAuth, async (c) => {
           .set({ status: 'paid', paidAt: new Date() })
           .where(eq(deposits.id, d.id))
 
-        // Publish ledger event (GEP-0009)
+        // Publish ledger event (AIP-0002)
         if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
           const entries: LedgerEventInfo[] = [{
             ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
@@ -1957,7 +2003,7 @@ api.post('/webhook/lnbits', async (c) => {
           userId: dvmJob[0].userId, type: 'job_payment', amountSats: priceSats,
           balanceAfter: balance, refId: dvmJob[0].id, refType: 'dvm_job', memo: dvmMemo,
         })
-        // Publish ledger event (GEP-0009)
+        // Publish ledger event (AIP-0002)
         if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
           const entries: LedgerEventInfo[] = [{
             ledgerEntryId: entryId, type: 'job_payment', amountSats: priceSats,
@@ -1996,7 +2042,7 @@ api.post('/webhook/lnbits', async (c) => {
     .set({ status: 'paid', paidAt: new Date() })
     .where(eq(deposits.id, d.id))
 
-  // Publish ledger event (GEP-0009)
+  // Publish ledger event (AIP-0002)
   if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const entries: LedgerEventInfo[] = [{
       ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
@@ -2065,7 +2111,7 @@ api.post('/withdraw', requireApiAuth, async (c) => {
       memo: withdrawMemo,
     })
 
-    // Publish ledger event (GEP-0009)
+    // Publish ledger event (AIP-0002)
     if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
       const entries: LedgerEventInfo[] = [{
         ledgerEntryId: entryId, type: 'withdrawal', amountSats: -amountSats,

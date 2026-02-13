@@ -242,7 +242,7 @@ export async function buildApprovalEvent(params: {
 
 // --- Helpers ---
 
-// --- Ledger Event Building (GEP-0009) ---
+// --- Ledger Event Building (AIP-0002) ---
 
 export const LEDGER_EVENT_KIND = 1112
 
@@ -294,8 +294,8 @@ export async function buildLedgerEvent(params: {
     ['t', info.type],
     ['amount', String(info.amountSats)],
     ['balance', String(info.balanceAfter)],
-    ['L', 'neogroup.ledger'],
-    ['l', info.type, 'neogroup.ledger'],
+    ['L', '2020117.ledger'],
+    ['l', info.type, '2020117.ledger'],
   ]
 
   if (info.counterpartyPubkey) {

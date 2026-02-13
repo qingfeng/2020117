@@ -240,6 +240,63 @@ export async function buildApprovalEvent(params: {
   })
 }
 
+// --- NIP-18 Repost Event ---
+
+export async function buildRepostEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  eventId: string
+  authorPubkey: string
+  relayUrl?: string
+}): Promise<NostrEvent> {
+  const relay = params.relayUrl || ''
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 6,
+    content: '',
+    tags: [
+      ['e', params.eventId, relay],
+      ['p', params.authorPubkey],
+    ],
+  })
+}
+
+// --- NIP-57 Zap Request Event ---
+
+export async function buildZapRequestEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  targetPubkey: string
+  eventId?: string
+  amountMsats: number
+  comment?: string
+  relays: string[]
+  lnurl: string
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['p', params.targetPubkey],
+    ['amount', String(params.amountMsats)],
+    ['relays', ...params.relays],
+    ['lnurl', params.lnurl],
+  ]
+  if (params.eventId) {
+    tags.push(['e', params.eventId])
+  }
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 9734,
+    content: params.comment || '',
+    tags,
+  })
+}
+
 // --- Helpers ---
 
 function bufferToBase64(buf: ArrayBuffer): string {

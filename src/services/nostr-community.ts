@@ -1,7 +1,7 @@
-import { eq, and, sql, isNotNull, inArray } from 'drizzle-orm'
+import { eq, and, sql, isNotNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { groups, topics, comments, users, authProviders, notifications, topicLikes, commentLikes, nostrFollows, nostrCommunityFollows, userFollows } from '../db/schema'
+import { groups, topics, comments, users, notifications, nostrFollows, nostrCommunityFollows } from '../db/schema'
 import type { User } from '../db/schema'
 import {
   type NostrEvent,
@@ -221,9 +221,6 @@ async function processIncomingPost(
     .limit(1)
   if (existing.length > 0) return
 
-  // Get or create shadow user for this Nostr pubkey
-  const author = await getOrCreateNostrUser(db, event.pubkey)
-
   // Parse content: first line as title, rest as content
   const lines = event.content.split('\n')
   const rawTitle = (lines[0] || '').trim()
@@ -245,7 +242,7 @@ async function processIncomingPost(
   await db.insert(topics).values({
     id: topicId,
     groupId: group.id,
-    userId: author.id,
+    userId: null,
     title,
     content: htmlContent,
     type: 0,
@@ -274,200 +271,6 @@ async function processIncomingPost(
       console.log(`[NIP-72] Queued approval event for ${event.id}`)
     } catch (e) {
       console.error(`[NIP-72] Failed to build/send approval:`, e)
-    }
-  }
-}
-
-// --- Nostr shadow user ---
-
-export async function getOrCreateNostrUser(
-  db: Database,
-  pubkey: string,
-): Promise<{ id: string; username: string }> {
-  // Check if auth_provider exists for this Nostr pubkey
-  const existing = await db
-    .select({
-      userId: authProviders.userId,
-      username: users.username,
-      nostrPubkey: users.nostrPubkey,
-    })
-    .from(authProviders)
-    .innerJoin(users, eq(authProviders.userId, users.id))
-    .where(and(
-      eq(authProviders.providerType, 'nostr'),
-      eq(authProviders.providerId, pubkey),
-    ))
-    .limit(1)
-
-  if (existing.length > 0) {
-    // Backfill nostrPubkey for legacy shadow users
-    if (!existing[0].nostrPubkey) {
-      await db.update(users).set({ nostrPubkey: pubkey }).where(eq(users.id, existing[0].userId))
-    }
-    return { id: existing[0].userId, username: existing[0].username }
-  }
-
-  // Create shadow user with unique username
-  const npub = pubkeyToNpub(pubkey)
-  let username = npub.slice(0, 16) // npub1xxxxxxxx
-  const displayName = npub.slice(0, 12) + '...'
-  const userId = generateId()
-  const now = new Date()
-
-  // Ensure username uniqueness
-  const existingUser = await db.select({ id: users.id })
-    .from(users)
-    .where(eq(users.username, username))
-    .limit(1)
-  if (existingUser.length > 0) {
-    username = npub.slice(0, 12) + '_' + Math.random().toString(36).slice(2, 6)
-  }
-
-  await db.insert(users).values({
-    id: userId,
-    username,
-    displayName,
-    nostrPubkey: pubkey,
-    createdAt: now,
-    updatedAt: now,
-  })
-
-  await db.insert(authProviders).values({
-    id: generateId(),
-    userId,
-    providerType: 'nostr',
-    providerId: pubkey,
-    metadata: JSON.stringify({ npub }),
-    createdAt: now,
-  })
-
-  console.log(`[NIP-72] Created shadow user ${username} for pubkey ${pubkey.slice(0, 8)}...`)
-  return { id: userId, username }
-}
-
-/**
- * Fetch Kind 0 metadata from relay and update shadow user profile (displayName, avatarUrl, bio).
- * Should be called in waitUntil after creating a Nostr shadow user.
- */
-export async function fetchAndUpdateNostrProfile(
-  db: Database,
-  userId: string,
-  pubkey: string,
-  relayUrls: string[],
-): Promise<void> {
-  for (const relayUrl of relayUrls) {
-    try {
-      const { events } = await fetchEventsFromRelay(relayUrl, {
-        kinds: [0],
-        authors: [pubkey],
-        limit: 1,
-      })
-      if (events.length === 0) continue
-
-      const latest = events.sort((a, b) => b.created_at - a.created_at)[0]
-      const meta = JSON.parse(latest.content) as {
-        name?: string
-        display_name?: string
-        picture?: string
-        about?: string
-      }
-
-      const displayName = meta.display_name || meta.name || null
-      const avatarUrl = meta.picture || null
-      const bio = meta.about ? `<p>${meta.about.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>')}</p>` : null
-
-      const updateData: Record<string, unknown> = { updatedAt: new Date() }
-      if (displayName) updateData.displayName = displayName
-      if (avatarUrl) updateData.avatarUrl = avatarUrl
-      if (bio) updateData.bio = bio
-
-      if (displayName || avatarUrl || bio) {
-        await db.update(users).set(updateData).where(eq(users.id, userId))
-        console.log(`[Nostr Profile] Updated shadow user ${userId} with metadata from ${relayUrl}`)
-      }
-      return // Success, no need to try other relays
-    } catch (e) {
-      console.error(`[Nostr Profile] Failed to fetch Kind 0 from ${relayUrl}:`, e)
-    }
-  }
-}
-
-/**
- * Backfill recent posts (up to 10) from a newly followed Nostr user.
- * Called in waitUntil when a user follows a Nostr pubkey.
- */
-export async function backfillNostrUserPosts(
-  db: Database,
-  shadowUserId: string,
-  pubkey: string,
-  relayUrls: string[],
-): Promise<void> {
-  for (const relayUrl of relayUrls) {
-    try {
-      const { events } = await fetchEventsFromRelay(relayUrl, {
-        kinds: [1],
-        authors: [pubkey],
-        limit: 10,
-      })
-      if (events.length === 0) continue
-
-      // Sort newest first
-      events.sort((a, b) => b.created_at - a.created_at)
-
-      let imported = 0
-      for (const event of events) {
-        try {
-          if (!verifyEvent(event)) continue
-
-          // Dedup
-          const existing = await db.select({ id: topics.id })
-            .from(topics)
-            .where(eq(topics.nostrEventId, event.id))
-            .limit(1)
-          if (existing.length > 0) continue
-
-          // Skip NIP-72 community posts
-          const hasATag = event.tags.some((t: string[]) => t[0] === 'a' && t[1]?.startsWith('34550:'))
-          if (hasATag) continue
-
-          // Reject future timestamps
-          const nowSec = Math.floor(Date.now() / 1000)
-          if (event.created_at > nowSec + 600) continue
-
-          const escaped = event.content
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-          const htmlContent = escaped
-            ? '<p>' + escaped.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>') + '</p>'
-            : null
-
-          const topicId = generateId()
-          const topicNow = new Date(event.created_at * 1000)
-
-          await db.insert(topics).values({
-            id: topicId,
-            groupId: null,
-            userId: shadowUserId,
-            title: '',
-            content: htmlContent,
-            type: 0,
-            nostrEventId: event.id,
-            nostrAuthorPubkey: event.pubkey,
-            createdAt: topicNow,
-            updatedAt: topicNow,
-          })
-          imported++
-        } catch (e) {
-          // Skip individual event failures (likely dedup constraint)
-        }
-      }
-
-      console.log(`[Nostr Backfill] Imported ${imported} posts for ${pubkey.slice(0, 8)}... from ${relayUrl}`)
-      return // Done with first successful relay
-    } catch (e) {
-      console.error(`[Nostr Backfill] Failed to fetch from ${relayUrl}:`, e)
     }
   }
 }
@@ -546,9 +349,6 @@ export async function pollFollowedUsers(env: Bindings, db: Database) {
           const nowSec = Math.floor(Date.now() / 1000)
           if (event.created_at > nowSec + 600) continue
 
-          // Get or create shadow user
-          const author = await getOrCreateNostrUser(db, event.pubkey)
-
           // Personal post: groupId = null, title = ''
           const escaped = event.content
             .replace(/&/g, '&amp;')
@@ -565,7 +365,7 @@ export async function pollFollowedUsers(env: Bindings, db: Database) {
           await db.insert(topics).values({
             id: topicId,
             groupId: null,
-            userId: author.id,
+            userId: null,
             title: '',
             content: htmlContent,
             type: 0,
@@ -648,8 +448,6 @@ export async function pollFollowedCommunities(env: Bindings, db: Database) {
             continue
           }
 
-          const author = await getOrCreateNostrUser(db, event.pubkey)
-
           const lines = event.content.split('\n')
           const rawTitle = (lines[0] || '').trim()
           const title = truncate(rawTitle || 'Nostr 帖子', 100)
@@ -669,7 +467,7 @@ export async function pollFollowedCommunities(env: Bindings, db: Database) {
           await db.insert(topics).values({
             id: topicId,
             groupId: cf.localGroupId,
-            userId: author.id,
+            userId: null,
             title,
             content: htmlContent,
             type: 0,
@@ -747,22 +545,6 @@ export async function syncAndPublishContactList(db: Database, env: Bindings, use
         createdAt: new Date(),
       })
       localPubkeys.add(pk)
-
-      // Create shadow user + user_follow
-      const shadowUser = await getOrCreateNostrUser(db, pk)
-      const existingFollow = await db
-        .select({ id: userFollows.id })
-        .from(userFollows)
-        .where(and(eq(userFollows.followerId, user.id), eq(userFollows.followeeId, shadowUser.id)))
-        .limit(1)
-      if (existingFollow.length === 0) {
-        await db.insert(userFollows).values({
-          id: generateId(),
-          followerId: user.id,
-          followeeId: shadowUser.id,
-          createdAt: new Date(),
-        })
-      }
       console.log(`[Nostr K3] Imported follow ${pk.slice(0, 8)}... from relay for user ${user.id}`)
     } catch (e) {
       // Likely unique constraint — already exists
@@ -864,22 +646,6 @@ export async function syncContactListsFromRelay(env: Bindings, db: Database) {
           targetNpub: pubkeyToNpub(pk),
           createdAt: new Date(),
         })
-
-        // Create shadow user + user_follow
-        const shadowUser = await getOrCreateNostrUser(db, pk)
-        const existingFollow = await db
-          .select({ id: userFollows.id })
-          .from(userFollows)
-          .where(and(eq(userFollows.followerId, u.id), eq(userFollows.followeeId, shadowUser.id)))
-          .limit(1)
-        if (existingFollow.length === 0) {
-          await db.insert(userFollows).values({
-            id: generateId(),
-            followerId: u.id,
-            followeeId: shadowUser.id,
-            createdAt: new Date(),
-          })
-        }
         imported++
       } catch (e) {
         // Unique constraint — skip
@@ -924,7 +690,7 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
     .limit(200)
 
   // Build lookup maps: nostrEventId -> { type, id, userId, topicId }
-  const eventMap = new Map<string, { type: 'topic' | 'comment'; id: string; userId: string; topicId?: string }>()
+  const eventMap = new Map<string, { type: 'topic' | 'comment'; id: string; userId: string | null; topicId?: string }>()
   for (const t of recentTopics) {
     if (t.nostrEventId) eventMap.set(t.nostrEventId, { type: 'topic', id: t.id, userId: t.userId })
   }
@@ -961,7 +727,7 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
           if (eTags.length === 0) continue
 
           // Check all e tags (some clients put the target as last, some as first)
-          let target: { type: 'topic' | 'comment'; id: string; userId: string; topicId?: string } | null = null
+          let target: { type: 'topic' | 'comment'; id: string; userId: string | null; topicId?: string } | null = null
           for (const eTag of eTags) {
             const match = eventMap.get(eTag[1])
             if (match) {
@@ -971,18 +737,17 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
           }
           if (!target) continue
 
-          // Skip self-reactions (check if the reactor is the content author)
-          // Get or create shadow user for the reactor
-          const reactor = await getOrCreateNostrUser(db, event.pubkey)
-          if (reactor.id === target.userId) continue
+          // Only notify local users (external posts have userId=null)
+          if (!target.userId) continue
 
+          const npub = pubkeyToNpub(event.pubkey)
           const notifyType = target.type === 'topic' ? 'topic_like' : 'comment_like'
 
-          // Dedup: check existing notification
+          // Dedup: check existing notification by actorName (npub)
           const existing = await db.select({ id: notifications.id })
             .from(notifications)
             .where(and(
-              eq(notifications.actorId, reactor.id),
+              eq(notifications.actorName, npub),
               eq(notifications.type, notifyType),
               ...(target.type === 'comment'
                 ? [eq(notifications.commentId, target.id)]
@@ -992,27 +757,12 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
 
           if (existing.length > 0) continue
 
-          // Insert into like table (for like count display)
-          if (target.type === 'topic') {
-            const existingLike = await db.select({ id: topicLikes.id }).from(topicLikes)
-              .where(and(eq(topicLikes.topicId, target.id), eq(topicLikes.userId, reactor.id))).limit(1)
-            if (existingLike.length === 0) {
-              await db.insert(topicLikes).values({ id: generateId(), topicId: target.id, userId: reactor.id, createdAt: new Date() })
-            }
-          } else if (target.type === 'comment') {
-            const existingLike = await db.select({ id: commentLikes.id }).from(commentLikes)
-              .where(and(eq(commentLikes.commentId, target.id), eq(commentLikes.userId, reactor.id))).limit(1)
-            if (existingLike.length === 0) {
-              await db.insert(commentLikes).values({ id: generateId(), commentId: target.id, userId: reactor.id, createdAt: new Date() })
-            }
-          }
-
           await createNotification(db, {
             userId: target.userId,
-            actorId: reactor.id,
             type: notifyType,
             topicId: target.type === 'topic' ? target.id : target.topicId,
             commentId: target.type === 'comment' ? target.id : undefined,
+            actorName: npub,
           })
 
           console.log(`[Nostr Reactions] Created ${notifyType} notification from ${event.pubkey.slice(0, 8)}...`)
@@ -1066,7 +816,7 @@ export async function pollNostrReplies(env: Bindings, db: Database) {
     .limit(200)
 
   // Build lookup: nostrEventId -> { type, id, userId, topicId, groupId }
-  const eventMap = new Map<string, { type: 'topic' | 'comment'; id: string; userId: string; topicId: string; groupId?: string | null }>()
+  const eventMap = new Map<string, { type: 'topic' | 'comment'; id: string; userId: string | null; topicId: string; groupId?: string | null }>()
   for (const t of recentTopics) {
     if (t.nostrEventId) eventMap.set(t.nostrEventId, { type: 'topic', id: t.id, userId: t.userId, topicId: t.id, groupId: t.groupId })
   }
@@ -1120,7 +870,7 @@ export async function pollNostrReplies(env: Bindings, db: Database) {
           if (eTags.length === 0) continue
 
           // Try to find a matching parent: prefer tagged with 'reply' marker, then last e tag
-          let parent: { type: 'topic' | 'comment'; id: string; userId: string; topicId: string; groupId?: string | null } | null = null
+          let parent: { type: 'topic' | 'comment'; id: string; userId: string | null; topicId: string; groupId?: string | null } | null = null
           // First check marked tags (NIP-10 positional markers)
           for (const eTag of eTags) {
             if (eTag[3] === 'reply' || eTag[3] === 'root') {
@@ -1136,9 +886,6 @@ export async function pollNostrReplies(env: Bindings, db: Database) {
             }
           }
           if (!parent) continue
-
-          // Get or create shadow user
-          const author = await getOrCreateNostrUser(db, event.pubkey)
 
           // Escape HTML
           const escaped = event.content
@@ -1156,10 +903,11 @@ export async function pollNostrReplies(env: Bindings, db: Database) {
           await db.insert(comments).values({
             id: commentId,
             topicId: parent.topicId,
-            userId: author.id,
+            userId: null,
             content: htmlContent,
             replyToId: parent.type === 'comment' ? parent.id : null,
             nostrEventId: event.id,
+            nostrAuthorPubkey: event.pubkey,
             createdAt: commentNow,
             updatedAt: commentNow,
           })
@@ -1167,14 +915,15 @@ export async function pollNostrReplies(env: Bindings, db: Database) {
           // Update topic updatedAt
           await db.update(topics).set({ updatedAt: commentNow }).where(eq(topics.id, parent.topicId))
 
-          // Notify the parent author
-          if (author.id !== parent.userId) {
+          // Notify the parent author (only if local user)
+          if (parent.userId) {
+            const npub = pubkeyToNpub(event.pubkey)
             await createNotification(db, {
               userId: parent.userId,
-              actorId: author.id,
               type: parent.type === 'topic' ? 'reply' : 'comment_reply',
               topicId: parent.topicId,
               commentId,
+              actorName: npub,
             })
           }
 

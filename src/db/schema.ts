@@ -64,7 +64,7 @@ export const groupMembers = sqliteTable('group_member', {
 export const topics = sqliteTable('topic', {
   id: text('id').primaryKey(),
   groupId: text('group_id').references(() => groups.id),
-  userId: text('user_id').notNull().references(() => users.id),
+  userId: text('user_id').references(() => users.id),
   title: text('title').notNull(),
   content: text('content'),
   type: integer('type').default(0), // 0=话题 1=问题 2=投票
@@ -79,10 +79,11 @@ export const topics = sqliteTable('topic', {
 export const comments = sqliteTable('comment', {
   id: text('id').primaryKey(),
   topicId: text('topic_id').notNull().references(() => topics.id),
-  userId: text('user_id').notNull().references(() => users.id),
+  userId: text('user_id').references(() => users.id),
   content: text('content').notNull(),
   replyToId: text('reply_to_id'),
   nostrEventId: text('nostr_event_id'),
+  nostrAuthorPubkey: text('nostr_author_pubkey'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

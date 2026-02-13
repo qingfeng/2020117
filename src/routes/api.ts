@@ -5,7 +5,7 @@ import { users, authProviders, groups, groupMembers, topics, comments, topicLike
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
@@ -244,25 +244,31 @@ api.get('/groups/:id/topics', requireApiAuth, async (c) => {
       id: topics.id,
       title: topics.title,
       content: topics.content,
+      nostr_author_pubkey: topics.nostrAuthorPubkey,
       created_at: topics.createdAt,
-      author: {
-        id: users.id,
-        username: users.username,
-        display_name: users.displayName,
-      },
+      author_id: users.id,
+      author_username: users.username,
+      author_display_name: users.displayName,
       comment_count: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
       like_count: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
     })
     .from(topics)
-    .innerJoin(users, eq(topics.userId, users.id))
+    .leftJoin(users, eq(topics.userId, users.id))
     .where(eq(topics.groupId, groupId))
     .orderBy(desc(topics.updatedAt))
     .limit(limit)
     .offset(offset)
 
   const result = topicList.map(t => ({
-    ...t,
+    id: t.id,
+    title: t.title,
     content: t.content ? stripHtml(t.content).slice(0, 300) : null,
+    created_at: t.created_at,
+    author: t.author_id
+      ? { id: t.author_id, username: t.author_username, display_name: t.author_display_name }
+      : { pubkey: t.nostr_author_pubkey, npub: t.nostr_author_pubkey ? pubkeyToNpub(t.nostr_author_pubkey) : null },
+    comment_count: t.comment_count,
+    like_count: t.like_count,
   }))
 
   return c.json({ topics: result, page, limit })
@@ -279,21 +285,21 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       title: topics.title,
       content: topics.content,
       group_id: topics.groupId,
+      nostr_author_pubkey: topics.nostrAuthorPubkey,
+      nostr_event_id: topics.nostrEventId,
       created_at: topics.createdAt,
-      author: {
-        id: users.id,
-        username: users.username,
-        display_name: users.displayName,
-      },
+      author_id: users.id,
+      author_username: users.username,
+      author_display_name: users.displayName,
     })
     .from(topics)
-    .innerJoin(users, eq(topics.userId, users.id))
+    .leftJoin(users, eq(topics.userId, users.id))
     .where(eq(topics.id, topicId))
     .limit(1)
 
   if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
 
-  const topicData = topicResult[0]
+  const t = topicResult[0]
 
   // 获取评论
   const commentList = await db
@@ -301,26 +307,37 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       id: comments.id,
       content: comments.content,
       reply_to_id: comments.replyToId,
+      nostr_author_pubkey: comments.nostrAuthorPubkey,
       created_at: comments.createdAt,
-      author: {
-        id: users.id,
-        username: users.username,
-        display_name: users.displayName,
-      },
+      author_id: users.id,
+      author_username: users.username,
+      author_display_name: users.displayName,
     })
     .from(comments)
-    .innerJoin(users, eq(comments.userId, users.id))
+    .leftJoin(users, eq(comments.userId, users.id))
     .where(eq(comments.topicId, topicId))
     .orderBy(comments.createdAt)
 
   return c.json({
     topic: {
-      ...topicData,
-      content: topicData.content ? stripHtml(topicData.content) : null,
+      id: t.id,
+      title: t.title,
+      content: t.content ? stripHtml(t.content) : null,
+      group_id: t.group_id,
+      nostr_event_id: t.nostr_event_id,
+      created_at: t.created_at,
+      author: t.author_id
+        ? { id: t.author_id, username: t.author_username, display_name: t.author_display_name }
+        : { pubkey: t.nostr_author_pubkey, npub: t.nostr_author_pubkey ? pubkeyToNpub(t.nostr_author_pubkey) : null },
     },
     comments: commentList.map(cm => ({
-      ...cm,
+      id: cm.id,
       content: cm.content ? stripHtml(cm.content) : null,
+      reply_to_id: cm.reply_to_id,
+      created_at: cm.created_at,
+      author: cm.author_id
+        ? { id: cm.author_id, username: cm.author_username, display_name: cm.author_display_name }
+        : { pubkey: cm.nostr_author_pubkey, npub: cm.nostr_author_pubkey ? pubkeyToNpub(cm.nostr_author_pubkey) : null },
     })),
   })
 })
@@ -460,18 +477,20 @@ api.post('/topics/:id/comments', requireApiAuth, async (c) => {
   // 更新话题 updatedAt
   await db.update(topics).set({ updatedAt: now }).where(eq(topics.id, topicId))
 
-  // 通知话题作者
-  await createNotification(db, {
-    userId: topicResult[0].userId,
-    actorId: user.id,
-    type: 'reply',
-    topicId,
-  })
+  // 通知话题作者 (only if local user)
+  if (topicResult[0].userId) {
+    await createNotification(db, {
+      userId: topicResult[0].userId,
+      actorId: user.id,
+      type: 'reply',
+      topicId,
+    })
+  }
 
-  // 如果是回复评论，通知该评论作者
+  // 如果是回复评论，通知该评论作者 (only if local user)
   if (replyToId) {
     const replyComment = await db.select({ userId: comments.userId }).from(comments).where(eq(comments.id, replyToId)).limit(1)
-    if (replyComment.length > 0 && replyComment[0].userId !== topicResult[0].userId) {
+    if (replyComment.length > 0 && replyComment[0].userId && replyComment[0].userId !== topicResult[0].userId) {
       await createNotification(db, {
         userId: replyComment[0].userId,
         actorId: user.id,
@@ -619,9 +638,9 @@ api.post('/topics/:id/like', requireApiAuth, async (c) => {
     createdAt: new Date(),
   })
 
-  // Notification
+  // Notification (only if local user)
   const topicData = await db.select({ userId: topics.userId }).from(topics).where(eq(topics.id, topicId)).limit(1)
-  if (topicData.length > 0) {
+  if (topicData.length > 0 && topicData[0].userId) {
     await createNotification(db, {
       userId: topicData[0].userId,
       actorId: user.id,
@@ -654,7 +673,7 @@ api.delete('/topics/:id', requireApiAuth, async (c) => {
   const topicResult = await db.select().from(topics).where(eq(topics.id, topicId)).limit(1)
   if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
 
-  if (topicResult[0].userId !== user.id) {
+  if (!topicResult[0].userId || topicResult[0].userId !== user.id) {
     return c.json({ error: 'Forbidden' }, 403)
   }
 
@@ -700,7 +719,6 @@ api.post('/nostr/follow', requireApiAuth, async (c) => {
   const db = c.get('db')
   const user = c.get('user')!
   const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
-  const { getOrCreateNostrUser } = await import('../services/nostr-community')
 
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
   const target = body.pubkey?.trim()
@@ -734,25 +752,6 @@ api.post('/nostr/follow', requireApiAuth, async (c) => {
     createdAt: new Date(),
   })
 
-  // Create shadow user + user_follow
-  try {
-    const shadowUser = await getOrCreateNostrUser(db, pubkey)
-    const existingFollow = await db.select({ id: userFollows.id })
-      .from(userFollows)
-      .where(and(eq(userFollows.followerId, user.id), eq(userFollows.followeeId, shadowUser.id)))
-      .limit(1)
-    if (existingFollow.length === 0) {
-      await db.insert(userFollows).values({
-        id: generateId(),
-        followerId: user.id,
-        followeeId: shadowUser.id,
-        createdAt: new Date(),
-      })
-    }
-  } catch (e) {
-    console.error('[API] Failed to create shadow user for Nostr follow:', e)
-  }
-
   return c.json({ ok: true })
 })
 
@@ -785,6 +784,309 @@ api.get('/nostr/following', requireApiAuth, async (c) => {
     .orderBy(desc(nostrFollows.createdAt))
 
   return c.json({ following: list })
+})
+
+// ─── Feed: 时间线 ───
+
+// GET /api/feed
+api.get('/feed', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  const feedTopics = await db
+    .select({
+      id: topics.id,
+      title: topics.title,
+      content: topics.content,
+      nostr_event_id: topics.nostrEventId,
+      nostr_author_pubkey: topics.nostrAuthorPubkey,
+      created_at: topics.createdAt,
+      author_id: users.id,
+      author_username: users.username,
+      author_display_name: users.displayName,
+      author_avatar_url: users.avatarUrl,
+    })
+    .from(topics)
+    .leftJoin(users, eq(topics.userId, users.id))
+    .where(
+      or(
+        eq(topics.userId, user.id),
+        sql`${topics.userId} IN (SELECT ${userFollows.followeeId} FROM ${userFollows} WHERE ${userFollows.followerId} = ${user.id})`,
+        sql`${topics.nostrAuthorPubkey} IN (SELECT ${nostrFollows.targetPubkey} FROM ${nostrFollows} WHERE ${nostrFollows.userId} = ${user.id})`,
+      )
+    )
+    .orderBy(desc(topics.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  // Collect external pubkeys for display name enrichment
+  const externalPubkeys = feedTopics
+    .filter(t => !t.author_id && t.nostr_author_pubkey)
+    .map(t => t.nostr_author_pubkey!)
+  const uniquePubkeys = [...new Set(externalPubkeys)]
+
+  // Batch fetch display info from nostr_follow cache
+  let pubkeyDisplayMap = new Map<string, { display_name: string | null; avatar_url: string | null }>()
+  if (uniquePubkeys.length > 0) {
+    const followInfo = await db
+      .select({
+        targetPubkey: nostrFollows.targetPubkey,
+        targetDisplayName: nostrFollows.targetDisplayName,
+        targetAvatarUrl: nostrFollows.targetAvatarUrl,
+      })
+      .from(nostrFollows)
+      .where(sql`${nostrFollows.targetPubkey} IN (${sql.join(uniquePubkeys.map(p => sql`${p}`), sql`,`)})`)
+    for (const f of followInfo) {
+      if (!pubkeyDisplayMap.has(f.targetPubkey)) {
+        pubkeyDisplayMap.set(f.targetPubkey, { display_name: f.targetDisplayName, avatar_url: f.targetAvatarUrl })
+      }
+    }
+  }
+
+  const result = feedTopics.map(t => {
+    let author: Record<string, unknown>
+    if (t.author_id) {
+      author = { id: t.author_id, username: t.author_username, display_name: t.author_display_name, avatar_url: t.author_avatar_url }
+    } else {
+      const cached = t.nostr_author_pubkey ? pubkeyDisplayMap.get(t.nostr_author_pubkey) : undefined
+      author = {
+        pubkey: t.nostr_author_pubkey,
+        npub: t.nostr_author_pubkey ? pubkeyToNpub(t.nostr_author_pubkey) : null,
+        display_name: cached?.display_name || null,
+        avatar_url: cached?.avatar_url || null,
+      }
+    }
+    return {
+      id: t.id,
+      title: t.title,
+      content: t.content ? stripHtml(t.content).slice(0, 300) : null,
+      nostr_event_id: t.nostr_event_id,
+      created_at: t.created_at,
+      author,
+    }
+  })
+
+  return c.json({ topics: result, page, limit })
+})
+
+// ─── Repost ───
+
+// POST /api/topics/:id/repost
+api.post('/topics/:id/repost', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  // Check topic exists
+  const topicData = await db.select({
+    id: topics.id,
+    userId: topics.userId,
+    nostrEventId: topics.nostrEventId,
+    nostrAuthorPubkey: topics.nostrAuthorPubkey,
+  }).from(topics).where(eq(topics.id, topicId)).limit(1)
+  if (topicData.length === 0) return c.json({ error: 'Topic not found' }, 404)
+
+  // Dedup
+  const existing = await db.select({ id: topicReposts.id })
+    .from(topicReposts)
+    .where(and(eq(topicReposts.topicId, topicId), eq(topicReposts.userId, user.id)))
+    .limit(1)
+  if (existing.length > 0) return c.json({ ok: true, already_reposted: true })
+
+  await db.insert(topicReposts).values({
+    id: generateId(),
+    topicId,
+    userId: user.id,
+    createdAt: new Date(),
+  })
+
+  // Nostr: broadcast Kind 6 repost
+  if (topicData[0].nostrEventId && user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const authorPubkey = topicData[0].nostrAuthorPubkey || user.nostrPubkey || ''
+    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const event = await buildRepostEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          eventId: topicData[0].nostrEventId!,
+          authorPubkey,
+          relayUrl,
+        })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API/Nostr] Failed to publish repost:', e)
+      }
+    })())
+  }
+
+  // Notify original author (if local user)
+  if (topicData[0].userId && topicData[0].userId !== user.id) {
+    await createNotification(db, {
+      userId: topicData[0].userId,
+      actorId: user.id,
+      type: 'topic_repost',
+      topicId,
+    })
+  }
+
+  return c.json({ ok: true }, 201)
+})
+
+// DELETE /api/topics/:id/repost
+api.delete('/topics/:id/repost', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const topicId = c.req.param('id')
+
+  await db.delete(topicReposts)
+    .where(and(eq(topicReposts.topicId, topicId), eq(topicReposts.userId, user.id)))
+
+  return c.json({ ok: true })
+})
+
+// ─── Zap (NIP-57) ───
+
+// POST /api/zap
+api.post('/zap', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nwcEnabled || !user.nwcEncrypted || !user.nwcIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'NWC wallet not configured. Connect a wallet via PUT /api/me.' }, 400)
+  }
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    target_pubkey?: string
+    event_id?: string
+    amount_sats?: number
+    comment?: string
+  }
+
+  if (!body.target_pubkey || !/^[0-9a-f]{64}$/i.test(body.target_pubkey)) {
+    return c.json({ error: 'target_pubkey is required (64 hex chars)' }, 400)
+  }
+  if (!body.amount_sats || body.amount_sats < 1) {
+    return c.json({ error: 'amount_sats is required (>= 1)' }, 400)
+  }
+
+  const targetPubkey = body.target_pubkey.toLowerCase()
+  const amountSats = body.amount_sats
+  const amountMsats = amountSats * 1000
+
+  // Find target's Lightning Address
+  let lightningAddress: string | null = null
+
+  // Check local user first
+  const localTarget = await db.select({ lightningAddress: users.lightningAddress })
+    .from(users).where(eq(users.nostrPubkey, targetPubkey)).limit(1)
+  if (localTarget.length > 0) {
+    lightningAddress = localTarget[0].lightningAddress
+  }
+
+  // If not found locally, fetch Kind 0 from relay
+  if (!lightningAddress) {
+    const relayUrls = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+    if (relayUrls.length > 0) {
+      const { fetchEventsFromRelay } = await import('../services/nostr-community')
+      for (const relayUrl of relayUrls) {
+        try {
+          const { events } = await fetchEventsFromRelay(relayUrl, {
+            kinds: [0],
+            authors: [targetPubkey],
+            limit: 1,
+          })
+          if (events.length > 0) {
+            const meta = JSON.parse(events[0].content) as { lud16?: string }
+            if (meta.lud16) {
+              lightningAddress = meta.lud16
+              break
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!lightningAddress) {
+    return c.json({ error: 'Target has no Lightning Address (lud16)' }, 400)
+  }
+
+  // LNURL-pay step 1: fetch metadata
+  const [lnUser, lnDomain] = lightningAddress.split('@')
+  if (!lnUser || !lnDomain) return c.json({ error: `Invalid Lightning Address: ${lightningAddress}` }, 400)
+
+  const metaResp = await fetch(`https://${lnDomain}/.well-known/lnurlp/${lnUser}`)
+  if (!metaResp.ok) return c.json({ error: `LNURL fetch failed (${metaResp.status})` }, 502)
+
+  const meta = await metaResp.json() as {
+    callback: string; minSendable: number; maxSendable: number; tag: string; allowsNostr?: boolean; nostrPubkey?: string
+  }
+  if (meta.tag !== 'payRequest') return c.json({ error: `Unexpected LNURL tag: ${meta.tag}` }, 502)
+
+  if (amountMsats < meta.minSendable || amountMsats > meta.maxSendable) {
+    return c.json({ error: `Amount ${amountSats} sats out of range [${meta.minSendable / 1000}-${meta.maxSendable / 1000}]` }, 400)
+  }
+
+  // Build zap request (Kind 9734) if LNURL supports Nostr zaps
+  let zapRequestParam = ''
+  if (meta.allowsNostr && meta.nostrPubkey) {
+    const relays = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+    // Encode lightning address as lnurl (bech32)
+    const lnurlBytes = new TextEncoder().encode(`https://${lnDomain}/.well-known/lnurlp/${lnUser}`)
+    const { bech32 } = await import('bech32')
+    const lnurlEncoded = bech32.encode('lnurl', bech32.toWords(Array.from(lnurlBytes)), 1500)
+
+    const zapRequest = await buildZapRequestEvent({
+      privEncrypted: user.nostrPrivEncrypted!,
+      iv: user.nostrPrivIv!,
+      masterKey: c.env.NOSTR_MASTER_KEY!,
+      targetPubkey,
+      eventId: body.event_id,
+      amountMsats,
+      comment: body.comment,
+      relays,
+      lnurl: lnurlEncoded,
+    })
+    zapRequestParam = encodeURIComponent(JSON.stringify(zapRequest))
+  }
+
+  // LNURL-pay step 2: get invoice
+  const sep = meta.callback.includes('?') ? '&' : '?'
+  let callbackUrl = `${meta.callback}${sep}amount=${amountMsats}`
+  if (zapRequestParam) {
+    callbackUrl += `&nostr=${zapRequestParam}`
+  }
+  if (body.comment) {
+    callbackUrl += `&comment=${encodeURIComponent(body.comment)}`
+  }
+
+  const invoiceResp = await fetch(callbackUrl)
+  if (!invoiceResp.ok) return c.json({ error: `LNURL callback failed (${invoiceResp.status})` }, 502)
+
+  const invoiceData = await invoiceResp.json() as { pr: string }
+  if (!invoiceData.pr) return c.json({ error: 'No invoice returned from LNURL callback' }, 502)
+
+  // Step 3: pay via NWC
+  const nwcUri = await decryptNwcUri(user.nwcEncrypted!, user.nwcIv!, c.env.NOSTR_MASTER_KEY!)
+  const nwcParsed = parseNwcUri(nwcUri)
+
+  try {
+    const result = await nwcPayInvoice(nwcParsed, invoiceData.pr)
+    return c.json({ ok: true, paid_sats: amountSats, preimage: result.preimage })
+  } catch (e) {
+    return c.json({
+      error: 'NWC payment failed',
+      detail: e instanceof Error ? e.message : 'Unknown error',
+    }, 502)
+  }
 })
 
 // ─── DVM (NIP-90 Data Vending Machine) ───

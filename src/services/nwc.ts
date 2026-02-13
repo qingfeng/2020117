@@ -50,18 +50,15 @@ export async function decryptNwcUri(encrypted: string, iv: string, masterKey: st
   return decryptNostrPrivkey(encrypted, iv, masterKey)
 }
 
-// Validate NWC connection by sending get_info request
-export async function validateNwcConnection(uri: string): Promise<{ supported_methods: string[] }> {
-  const { walletPubkey, relayUrl, secret } = parseNwcUri(uri)
+// --- NWC Request Engine ---
 
-  // Derive client pubkey from secret
+// Send a NIP-47 request and wait for the response
+async function nwcRequest(parsed: NwcParsed, method: string, params: Record<string, unknown> = {}): Promise<any> {
+  const { walletPubkey, relayUrl, secret } = parsed
   const secretBytes = hexToBytes(secret)
   const clientPubkey = bytesToHex(schnorr.getPublicKey(secretBytes))
 
-  // Build NIP-47 get_info request (Kind 23194)
-  const content = JSON.stringify({ method: 'get_info' })
-
-  // Encrypt content using NIP-04 (simplified: AES-256-CBC with shared secret)
+  const content = JSON.stringify({ method, params })
   const encrypted = await nip04Encrypt(secret, walletPubkey, content)
 
   const event = {
@@ -72,25 +69,20 @@ export async function validateNwcConnection(uri: string): Promise<{ supported_me
     content: encrypted,
   }
 
-  // Compute event ID
   const serialized = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content])
   const id = bytesToHex(sha256(new TextEncoder().encode(serialized)))
-
-  // Sign
   const sig = bytesToHex(schnorr.sign(hexToBytes(id), secretBytes))
   const signedEvent = { id, ...event, sig }
 
-  // Connect to relay and send request
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       try { ws.close() } catch {}
-      reject(new Error('NWC validation timeout (10s)'))
-    }, 10000)
+      reject(new Error(`NWC ${method} timeout (15s)`))
+    }, 15000)
 
     const ws = new WebSocket(relayUrl)
 
     ws.addEventListener('open', () => {
-      // Subscribe to response events
       const subId = bytesToHex(crypto.getRandomValues(new Uint8Array(8)))
       ws.send(JSON.stringify(['REQ', subId, {
         kinds: [23195],
@@ -98,7 +90,6 @@ export async function validateNwcConnection(uri: string): Promise<{ supported_me
         '#e': [signedEvent.id],
         limit: 1,
       }]))
-      // Send the request event
       ws.send(JSON.stringify(['EVENT', signedEvent]))
     })
 
@@ -107,14 +98,13 @@ export async function validateNwcConnection(uri: string): Promise<{ supported_me
         const data = JSON.parse(typeof msg.data === 'string' ? msg.data : '')
         if (data[0] === 'EVENT' && data[2]?.kind === 23195) {
           clearTimeout(timeout)
-          // Decrypt response
           const decrypted = await nip04Decrypt(secret, walletPubkey, data[2].content)
           const result = JSON.parse(decrypted)
           ws.close()
           if (result.error) {
-            reject(new Error(`NWC error: ${result.error.message || result.error.code}`))
+            reject(new Error(`NWC ${method}: ${result.error.message || result.error.code}`))
           } else {
-            resolve({ supported_methods: result.result?.methods || [] })
+            resolve(result.result)
           }
         }
       } catch {}
@@ -122,12 +112,79 @@ export async function validateNwcConnection(uri: string): Promise<{ supported_me
 
     ws.addEventListener('error', () => {
       clearTimeout(timeout)
-      reject(new Error('NWC WebSocket connection failed'))
+      reject(new Error(`NWC WebSocket connection failed`))
     })
   })
 }
 
-// NIP-04 encrypt (AES-256-CBC with shared point)
+// --- Public API ---
+
+// Validate connection (get_info)
+export async function validateNwcConnection(uri: string): Promise<{ supported_methods: string[] }> {
+  const parsed = parseNwcUri(uri)
+  const result = await nwcRequest(parsed, 'get_info')
+  return { supported_methods: result?.methods || [] }
+}
+
+// Pay a BOLT-11 invoice
+export async function nwcPayInvoice(parsed: NwcParsed, bolt11: string): Promise<{ preimage: string }> {
+  const result = await nwcRequest(parsed, 'pay_invoice', { invoice: bolt11 })
+  return { preimage: result?.preimage || '' }
+}
+
+// Get wallet balance
+export async function nwcGetBalance(parsed: NwcParsed): Promise<{ balance_msats: number }> {
+  const result = await nwcRequest(parsed, 'get_balance')
+  return { balance_msats: result?.balance || 0 }
+}
+
+// Create an invoice (for receiving payments)
+export async function nwcMakeInvoice(parsed: NwcParsed, amountMsats: number, description?: string): Promise<{ bolt11: string; payment_hash: string }> {
+  const result = await nwcRequest(parsed, 'make_invoice', {
+    amount: amountMsats,
+    description: description || '',
+  })
+  return { bolt11: result?.invoice || '', payment_hash: result?.payment_hash || '' }
+}
+
+// --- Helpers: resolve Lightning Address to bolt11 ---
+
+export async function resolveAndPayLightningAddress(
+  parsed: NwcParsed,
+  address: string,
+  amountSats: number,
+): Promise<{ preimage: string }> {
+  const [user, domain] = address.split('@')
+  if (!user || !domain) throw new Error(`Invalid Lightning Address: ${address}`)
+
+  // LNURL-pay step 1: fetch metadata
+  const metaResp = await fetch(`https://${domain}/.well-known/lnurlp/${user}`)
+  if (!metaResp.ok) throw new Error(`LNURL fetch failed (${metaResp.status})`)
+
+  const meta = await metaResp.json() as {
+    callback: string; minSendable: number; maxSendable: number; tag: string
+  }
+  if (meta.tag !== 'payRequest') throw new Error(`Unexpected LNURL tag: ${meta.tag}`)
+
+  const amountMsats = amountSats * 1000
+  if (amountMsats < meta.minSendable || amountMsats > meta.maxSendable) {
+    throw new Error(`Amount ${amountSats} sats out of range [${meta.minSendable / 1000}-${meta.maxSendable / 1000}]`)
+  }
+
+  // LNURL-pay step 2: get invoice
+  const sep = meta.callback.includes('?') ? '&' : '?'
+  const invoiceResp = await fetch(`${meta.callback}${sep}amount=${amountMsats}`)
+  if (!invoiceResp.ok) throw new Error(`LNURL callback failed (${invoiceResp.status})`)
+
+  const invoiceData = await invoiceResp.json() as { pr: string }
+  if (!invoiceData.pr) throw new Error('No invoice returned from LNURL callback')
+
+  // Step 3: pay via NWC
+  return nwcPayInvoice(parsed, invoiceData.pr)
+}
+
+// --- NIP-04 Encryption ---
+
 async function nip04Encrypt(privkeyHex: string, pubkeyHex: string, plaintext: string): Promise<string> {
   const sharedPoint = secp256k1.getSharedSecret(hexToBytes(privkeyHex), hexToBytes('02' + pubkeyHex))
   const sharedX = sharedPoint.slice(1, 33)
@@ -143,7 +200,6 @@ async function nip04Encrypt(privkeyHex: string, pubkeyHex: string, plaintext: st
   return `${ctBase64}?iv=${ivBase64}`
 }
 
-// NIP-04 decrypt
 async function nip04Decrypt(privkeyHex: string, pubkeyHex: string, ciphertext: string): Promise<string> {
   const [ctBase64, ivParam] = ciphertext.split('?iv=')
   if (!ivParam) throw new Error('Invalid NIP-04 ciphertext')

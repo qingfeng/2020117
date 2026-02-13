@@ -1,16 +1,13 @@
 import { Hono } from 'hono'
 import { eq, desc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, ledgerEntries, deposits } from '../db/schema'
-import { generateId, generateApiKey, ensureUniqueUsername, stripHtml, isSuperAdmin } from '../lib/utils'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices } from '../db/schema'
+import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { escrowFreeze, escrowRelease, escrowRefund, getBalance, transfer, creditBalance, recordLedger, publishLedgerEvents } from '../lib/balance'
-import type { LedgerEventInfo } from '../services/nostr'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
-import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection } from '../services/nwc'
-import { createInvoice, checkPayment, payInvoice, payLightningAddress } from '../services/lnbits'
+import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
 const api = new Hono<AppContext>()
 
@@ -131,6 +128,7 @@ api.get('/me', requireApiAuth, async (c) => {
     display_name: user.displayName,
     avatar_url: user.avatarUrl,
     bio: user.bio,
+    lightning_address: user.lightningAddress || null,
     profile_url: `${baseUrl}/user/${user.id}`,
     nwc_enabled: !!user.nwcEnabled,
     ...(nwcRelayUrl ? { nwc_relay_url: nwcRelayUrl } : {}),
@@ -141,11 +139,12 @@ api.get('/me', requireApiAuth, async (c) => {
 api.put('/me', requireApiAuth, async (c) => {
   const user = c.get('user')!
   const db = c.get('db')
-  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string; nwc_connection_string?: string | null }
+  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string; lightning_address?: string | null; nwc_connection_string?: string | null }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() }
   if (body.display_name !== undefined) updates.displayName = body.display_name.slice(0, 100)
   if (body.bio !== undefined) updates.bio = body.bio.slice(0, 500)
+  if (body.lightning_address !== undefined) updates.lightningAddress = body.lightning_address
 
   // Handle NWC connection string
   if (body.nwc_connection_string !== undefined) {
@@ -877,16 +876,6 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   const bidSats = body.bid_sats || 0
   const bidMsats = bidSats ? bidSats * 1000 : undefined
 
-  // Escrow freeze if bid_sats > 0
-  let freezeEntries: LedgerEventInfo[] = []
-  if (bidSats > 0) {
-    const freezeResult = await escrowFreeze(db, user.id, bidSats, 'pending')
-    if (!freezeResult.ok) {
-      return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
-    }
-    freezeEntries = freezeResult.entries
-  }
-
   const relays = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
 
   const event = await buildJobRequestEvent({
@@ -923,23 +912,9 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  // Update escrow ledger ref_id with actual job ID
-  if (bidSats > 0) {
-    await db.update(ledgerEntries)
-      .set({ refId: jobId })
-      .where(and(eq(ledgerEntries.userId, user.id), eq(ledgerEntries.refId, 'pending'), eq(ledgerEntries.type, 'escrow_freeze')))
-    for (const e of freezeEntries) e.memo = `Escrow freeze for job ${jobId}`
-  }
-
   // Publish to relay
   if (c.env.NOSTR_QUEUE) {
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-  }
-
-  // Publish ledger events (AIP-0002)
-  if (freezeEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, freezeEntries, userKeys))
   }
 
   // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
@@ -1264,22 +1239,9 @@ api.post('/dvm/jobs/:id/cancel', requireApiAuth, async (c) => {
     return c.json({ error: `Cannot cancel job with status: ${job[0].status}` }, 400)
   }
 
-  // Refund escrow if bid > 0
-  const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
-  let refundEntries: LedgerEventInfo[] = []
-  if (bidSats > 0) {
-    const refundResult = await escrowRefund(db, user.id, bidSats, jobId)
-    refundEntries = refundResult.entries
-  }
-
   await db.update(dvmJobs)
     .set({ status: 'cancelled', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
-
-  // Publish ledger events (AIP-0002)
-  if (refundEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, refundEntries))
-  }
 
   // Send Kind 5 deletion event for the request
   if (job[0].requestEventId && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
@@ -1300,7 +1262,7 @@ api.post('/dvm/jobs/:id/cancel', requireApiAuth, async (c) => {
     })())
   }
 
-  return c.json({ ok: true, status: 'cancelled', ...(bidSats > 0 ? { refunded_sats: bidSats, balance_sats: await getBalance(db, user.id) } : {}) })
+  return c.json({ ok: true, status: 'cancelled' })
 })
 
 // POST /api/dvm/services — Provider: 注册服务
@@ -1532,6 +1494,7 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
   const body = await c.req.json().catch(() => ({})) as {
     content?: string
     amount_sats?: number
+    bolt11?: string
   }
 
   if (!body.content) {
@@ -1541,31 +1504,8 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
   const amountSats = body.amount_sats || 0
   const amountMsats = amountSats ? amountSats * 1000 : undefined
 
-  // Check if customer is on this site (same-site → escrow, no bolt11 needed)
-  let isLocalCustomer = false
-  if (job[0].customerPubkey) {
-    const localCustomer = await db.select({ id: users.id }).from(users)
-      .where(eq(users.nostrPubkey, job[0].customerPubkey))
-      .limit(1)
-    isLocalCustomer = localCustomer.length > 0
-  }
-
-  // Generate bolt11 for external customers when amount > 0 and LNbits configured
-  let bolt11: string | undefined
-  let paymentHash: string | undefined
-
-  if (amountSats > 0 && !isLocalCustomer && c.env.LNBITS_URL && c.env.LNBITS_INVOICE_KEY) {
-    const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-    const webhookUrl = c.env.LNBITS_WEBHOOK_SECRET
-      ? `${baseUrl}/api/webhook/lnbits?secret=${c.env.LNBITS_WEBHOOK_SECRET}`
-      : undefined
-    const invoice = await createInvoice(
-      c.env.LNBITS_URL, c.env.LNBITS_INVOICE_KEY, amountSats,
-      `DVM job ${job[0].requestEventId?.slice(0, 8)} result`, webhookUrl,
-    )
-    bolt11 = invoice.payment_request
-    paymentHash = invoice.payment_hash
-  }
+  // Provider can include their own bolt11 invoice for payment
+  const bolt11 = body.bolt11 || undefined
 
   const resultEvent = await buildJobResultEvent({
     privEncrypted: user.nostrPrivEncrypted!,
@@ -1588,12 +1528,11 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       eventId: resultEvent.id,
       priceMsats: amountMsats || null,
       bolt11: bolt11 || null,
-      paymentHash: paymentHash || null,
       updatedAt: new Date(),
     })
     .where(eq(dvmJobs.id, jobId))
 
-  // If customer is also on this site, update their job directly (no bolt11 for same-site)
+  // If customer is also on this site, update their job directly
   if (job[0].requestEventId) {
     const customerJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
       .where(and(
@@ -1624,143 +1563,8 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
   return c.json({ ok: true, event_id: resultEvent.id }, 201)
 })
 
-// ─── Balance & Ledger ───
 
-// GET /api/balance
-api.get('/balance', requireApiAuth, async (c) => {
-  const user = c.get('user')!
-  return c.json({
-    balance_sats: user.balanceSats,
-    username: user.username,
-  })
-})
-
-// GET /api/ledger
-api.get('/ledger', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-  const page = parseInt(c.req.query('page') || '1')
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
-  const offset = (page - 1) * limit
-  const typeFilter = c.req.query('type')
-
-  const conditions = [eq(ledgerEntries.userId, user.id)]
-  if (typeFilter) {
-    conditions.push(eq(ledgerEntries.type, typeFilter))
-  }
-
-  const entries = await db
-    .select()
-    .from(ledgerEntries)
-    .where(and(...conditions))
-    .orderBy(desc(ledgerEntries.createdAt))
-    .limit(limit)
-    .offset(offset)
-
-  return c.json({
-    entries: entries.map(e => ({
-      id: e.id,
-      type: e.type,
-      amount_sats: e.amountSats,
-      balance_after: e.balanceAfter,
-      ref_id: e.refId,
-      ref_type: e.refType,
-      memo: e.memo,
-      created_at: e.createdAt,
-    })),
-    page,
-    limit,
-  })
-})
-
-// POST /api/transfer
-api.post('/transfer', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-
-  const body = await c.req.json().catch(() => ({})) as {
-    to_username?: string
-    amount_sats?: number
-    memo?: string
-  }
-
-  const toUsername = body.to_username?.trim()
-  const amountSats = body.amount_sats
-  const memo = body.memo?.trim()
-
-  if (!toUsername) return c.json({ error: 'to_username is required' }, 400)
-  if (!amountSats || amountSats <= 0) return c.json({ error: 'amount_sats must be positive' }, 400)
-
-  const target = await db.select({ id: users.id }).from(users).where(eq(users.username, toUsername)).limit(1)
-  if (target.length === 0) return c.json({ error: 'User not found' }, 404)
-  if (target[0].id === user.id) return c.json({ error: 'Cannot transfer to yourself' }, 400)
-
-  const transferResult = await transfer(db, user.id, target[0].id, amountSats, memo)
-  if (!transferResult.ok) {
-    return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
-  }
-
-  // Publish ledger events (AIP-0002)
-  if (transferResult.entries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, transferResult.entries, userKeys))
-  }
-
-  return c.json({ ok: true, balance_sats: await getBalance(db, user.id) })
-})
-
-// POST /api/admin/airdrop
-api.post('/admin/airdrop', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-
-  if (!isSuperAdmin(user)) {
-    return c.json({ error: 'Forbidden' }, 403)
-  }
-
-  const body = await c.req.json().catch(() => ({})) as {
-    username?: string
-    amount_sats?: number
-    memo?: string
-  }
-
-  const username = body.username?.trim()
-  const amountSats = body.amount_sats
-  const memo = body.memo?.trim()
-
-  if (!username) return c.json({ error: 'username is required' }, 400)
-  if (!amountSats || amountSats <= 0) return c.json({ error: 'amount_sats must be positive' }, 400)
-
-  const target = await db.select({ id: users.id }).from(users).where(eq(users.username, username)).limit(1)
-  if (target.length === 0) return c.json({ error: 'User not found' }, 404)
-
-  await creditBalance(db, target[0].id, amountSats)
-  const newBalance = await getBalance(db, target[0].id)
-  const airdropMemo = memo || `Airdrop from admin ${user.username}`
-
-  const entryId = await recordLedger(db, {
-    userId: target[0].id,
-    type: 'airdrop',
-    amountSats,
-    balanceAfter: newBalance,
-    refId: user.id,
-    refType: 'airdrop',
-    memo: airdropMemo,
-  })
-
-  // Publish ledger event (AIP-0002)
-  if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const entries: LedgerEventInfo[] = [{
-      ledgerEntryId: entryId, type: 'airdrop', amountSats,
-      balanceAfter: newBalance, signerType: 'system', memo: airdropMemo,
-    }]
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
-  }
-
-  return c.json({ ok: true, new_balance: newBalance })
-})
-
-// POST /api/dvm/jobs/:id/complete — Customer confirms result, settle escrow
+// POST /api/dvm/jobs/:id/complete — Customer confirms result, pay provider via NWC
 api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   const db = c.get('db')
   const user = c.get('user')!
@@ -1776,89 +1580,75 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   }
 
   const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
+  const priceSats = job[0].priceMsats ? Math.floor(job[0].priceMsats / 1000) : 0
+  const paymentSats = priceSats > 0 ? Math.min(priceSats, bidSats || priceSats) : bidSats
 
-  // Find the provider — first check local provider job, then match pubkey to local user
-  let providerUserId: string | null = null
-  if (job[0].requestEventId) {
-    const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
-      .where(and(
-        eq(dvmJobs.requestEventId, job[0].requestEventId),
-        eq(dvmJobs.role, 'provider'),
-        eq(dvmJobs.status, 'completed'),
-      ))
-      .limit(1)
-    if (providerJob.length > 0) {
-      providerUserId = providerJob[0].userId
-    }
-  }
-  // Fallback: provider submitted via native Nostr but is a registered user
-  if (!providerUserId && job[0].providerPubkey) {
-    const localUser = await db.select({ id: users.id }).from(users)
-      .where(eq(users.nostrPubkey, job[0].providerPubkey))
-      .limit(1)
-    if (localUser.length > 0) {
-      providerUserId = localUser[0].id
-    }
-  }
+  // Payment via NWC if amount > 0
+  let paymentResult: { preimage?: string; paid_sats?: number } = {}
 
-  // Settle escrow
-  let releaseEntries: LedgerEventInfo[] = []
+  if (paymentSats > 0) {
+    // Customer must have NWC enabled
+    if (!user.nwcEnabled || !user.nwcEncrypted || !user.nwcIv || !c.env.NOSTR_MASTER_KEY) {
+      return c.json({ error: 'NWC wallet not configured. Connect a wallet via PUT /api/me to pay for jobs.' }, 400)
+    }
 
-  if (bidSats > 0 && providerUserId) {
-    // Local provider — settle via internal escrow
-    const releaseResult = await escrowRelease(db, user.id, providerUserId, bidSats, jobId)
-    releaseEntries = releaseResult.entries
-  } else if (bidSats > 0 && !providerUserId && job[0].bolt11) {
-    // External provider — pay bolt11 via Lightning (NIP-90 native)
-    if (!c.env.LNBITS_URL || !c.env.LNBITS_ADMIN_KEY) {
-      return c.json({ error: 'Lightning payments not configured' }, 503)
-    }
-    // Validate bolt11 amount does not exceed escrowed amount
-    const priceSats = job[0].priceMsats ? Math.floor(job[0].priceMsats / 1000) : 0
-    if (priceSats > bidSats) {
-      return c.json({
-        error: `Provider invoice (${priceSats} sats) exceeds escrow (${bidSats} sats)`,
-      }, 400)
-    }
-    try {
-      await payInvoice(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, job[0].bolt11)
-      // Escrow consumed — sats left the platform via Lightning
-      const balance = await getBalance(db, user.id)
-      const memo = `Escrow released via Lightning to external provider for job ${jobId}`
-      const entryId = await recordLedger(db, {
-        userId: user.id, type: 'escrow_release', amountSats: 0,
-        balanceAfter: balance, refId: jobId, refType: 'dvm_job', memo,
-      })
-      releaseEntries = [{
-        ledgerEntryId: entryId, type: 'escrow_release', amountSats: 0,
-        balanceAfter: balance, signerType: 'system', memo,
-      }]
-      // Refund overpayment if bolt11 < bid
-      if (priceSats > 0 && priceSats < bidSats) {
-        const refundSats = bidSats - priceSats
-        await creditBalance(db, user.id, refundSats)
-        const newBalance = await getBalance(db, user.id)
-        const refundMemo = `Escrow overpayment refund for job ${jobId}`
-        const refundId = await recordLedger(db, {
-          userId: user.id, type: 'escrow_refund', amountSats: refundSats,
-          balanceAfter: newBalance, refId: jobId, refType: 'dvm_job', memo: refundMemo,
-        })
-        releaseEntries.push({
-          ledgerEntryId: refundId, type: 'escrow_refund', amountSats: refundSats,
-          balanceAfter: newBalance, signerType: 'system', memo: refundMemo,
-        })
+    const nwcUri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
+    const nwcParsed = parseNwcUri(nwcUri)
+
+    // Determine payment target
+    if (job[0].bolt11) {
+      // Provider included a bolt11 invoice (external or local provider with explicit invoice)
+      try {
+        const result = await nwcPayInvoice(nwcParsed, job[0].bolt11)
+        paymentResult = { preimage: result.preimage, paid_sats: paymentSats }
+      } catch (e) {
+        return c.json({
+          error: 'NWC payment failed',
+          detail: e instanceof Error ? e.message : 'Unknown error',
+        }, 502)
       }
-    } catch (e) {
-      return c.json({
-        error: 'Lightning payment to external provider failed',
-        detail: e instanceof Error ? e.message : 'Unknown error',
-      }, 502)
+    } else {
+      // No bolt11 — try to find provider's Lightning Address
+      let providerLightningAddress: string | null = null
+
+      // Check local provider job
+      if (job[0].requestEventId) {
+        const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
+          .where(and(
+            eq(dvmJobs.requestEventId, job[0].requestEventId),
+            eq(dvmJobs.role, 'provider'),
+            eq(dvmJobs.status, 'completed'),
+          ))
+          .limit(1)
+        if (providerJob.length > 0) {
+          const providerUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
+            .where(eq(users.id, providerJob[0].userId)).limit(1)
+          if (providerUser.length > 0) providerLightningAddress = providerUser[0].lightningAddress
+        }
+      }
+      // Fallback: match pubkey to local user
+      if (!providerLightningAddress && job[0].providerPubkey) {
+        const localUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
+          .where(eq(users.nostrPubkey, job[0].providerPubkey)).limit(1)
+        if (localUser.length > 0) providerLightningAddress = localUser[0].lightningAddress
+      }
+
+      if (!providerLightningAddress) {
+        return c.json({
+          error: 'Cannot pay: provider has no Lightning invoice or Lightning Address',
+        }, 400)
+      }
+
+      try {
+        const result = await resolveAndPayLightningAddress(nwcParsed, providerLightningAddress, paymentSats)
+        paymentResult = { preimage: result.preimage, paid_sats: paymentSats }
+      } catch (e) {
+        return c.json({
+          error: 'NWC payment to Lightning Address failed',
+          detail: e instanceof Error ? e.message : 'Unknown error',
+        }, 502)
+      }
     }
-  } else if (bidSats > 0 && !providerUserId && !job[0].bolt11) {
-    // External provider without bolt11 — cannot settle
-    return c.json({
-      error: 'Cannot complete: external provider did not include a Lightning invoice in the result',
-    }, 400)
   }
 
   // Mark customer job as completed
@@ -1866,313 +1656,11 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
     .set({ status: 'completed', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
 
-  // Publish ledger events (AIP-0002)
-  if (releaseEntries.length > 0 && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, releaseEntries))
-  }
-
   return c.json({
     ok: true,
-    settled_sats: bidSats,
-    balance_sats: await getBalance(db, user.id),
+    ...(paymentResult.paid_sats ? { paid_sats: paymentResult.paid_sats } : {}),
   })
 })
 
-// ─── Lightning Deposit / Withdraw ───
-
-// POST /api/deposit — 生成 Lightning invoice 充值
-api.post('/deposit', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-
-  if (!c.env.LNBITS_URL || !c.env.LNBITS_INVOICE_KEY) {
-    return c.json({ error: 'Lightning payments not configured' }, 503)
-  }
-
-  const body = await c.req.json().catch(() => ({})) as { amount_sats?: number }
-  const amountSats = body.amount_sats
-
-  if (!amountSats || amountSats < 100 || amountSats > 1000000) {
-    return c.json({ error: 'amount_sats must be between 100 and 1,000,000' }, 400)
-  }
-
-  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-  const webhookUrl = c.env.LNBITS_WEBHOOK_SECRET
-    ? `${baseUrl}/api/webhook/lnbits?secret=${c.env.LNBITS_WEBHOOK_SECRET}`
-    : undefined
-
-  const invoice = await createInvoice(
-    c.env.LNBITS_URL,
-    c.env.LNBITS_INVOICE_KEY,
-    amountSats,
-    `Deposit ${amountSats} sats for ${user.username}`,
-    webhookUrl,
-  )
-
-  const depositId = generateId()
-  await db.insert(deposits).values({
-    id: depositId,
-    userId: user.id,
-    amountSats,
-    paymentHash: invoice.payment_hash,
-    paymentRequest: invoice.payment_request,
-    status: 'pending',
-    createdAt: new Date(),
-  })
-
-  return c.json({
-    deposit_id: depositId,
-    payment_request: invoice.payment_request,
-    payment_hash: invoice.payment_hash,
-    amount_sats: amountSats,
-    status: 'pending',
-  }, 201)
-})
-
-// GET /api/deposit/:id/status — 查询充值状态
-api.get('/deposit/:id/status', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-  const depositId = c.req.param('id')
-
-  const deposit = await db.select().from(deposits)
-    .where(and(eq(deposits.id, depositId), eq(deposits.userId, user.id)))
-    .limit(1)
-
-  if (deposit.length === 0) return c.json({ error: 'Deposit not found' }, 404)
-
-  const d = deposit[0]
-
-  // If already paid, return directly
-  if (d.status === 'paid') {
-    return c.json({
-      deposit_id: d.id,
-      status: 'paid',
-      amount_sats: d.amountSats,
-      balance_sats: await getBalance(db, user.id),
-    })
-  }
-
-  // Fallback: check LNbits directly (in case webhook was missed)
-  if (d.status === 'pending' && c.env.LNBITS_URL && c.env.LNBITS_INVOICE_KEY) {
-    try {
-      const payment = await checkPayment(c.env.LNBITS_URL, c.env.LNBITS_INVOICE_KEY, d.paymentHash)
-      if (payment.paid) {
-        // Credit balance
-        await creditBalance(db, user.id, d.amountSats)
-        const balance = await getBalance(db, user.id)
-        const depositMemo = `Lightning deposit ${d.amountSats} sats`
-        const entryId = await recordLedger(db, {
-          userId: user.id,
-          type: 'deposit',
-          amountSats: d.amountSats,
-          balanceAfter: balance,
-          refId: d.id,
-          refType: 'deposit',
-          memo: depositMemo,
-        })
-        await db.update(deposits)
-          .set({ status: 'paid', paidAt: new Date() })
-          .where(eq(deposits.id, d.id))
-
-        // Publish ledger event (AIP-0002)
-        if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-          const entries: LedgerEventInfo[] = [{
-            ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
-            balanceAfter: balance, signerType: 'system', memo: depositMemo,
-          }]
-          const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
-          c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries, userKeys))
-        }
-
-        return c.json({
-          deposit_id: d.id,
-          status: 'paid',
-          amount_sats: d.amountSats,
-          balance_sats: balance,
-        })
-      }
-    } catch (e) {
-      console.error('[Deposit] LNbits check failed:', e)
-    }
-  }
-
-  return c.json({
-    deposit_id: d.id,
-    status: d.status,
-    amount_sats: d.amountSats,
-    payment_request: d.paymentRequest,
-  })
-})
-
-// POST /api/webhook/lnbits — LNbits 支付回调
-api.post('/webhook/lnbits', async (c) => {
-  const secret = c.req.query('secret')
-  if (!c.env.LNBITS_WEBHOOK_SECRET || secret !== c.env.LNBITS_WEBHOOK_SECRET) {
-    return c.json({ error: 'Invalid secret' }, 403)
-  }
-
-  const db = c.get('db')
-  const body = await c.req.json().catch(() => ({})) as { payment_hash?: string }
-  const paymentHash = body.payment_hash
-
-  if (!paymentHash) return c.json({ error: 'Missing payment_hash' }, 400)
-
-  // Find pending deposit
-  const deposit = await db.select().from(deposits)
-    .where(and(eq(deposits.paymentHash, paymentHash), eq(deposits.status, 'pending')))
-    .limit(1)
-
-  if (deposit.length === 0) {
-    // Check if this is a DVM provider receiving Lightning payment
-    const dvmJob = await db.select().from(dvmJobs)
-      .where(and(eq(dvmJobs.paymentHash, paymentHash), eq(dvmJobs.role, 'provider')))
-      .limit(1)
-
-    if (dvmJob.length > 0 && dvmJob[0].status !== 'completed') {
-      const priceSats = dvmJob[0].priceMsats ? Math.floor(dvmJob[0].priceMsats / 1000) : 0
-      if (priceSats > 0) {
-        await creditBalance(db, dvmJob[0].userId, priceSats)
-        const balance = await getBalance(db, dvmJob[0].userId)
-        const dvmMemo = `DVM job payment received via Lightning`
-        const entryId = await recordLedger(db, {
-          userId: dvmJob[0].userId, type: 'job_payment', amountSats: priceSats,
-          balanceAfter: balance, refId: dvmJob[0].id, refType: 'dvm_job', memo: dvmMemo,
-        })
-        // Publish ledger event (AIP-0002)
-        if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-          const entries: LedgerEventInfo[] = [{
-            ledgerEntryId: entryId, type: 'job_payment', amountSats: priceSats,
-            balanceAfter: balance, signerType: 'system', memo: dvmMemo,
-          }]
-          c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
-        }
-      }
-      await db.update(dvmJobs)
-        .set({ status: 'completed', updatedAt: new Date() })
-        .where(eq(dvmJobs.id, dvmJob[0].id))
-      console.log(`[DVM] Provider ${dvmJob[0].userId} received Lightning payment for job ${dvmJob[0].id}`)
-      return c.json({ ok: true })
-    }
-
-    // Neither deposit nor DVM job matched — idempotent
-    return c.json({ ok: true })
-  }
-
-  const d = deposit[0]
-
-  // Credit balance
-  await creditBalance(db, d.userId, d.amountSats)
-  const balance = await getBalance(db, d.userId)
-  const depositMemo = `Lightning deposit ${d.amountSats} sats`
-  const entryId = await recordLedger(db, {
-    userId: d.userId,
-    type: 'deposit',
-    amountSats: d.amountSats,
-    balanceAfter: balance,
-    refId: d.id,
-    refType: 'deposit',
-    memo: depositMemo,
-  })
-  await db.update(deposits)
-    .set({ status: 'paid', paidAt: new Date() })
-    .where(eq(deposits.id, d.id))
-
-  // Publish ledger event (AIP-0002)
-  if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const entries: LedgerEventInfo[] = [{
-      ledgerEntryId: entryId, type: 'deposit', amountSats: d.amountSats,
-      balanceAfter: balance, signerType: 'system', memo: depositMemo,
-    }]
-    c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries))
-  }
-
-  console.log(`[Deposit] Credited ${d.amountSats} sats to user ${d.userId}`)
-  return c.json({ ok: true })
-})
-
-// POST /api/withdraw — 提现到 Lightning Address
-api.post('/withdraw', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-
-  if (!c.env.LNBITS_URL || !c.env.LNBITS_ADMIN_KEY) {
-    return c.json({ error: 'Lightning payments not configured' }, 503)
-  }
-
-  const body = await c.req.json().catch(() => ({})) as {
-    amount_sats?: number
-    lightning_address?: string
-    bolt11?: string
-  }
-
-  const amountSats = body.amount_sats
-  const lightningAddress = body.lightning_address || user.lightningAddress
-  const bolt11 = body.bolt11
-
-  if (!amountSats || amountSats < 100 || amountSats > 1000000) {
-    return c.json({ error: 'amount_sats must be between 100 and 1,000,000' }, 400)
-  }
-
-  if (!bolt11 && !lightningAddress) {
-    return c.json({ error: 'Provide bolt11 invoice or lightning_address' }, 400)
-  }
-
-  // Debit balance first
-  const { debitBalance } = await import('../lib/balance')
-  const ok = await debitBalance(db, user.id, amountSats)
-  if (!ok) {
-    return c.json({ error: 'Insufficient balance', balance_sats: await getBalance(db, user.id) }, 400)
-  }
-
-  try {
-    let paymentResult: { payment_hash: string }
-
-    if (bolt11) {
-      paymentResult = await payInvoice(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, bolt11)
-    } else {
-      paymentResult = await payLightningAddress(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, lightningAddress!, amountSats)
-    }
-
-    // Record ledger
-    const balance = await getBalance(db, user.id)
-    const withdrawMemo = `Lightning withdrawal ${amountSats} sats`
-    const entryId = await recordLedger(db, {
-      userId: user.id,
-      type: 'withdrawal',
-      amountSats: -amountSats,
-      balanceAfter: balance,
-      refId: paymentResult.payment_hash,
-      refType: 'withdrawal',
-      memo: withdrawMemo,
-    })
-
-    // Publish ledger event (AIP-0002)
-    if (c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-      const entries: LedgerEventInfo[] = [{
-        ledgerEntryId: entryId, type: 'withdrawal', amountSats: -amountSats,
-        balanceAfter: balance, signerType: 'user', memo: withdrawMemo,
-      }]
-      const userKeys = user.nostrPubkey ? { pubkey: user.nostrPubkey, privEncrypted: user.nostrPrivEncrypted!, iv: user.nostrPrivIv! } : undefined
-      c.executionCtx.waitUntil(publishLedgerEvents(db, c.env.KV, c.env.NOSTR_QUEUE, c.env.NOSTR_MASTER_KEY, entries, userKeys))
-    }
-
-    return c.json({
-      ok: true,
-      payment_hash: paymentResult.payment_hash,
-      amount_sats: amountSats,
-      balance_sats: balance,
-    })
-  } catch (e) {
-    // Payment failed — refund balance
-    await creditBalance(db, user.id, amountSats)
-    console.error('[Withdraw] Lightning payment failed, refunded:', e)
-    return c.json({
-      error: 'Lightning payment failed',
-      detail: e instanceof Error ? e.message : 'Unknown error',
-      balance_sats: await getBalance(db, user.id),
-    }, 502)
-  }
-})
 
 export default api

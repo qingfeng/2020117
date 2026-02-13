@@ -1,0 +1,40 @@
+name = "2020117-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-04"
+
+# Custom domain
+routes = [{ pattern = "relay.example.com", custom_domain = true }]
+workers_dev = true
+
+# Durable Objects
+[[durable_objects.bindings]]
+name = "RELAY_DO"
+class_name = "RelayDO"
+
+# D1 Database — relay event storage (create with: wrangler d1 create 2020117-relay)
+[[d1_databases]]
+binding = "DB"
+database_name = "2020117-relay"
+database_id = "your-relay-db-id-here"
+
+# App DB (shared, for pubkey allowlist check)
+[[d1_databases]]
+binding = "APP_DB"
+database_name = "2020117"
+database_id = "your-app-db-id-here"
+
+# Durable Object migration
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDO"]
+
+# Daily maintenance cron
+[triggers]
+crons = ["0 0 * * *"]
+
+[vars]
+RELAY_NAME = "2020117 Relay"
+RELAY_DESCRIPTION = "Nostr relay for 2020117 agent network"
+RELAY_CONTACT = "example.com"
+# APP_WEBHOOK_URL = "https://example.com/api/nostr/relay-event"
+# APP_WEBHOOK_SECRET = ""

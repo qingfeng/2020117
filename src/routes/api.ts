@@ -1777,7 +1777,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
   const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
 
-  // Find the provider who submitted the result
+  // Find the provider — first check local provider job, then match pubkey to local user
   let providerUserId: string | null = null
   if (job[0].requestEventId) {
     const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
@@ -1791,38 +1791,74 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       providerUserId = providerJob[0].userId
     }
   }
+  // Fallback: provider submitted via native Nostr but is a registered user
+  if (!providerUserId && job[0].providerPubkey) {
+    const localUser = await db.select({ id: users.id }).from(users)
+      .where(eq(users.nostrPubkey, job[0].providerPubkey))
+      .limit(1)
+    if (localUser.length > 0) {
+      providerUserId = localUser[0].id
+    }
+  }
 
   // Settle escrow
   let releaseEntries: LedgerEventInfo[] = []
 
-  if (bidSats > 0 && !providerUserId && job[0].bolt11) {
-    // External Provider — pay via Lightning
+  if (bidSats > 0 && providerUserId) {
+    // Local provider — settle via internal escrow
+    const releaseResult = await escrowRelease(db, user.id, providerUserId, bidSats, jobId)
+    releaseEntries = releaseResult.entries
+  } else if (bidSats > 0 && !providerUserId && job[0].bolt11) {
+    // External provider — pay bolt11 via Lightning (NIP-90 native)
     if (!c.env.LNBITS_URL || !c.env.LNBITS_ADMIN_KEY) {
       return c.json({ error: 'Lightning payments not configured' }, 503)
     }
+    // Validate bolt11 amount does not exceed escrowed amount
+    const priceSats = job[0].priceMsats ? Math.floor(job[0].priceMsats / 1000) : 0
+    if (priceSats > bidSats) {
+      return c.json({
+        error: `Provider invoice (${priceSats} sats) exceeds escrow (${bidSats} sats)`,
+      }, 400)
+    }
     try {
       await payInvoice(c.env.LNBITS_URL, c.env.LNBITS_ADMIN_KEY, job[0].bolt11)
-      // Consume escrow (record ledger, no credit to any local user)
+      // Escrow consumed — sats left the platform via Lightning
       const balance = await getBalance(db, user.id)
-      const memo = `Lightning payment to external DVM provider for job ${jobId}`
+      const memo = `Escrow released via Lightning to external provider for job ${jobId}`
       const entryId = await recordLedger(db, {
-        userId: user.id, type: 'lightning_payment', amountSats: 0,
+        userId: user.id, type: 'escrow_release', amountSats: 0,
         balanceAfter: balance, refId: jobId, refType: 'dvm_job', memo,
       })
       releaseEntries = [{
-        ledgerEntryId: entryId, type: 'lightning_payment', amountSats: 0,
+        ledgerEntryId: entryId, type: 'escrow_release', amountSats: 0,
         balanceAfter: balance, signerType: 'system', memo,
       }]
+      // Refund overpayment if bolt11 < bid
+      if (priceSats > 0 && priceSats < bidSats) {
+        const refundSats = bidSats - priceSats
+        await creditBalance(db, user.id, refundSats)
+        const newBalance = await getBalance(db, user.id)
+        const refundMemo = `Escrow overpayment refund for job ${jobId}`
+        const refundId = await recordLedger(db, {
+          userId: user.id, type: 'escrow_refund', amountSats: refundSats,
+          balanceAfter: newBalance, refId: jobId, refType: 'dvm_job', memo: refundMemo,
+        })
+        releaseEntries.push({
+          ledgerEntryId: refundId, type: 'escrow_refund', amountSats: refundSats,
+          balanceAfter: newBalance, signerType: 'system', memo: refundMemo,
+        })
+      }
     } catch (e) {
       return c.json({
-        error: 'Lightning payment failed',
+        error: 'Lightning payment to external provider failed',
         detail: e instanceof Error ? e.message : 'Unknown error',
       }, 502)
     }
-  } else if (bidSats > 0 && providerUserId) {
-    // Local Provider — settle via escrow (existing logic)
-    const releaseResult = await escrowRelease(db, user.id, providerUserId, bidSats, jobId)
-    releaseEntries = releaseResult.entries
+  } else if (bidSats > 0 && !providerUserId && !job[0].bolt11) {
+    // External provider without bolt11 — cannot settle
+    return c.json({
+      error: 'Cannot complete: external provider did not include a Lightning invoice in the result',
+    }, 400)
   }
 
   // Mark customer job as completed

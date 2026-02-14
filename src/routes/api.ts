@@ -2011,12 +2011,18 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
   const bidSats = job[0].bidMsats ? Math.floor(job[0].bidMsats / 1000) : 0
   const priceSats = job[0].priceMsats ? Math.floor(job[0].priceMsats / 1000) : 0
-  const paymentSats = priceSats > 0 ? Math.min(priceSats, bidSats || priceSats) : bidSats
+  const totalPaymentSats = priceSats > 0 ? Math.min(priceSats, bidSats || priceSats) : bidSats
+
+  // Calculate platform fee
+  const feePercent = parseFloat(c.env.PLATFORM_FEE_PERCENT || '0')
+  const platformAddress = c.env.PLATFORM_LIGHTNING_ADDRESS || ''
+  const feeSats = (feePercent > 0 && platformAddress) ? Math.max(1, Math.floor(totalPaymentSats * feePercent / 100)) : 0
+  const providerSats = totalPaymentSats - feeSats
 
   // Payment via NWC if amount > 0
-  let paymentResult: { preimage?: string; paid_sats?: number } = {}
+  let paymentResult: { preimage?: string; paid_sats?: number; fee_sats?: number } = {}
 
-  if (paymentSats > 0) {
+  if (totalPaymentSats > 0) {
     // Customer must have NWC enabled
     if (!user.nwcEnabled || !user.nwcEncrypted || !user.nwcIv || !c.env.NOSTR_MASTER_KEY) {
       return c.json({ error: 'NWC wallet not configured. Connect a wallet via PUT /api/me to pay for jobs.' }, 400)
@@ -2025,12 +2031,25 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
     const nwcUri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
     const nwcParsed = parseNwcUri(nwcUri)
 
-    // Determine payment target
+    // Step 1: Pay platform fee
+    if (feeSats > 0) {
+      try {
+        await resolveAndPayLightningAddress(nwcParsed, platformAddress, feeSats)
+        console.log(`[DVM] Platform fee: ${feeSats} sats → ${platformAddress}`)
+      } catch (e) {
+        console.error('[DVM] Platform fee payment failed:', e)
+        return c.json({
+          error: 'Platform fee payment failed',
+          detail: e instanceof Error ? e.message : 'Unknown error',
+        }, 502)
+      }
+    }
+
+    // Step 2: Pay provider
     if (job[0].bolt11) {
-      // Provider included a bolt11 invoice (external or local provider with explicit invoice)
       try {
         const result = await nwcPayInvoice(nwcParsed, job[0].bolt11)
-        paymentResult = { preimage: result.preimage, paid_sats: paymentSats }
+        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats }
       } catch (e) {
         return c.json({
           error: 'NWC payment failed',
@@ -2038,10 +2057,8 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
         }, 502)
       }
     } else {
-      // No bolt11 — try to find provider's Lightning Address
       let providerLightningAddress: string | null = null
 
-      // Check local provider job
       if (job[0].requestEventId) {
         const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
           .where(and(
@@ -2056,7 +2073,6 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
           if (providerUser.length > 0) providerLightningAddress = providerUser[0].lightningAddress
         }
       }
-      // Fallback: match pubkey to local user
       if (!providerLightningAddress && job[0].providerPubkey) {
         const localUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
           .where(eq(users.nostrPubkey, job[0].providerPubkey)).limit(1)
@@ -2070,8 +2086,8 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       }
 
       try {
-        const result = await resolveAndPayLightningAddress(nwcParsed, providerLightningAddress, paymentSats)
-        paymentResult = { preimage: result.preimage, paid_sats: paymentSats }
+        const result = await resolveAndPayLightningAddress(nwcParsed, providerLightningAddress, providerSats)
+        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats }
       } catch (e) {
         return c.json({
           error: 'NWC payment to Lightning Address failed',
@@ -2088,7 +2104,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
   return c.json({
     ok: true,
-    ...(paymentResult.paid_sats ? { paid_sats: paymentResult.paid_sats } : {}),
+    ...(paymentResult.paid_sats ? { paid_sats: paymentResult.paid_sats, provider_sats: providerSats, fee_sats: paymentResult.fee_sats } : {}),
   })
 })
 

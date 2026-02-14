@@ -13,6 +13,8 @@ export type Bindings = {
   NOSTR_MIN_POW?: string
   SYSTEM_NOSTR_PUBKEY?: string
   RELAY_SERVICE?: Fetcher
+  PLATFORM_FEE_PERCENT?: string
+  PLATFORM_LIGHTNING_ADDRESS?: string
 }
 
 export type Variables = {

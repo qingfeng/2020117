@@ -124,6 +124,105 @@ api.get('/activity', async (c) => {
   return c.json(activities.slice(0, 20))
 })
 
+// ─── 公开端点：全站时间线 ───
+
+api.get('/timeline', async (c) => {
+  const db = c.get('db')
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  const topicList = await db
+    .select({
+      id: topics.id,
+      title: topics.title,
+      content: topics.content,
+      nostrAuthorPubkey: topics.nostrAuthorPubkey,
+      createdAt: topics.createdAt,
+      authorId: users.id,
+      authorUsername: users.username,
+      authorDisplayName: users.displayName,
+      authorAvatarUrl: users.avatarUrl,
+      commentCount: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
+      likeCount: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
+    })
+    .from(topics)
+    .leftJoin(users, eq(topics.userId, users.id))
+    .orderBy(desc(topics.createdAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    topics: topicList.map(t => ({
+      id: t.id,
+      title: t.title,
+      content: t.content ? stripHtml(t.content).slice(0, 300) : null,
+      created_at: t.createdAt,
+      author: t.authorId
+        ? { username: t.authorUsername, display_name: t.authorDisplayName, avatar_url: t.authorAvatarUrl }
+        : { pubkey: t.nostrAuthorPubkey, npub: t.nostrAuthorPubkey ? pubkeyToNpub(t.nostrAuthorPubkey) : null },
+      comment_count: t.commentCount,
+      like_count: t.likeCount,
+    })),
+    page,
+    limit,
+  })
+})
+
+// ─── 公开端点：DVM 历史 ───
+
+api.get('/dvm/history', async (c) => {
+  const db = c.get('db')
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+  const kindFilter = c.req.query('kind')
+
+  const conditions = [eq(dvmJobs.role, 'customer')]
+  if (kindFilter) {
+    const k = parseInt(kindFilter)
+    if (k >= 5000 && k <= 5999) conditions.push(eq(dvmJobs.kind, k))
+  }
+
+  const jobs = await db
+    .select({
+      id: dvmJobs.id,
+      kind: dvmJobs.kind,
+      status: dvmJobs.status,
+      input: dvmJobs.input,
+      inputType: dvmJobs.inputType,
+      result: dvmJobs.result,
+      bidMsats: dvmJobs.bidMsats,
+      createdAt: dvmJobs.createdAt,
+      updatedAt: dvmJobs.updatedAt,
+      customerUsername: users.username,
+      customerDisplayName: users.displayName,
+    })
+    .from(dvmJobs)
+    .leftJoin(users, eq(dvmJobs.userId, users.id))
+    .where(and(...conditions))
+    .orderBy(desc(dvmJobs.updatedAt))
+    .limit(limit)
+    .offset(offset)
+
+  return c.json({
+    jobs: jobs.map(j => ({
+      id: j.id,
+      kind: j.kind,
+      status: j.status,
+      input: j.input,
+      input_type: j.inputType,
+      result: j.status === 'completed' || j.status === 'result_available' ? j.result : null,
+      bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
+      customer: j.customerDisplayName || j.customerUsername || 'unknown',
+      created_at: j.createdAt,
+      updated_at: j.updatedAt,
+    })),
+    page,
+    limit,
+  })
+})
+
 // ─── 公开端点：注册 ───
 
 api.post('/auth/register', async (c) => {
@@ -1615,14 +1714,13 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
           const svcKinds = JSON.parse(svc.kinds) as number[]
           if (!svcKinds.includes(cj.kind)) continue
 
-          // 检查该 Provider 是否已有此 request 的 rejected 记录（不重复投递给已被拒绝的）
-          // 但如果同一 Provider 想重新接单，accept 接口仍然可用
+          // 排除已被拒绝的 Provider 和正在处理中的 Provider
           const existing = await db.select({ id: dvmJobs.id }).from(dvmJobs)
             .where(and(
               eq(dvmJobs.requestEventId, cj.requestEventId!),
               eq(dvmJobs.userId, svc.userId),
               eq(dvmJobs.role, 'provider'),
-              inArray(dvmJobs.status, ['open', 'processing']),
+              inArray(dvmJobs.status, ['open', 'processing', 'rejected']),
             ))
             .limit(1)
           if (existing.length > 0) continue

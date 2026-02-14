@@ -40,6 +40,7 @@ api.get('/agents', async (c) => {
     avatar_url: string | null
     bio: string | null
     nostr_pubkey: string | null
+    npub: string | null
     services: { kinds: number[]; kind_labels: string[]; description: string | null }[]
   }>()
 
@@ -52,6 +53,7 @@ api.get('/agents', async (c) => {
         avatar_url: row.avatarUrl,
         bio: row.bio,
         nostr_pubkey: row.nostrPubkey,
+        npub: row.nostrPubkey ? pubkeyToNpub(row.nostrPubkey) : null,
         services: [],
       })
     }
@@ -1498,9 +1500,19 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  // Publish to relay
+  // Publish to relay + Kind 1 note
   if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+    const kindLabel = DVM_KIND_LABELS[kind] || `kind ${kind}`
+    const bidStr = bidSats > 0 ? ` (${bidSats} sats)` : ''
+    const noteEvent = await buildSignedEvent({
+      privEncrypted: user.nostrPrivEncrypted!,
+      iv: user.nostrPrivIv!,
+      masterKey: c.env.NOSTR_MASTER_KEY!,
+      kind: 1,
+      content: `📡 Looking for ${kindLabel}${bidStr} #dvm #2020117`,
+      tags: [['t', 'dvm'], ['t', '2020117']],
+    })
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, noteEvent] }))
   }
 
   // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
@@ -1714,6 +1726,20 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     createdAt: now,
     updatedAt: now,
   })
+
+  // Kind 1 note
+  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const kindLabel = DVM_KIND_LABELS[cj.kind] || `kind ${cj.kind}`
+    const noteEvent = await buildSignedEvent({
+      privEncrypted: user.nostrPrivEncrypted,
+      iv: user.nostrPrivIv,
+      masterKey: c.env.NOSTR_MASTER_KEY,
+      kind: 1,
+      content: `⚡ Accepted a ${kindLabel} job #dvm #2020117`,
+      tags: [['t', 'dvm'], ['t', '2020117']],
+    })
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
+  }
 
   return c.json({ job_id: providerJobId, status: 'accepted', kind: cj.kind })
 })
@@ -2143,9 +2169,18 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
     }
   }
 
-  // Publish result to relay
+  // Publish result to relay + Kind 1 note
   if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [resultEvent] }))
+    const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
+    const noteEvent = await buildSignedEvent({
+      privEncrypted: user.nostrPrivEncrypted!,
+      iv: user.nostrPrivIv!,
+      masterKey: c.env.NOSTR_MASTER_KEY!,
+      kind: 1,
+      content: `✅ Completed a ${kindLabel} job #dvm #2020117`,
+      tags: [['t', 'dvm'], ['t', '2020117']],
+    })
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [resultEvent, noteEvent] }))
   }
 
   return c.json({ ok: true, event_id: resultEvent.id }, 201)
@@ -2259,6 +2294,21 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   await db.update(dvmJobs)
     .set({ status: 'completed', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
+
+  // Kind 1 note
+  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
+    const paidStr = paymentResult.paid_sats ? ` — paid ${paymentResult.paid_sats} sats ⚡` : ''
+    const noteEvent = await buildSignedEvent({
+      privEncrypted: user.nostrPrivEncrypted,
+      iv: user.nostrPrivIv,
+      masterKey: c.env.NOSTR_MASTER_KEY,
+      kind: 1,
+      content: `🤝 Job done: ${kindLabel}${paidStr} #dvm #2020117`,
+      tags: [['t', 'dvm'], ['t', '2020117']],
+    })
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
+  }
 
   return c.json({
     ok: true,

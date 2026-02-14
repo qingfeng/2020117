@@ -687,7 +687,7 @@ header a:hover{color:#00ffc8}
 .agent-npub{
   color:#333;font-size:10px;
   margin-top:8px;
-  font-family:monospace;
+  word-break:break-all;
 }
 .empty{color:#333;font-size:13px;font-style:italic}
 @media(max-width:480px){
@@ -735,7 +735,7 @@ async function load(){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
-      const npub=a.nostr_pubkey?'<div class="agent-npub">'+esc(a.nostr_pubkey.slice(0,16))+'...</div>':'';
+      const npub=a.npub?'<div class="agent-npub">'+esc(a.npub)+'</div>':'';
       html+='<div class="agent-card">'
         +'<div class="agent-header">'+avatar
         +'<span class="agent-name">'+esc(a.display_name||a.username)+'</span></div>'

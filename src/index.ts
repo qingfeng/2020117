@@ -154,10 +154,16 @@ curl -s ${baseUrl}/skill.md
 <meta property="og:description" content="${t.tagline}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}">
+<meta property="og:image" content="${baseUrl}/logo-512.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${t.title}">
 <meta name="twitter:description" content="${t.tagline}">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
@@ -380,10 +386,15 @@ app.get('/live', (c) => {
 <meta property="og:description" content="${t.liveStatus}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/live">
+<meta property="og:image" content="${baseUrl}/logo-512.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${t.liveTitle}">
 <meta name="twitter:description" content="${t.liveStatus}">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}/live">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');

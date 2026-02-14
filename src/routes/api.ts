@@ -809,13 +809,12 @@ api.post('/posts', requireApiAuth, async (c) => {
   let nostrEventId: string | null = null
   if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY) {
     try {
-      const textContent = stripHtml(htmlContent).trim()
       const event = await buildSignedEvent({
         privEncrypted: user.nostrPrivEncrypted!,
         iv: user.nostrPrivIv!,
         masterKey: c.env.NOSTR_MASTER_KEY!,
         kind: 1,
-        content: textContent,
+        content,
         tags: [['client', c.env.APP_NAME || 'NeoGroup']],
       })
       nostrEventId = event.id

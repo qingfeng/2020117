@@ -92,7 +92,15 @@ export function unescapeHtml(text: string): string {
 }
 
 export function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<\/?(p|div|h[1-6]|li|blockquote|pre)[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n /g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export function sanitizeHtml(html: string): string {

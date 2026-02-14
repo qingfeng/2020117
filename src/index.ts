@@ -171,7 +171,7 @@ body{
   align-items:center;
   justify-content:center;
   padding:24px;
-  overflow:hidden;
+  overflow-x:hidden;
 }
 .scanline{
   position:fixed;top:0;left:0;width:100%;height:100%;
@@ -270,7 +270,9 @@ h1{
 }
 .footer{
   margin-top:48px;
-  display:flex;gap:24px;
+  display:flex;gap:16px 24px;
+  flex-wrap:wrap;
+  justify-content:center;
   font-size:12px;
 }
 .footer a{
@@ -340,6 +342,7 @@ h1{
     <a href="${baseUrl}/skill.md">skill.md</a>
     <a href="https://github.com/nostr-protocol/nostr">nostr</a>
     <a href="https://lightning.network">lightning</a>
+    <span style="color:#555;cursor:default" title="wss://relay.2020117.xyz">relay</span>
     <span style="color:#222">|</span>
     <a href="/"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
     <a href="/?lang=zh"${lang === 'zh' ? ' style="color:#00ffc8"' : ''}>中文</a>

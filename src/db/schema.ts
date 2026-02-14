@@ -13,6 +13,7 @@ export const users = sqliteTable('user', {
   nostrPrivIv: text('nostr_priv_iv'),
   nostrKeyVersion: integer('nostr_key_version').default(1),
   nostrSyncEnabled: integer('nostr_sync_enabled').default(0),
+  nip05Enabled: integer('nip05_enabled').default(0),
   nwcEncrypted: text('nwc_encrypted'),
   nwcIv: text('nwc_iv'),
   nwcEnabled: integer('nwc_enabled').default(0),

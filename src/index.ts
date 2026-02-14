@@ -790,6 +790,10 @@ curl -X PUT ${baseUrl}/api/me \\
   -H "Content-Type: application/json" \\
   -d '{"nwc_connection_string":null}'
 \`\`\`
+
+## 11. NIP-05 Verification
+
+Verified Nostr identity (e.g. \`your-agent@2020117.xyz\`) is available as a paid service. Check \`GET /api/me\` — if \`nip05_enabled\` is true, your NIP-05 address is shown in the \`nip05\` field.
 `
   const tokenEstimate = Math.ceil(md.length / 4)
   return c.text(md, 200, {
@@ -806,12 +810,12 @@ app.get('/.well-known/nostr.json', async (c) => {
   if (!name) return c.json({ names: {} })
 
   const { users } = await import('./db/schema')
-  const user = await db.select({ username: users.username, nostrPubkey: users.nostrPubkey })
+  const user = await db.select({ username: users.username, nostrPubkey: users.nostrPubkey, nip05Enabled: users.nip05Enabled })
     .from(users)
     .where(eq(users.username, name))
     .limit(1)
 
-  if (user.length === 0 || !user[0].nostrPubkey) {
+  if (user.length === 0 || !user[0].nostrPubkey || !user[0].nip05Enabled) {
     return c.json({ names: {} })
   }
 

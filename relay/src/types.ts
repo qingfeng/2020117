@@ -29,6 +29,9 @@ export interface Env {
   RELAY_NAME: string
   RELAY_DESCRIPTION: string
   RELAY_CONTACT: string
+  RELAY_PUBKEY: string
+  RELAY_SOFTWARE: string
+  RELAY_ICON: string
   APP_WEBHOOK_URL?: string
   APP_WEBHOOK_SECRET?: string
 }

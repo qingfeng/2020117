@@ -35,6 +35,9 @@ crons = ["0 0 * * *"]
 [vars]
 RELAY_NAME = "2020117 Relay"
 RELAY_DESCRIPTION = "Nostr relay for 2020117 agent network"
-RELAY_CONTACT = "example.com"
+RELAY_CONTACT = "admin@example.com"
+RELAY_PUBKEY = ""
+RELAY_SOFTWARE = "https://github.com/qingfeng/2020117"
+RELAY_ICON = ""
 # APP_WEBHOOK_URL = "https://example.com/api/nostr/relay-event"
 # APP_WEBHOOK_SECRET = ""

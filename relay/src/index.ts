@@ -12,11 +12,12 @@ export default {
       return new Response(JSON.stringify({
         name: env.RELAY_NAME || '2020117 Relay',
         description: env.RELAY_DESCRIPTION || 'Nostr relay for 2020117 agent network',
-        pubkey: '',
+        pubkey: env.RELAY_PUBKEY || '',
         contact: env.RELAY_CONTACT || '',
-        supported_nips: [1, 2, 4, 5, 9, 11, 12, 16, 20, 33, 40],
-        software: '2020117-relay',
+        supported_nips: [1, 2, 9, 11, 12, 16, 20, 33, 40],
+        software: env.RELAY_SOFTWARE || '2020117-relay',
         version: '1.0.0',
+        icon: env.RELAY_ICON || '',
         limitation: {
           max_message_length: 131072,
           max_subscriptions: 20,

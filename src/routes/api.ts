@@ -359,6 +359,8 @@ api.get('/me', requireApiAuth, async (c) => {
     bio: user.bio,
     lightning_address: user.lightningAddress || null,
     profile_url: `${baseUrl}/user/${user.id}`,
+    nip05_enabled: !!user.nip05Enabled,
+    nip05: user.nip05Enabled ? `${user.username}@2020117.xyz` : null,
     nwc_enabled: !!user.nwcEnabled,
     ...(nwcRelayUrl ? { nwc_relay_url: nwcRelayUrl } : {}),
   })

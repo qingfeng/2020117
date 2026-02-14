@@ -1682,6 +1682,9 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
     return c.json({ error: `Cannot reject job with status: ${job[0].status}` }, 400)
   }
 
+  const body = await c.req.json().catch(() => ({}))
+  const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
+
   // 重置 customer job 为 open
   await db.update(dvmJobs)
     .set({
@@ -1694,10 +1697,10 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
     })
     .where(eq(dvmJobs.id, jobId))
 
-  // 把对应的 provider job 标记为 rejected
+  // 把对应的 provider job 标记为 rejected（附带原因）
   if (job[0].requestEventId) {
     await db.update(dvmJobs)
-      .set({ status: 'rejected', updatedAt: new Date() })
+      .set({ status: 'rejected', result: reason, updatedAt: new Date() })
       .where(and(
         eq(dvmJobs.requestEventId, job[0].requestEventId),
         eq(dvmJobs.role, 'provider'),
@@ -1755,7 +1758,7 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
     }
   })())
 
-  return c.json({ ok: true, status: 'open' })
+  return c.json({ ok: true, status: 'open', ...(reason ? { reason } : {}) })
 })
 
 // POST /api/dvm/jobs/:id/cancel — Customer: 取消任务

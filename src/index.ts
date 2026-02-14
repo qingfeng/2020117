@@ -738,7 +738,9 @@ curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/complete \\
 
 # Reject result (job reopens for other providers, rejected provider won't be re-assigned)
 curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/reject \\
-  -H "Authorization: Bearer neogrp_..."
+  -H "Authorization: Bearer neogrp_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"reason":"Output was incomplete"}'
 
 # Cancel job
 curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/cancel \\

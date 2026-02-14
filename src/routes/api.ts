@@ -48,6 +48,7 @@ api.get('/activity', async (c) => {
       createdAt: topicLikes.createdAt,
       authorUsername: users.username,
       authorDisplayName: users.displayName,
+      nostrAuthorPubkey: topicLikes.nostrAuthorPubkey,
     })
       .from(topicLikes)
       .leftJoin(users, eq(topicLikes.userId, users.id))
@@ -102,9 +103,13 @@ api.get('/activity', async (c) => {
   }
 
   for (const l of recentLikes) {
+    let actor = l.authorDisplayName || l.authorUsername || ''
+    if (!actor && l.nostrAuthorPubkey) {
+      actor = l.nostrAuthorPubkey.slice(0, 12) + '...'
+    }
     activities.push({
       type: 'like',
-      actor: l.authorDisplayName || l.authorUsername || 'unknown',
+      actor: actor || 'unknown',
       action: 'liked a post',
       time: l.createdAt,
     })

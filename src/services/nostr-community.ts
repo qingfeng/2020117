@@ -1,7 +1,7 @@
 import { eq, and, sql, isNotNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { groups, topics, comments, users, notifications, nostrFollows, nostrCommunityFollows } from '../db/schema'
+import { groups, topics, comments, users, notifications, nostrFollows, nostrCommunityFollows, topicLikes, commentLikes } from '../db/schema'
 import type { User } from '../db/schema'
 import {
   type NostrEvent,
@@ -737,10 +737,80 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
           }
           if (!target) continue
 
+          const reactorPubkey = event.pubkey
+
+          // Try to find local user by nostr_pubkey
+          const localUser = await db.select({ id: users.id })
+            .from(users)
+            .where(eq(users.nostrPubkey, reactorPubkey))
+            .limit(1)
+
+          const localUserId = localUser.length > 0 ? localUser[0].id : null
+
+          // Insert like record (dedup by pubkey + target)
+          if (target.type === 'topic') {
+            const existingLike = await db.select({ id: topicLikes.id })
+              .from(topicLikes)
+              .where(and(
+                eq(topicLikes.topicId, target.id),
+                eq(topicLikes.nostrAuthorPubkey, reactorPubkey)
+              ))
+              .limit(1)
+
+            if (existingLike.length === 0) {
+              // Also check by userId to avoid duplicate if local user already liked via API
+              const existingByUser = localUserId
+                ? await db.select({ id: topicLikes.id })
+                    .from(topicLikes)
+                    .where(and(eq(topicLikes.topicId, target.id), eq(topicLikes.userId, localUserId)))
+                    .limit(1)
+                : []
+
+              if (existingByUser.length === 0) {
+                await db.insert(topicLikes).values({
+                  id: generateId(),
+                  topicId: target.id,
+                  userId: localUserId,
+                  nostrAuthorPubkey: reactorPubkey,
+                  createdAt: new Date(event.created_at * 1000),
+                })
+                console.log(`[Nostr Reactions] Inserted topic_like from ${reactorPubkey.slice(0, 8)}...`)
+              }
+            }
+          } else {
+            const existingLike = await db.select({ id: commentLikes.id })
+              .from(commentLikes)
+              .where(and(
+                eq(commentLikes.commentId, target.id),
+                eq(commentLikes.nostrAuthorPubkey, reactorPubkey)
+              ))
+              .limit(1)
+
+            if (existingLike.length === 0) {
+              const existingByUser = localUserId
+                ? await db.select({ id: commentLikes.id })
+                    .from(commentLikes)
+                    .where(and(eq(commentLikes.commentId, target.id), eq(commentLikes.userId, localUserId)))
+                    .limit(1)
+                : []
+
+              if (existingByUser.length === 0) {
+                await db.insert(commentLikes).values({
+                  id: generateId(),
+                  commentId: target.id,
+                  userId: localUserId,
+                  nostrAuthorPubkey: reactorPubkey,
+                  createdAt: new Date(event.created_at * 1000),
+                })
+                console.log(`[Nostr Reactions] Inserted comment_like from ${reactorPubkey.slice(0, 8)}...`)
+              }
+            }
+          }
+
           // Only notify local users (external posts have userId=null)
           if (!target.userId) continue
 
-          const npub = pubkeyToNpub(event.pubkey)
+          const npub = pubkeyToNpub(reactorPubkey)
           const notifyType = target.type === 'topic' ? 'topic_like' : 'comment_like'
 
           // Dedup: check existing notification by actorName (npub)
@@ -765,7 +835,7 @@ export async function pollNostrReactions(env: Bindings, db: Database) {
             actorName: npub,
           })
 
-          console.log(`[Nostr Reactions] Created ${notifyType} notification from ${event.pubkey.slice(0, 8)}...`)
+          console.log(`[Nostr Reactions] Created ${notifyType} notification from ${reactorPubkey.slice(0, 8)}...`)
         } catch (e) {
           console.error(`[Nostr Reactions] Failed to process event ${event.id}:`, e)
         }

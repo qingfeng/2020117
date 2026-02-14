@@ -92,7 +92,8 @@ export const comments = sqliteTable('comment', {
 export const commentLikes = sqliteTable('comment_like', {
   id: text('id').primaryKey(),
   commentId: text('comment_id').notNull().references(() => comments.id),
-  userId: text('user_id').notNull().references(() => users.id),
+  userId: text('user_id').references(() => users.id),
+  nostrAuthorPubkey: text('nostr_author_pubkey'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 
@@ -108,7 +109,8 @@ export const commentReposts = sqliteTable('comment_repost', {
 export const topicLikes = sqliteTable('topic_like', {
   id: text('id').primaryKey(),
   topicId: text('topic_id').notNull().references(() => topics.id),
-  userId: text('user_id').notNull().references(() => users.id),
+  userId: text('user_id').references(() => users.id),
+  nostrAuthorPubkey: text('nostr_author_pubkey'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 

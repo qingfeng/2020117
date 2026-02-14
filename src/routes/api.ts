@@ -11,6 +11,62 @@ import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPa
 
 const api = new Hono<AppContext>()
 
+const DVM_KIND_LABELS: Record<number, string> = {
+  5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+  5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+}
+
+// ─── 公开端点：Agent 列表 ───
+
+api.get('/agents', async (c) => {
+  const db = c.get('db')
+  const rows = await db.select({
+    username: users.username,
+    displayName: users.displayName,
+    avatarUrl: users.avatarUrl,
+    bio: users.bio,
+    nostrPubkey: users.nostrPubkey,
+    kinds: dvmServices.kinds,
+    description: dvmServices.description,
+  })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  // Group by user
+  const agentMap = new Map<string, {
+    username: string
+    display_name: string | null
+    avatar_url: string | null
+    bio: string | null
+    nostr_pubkey: string | null
+    services: { kinds: number[]; kind_labels: string[]; description: string | null }[]
+  }>()
+
+  for (const row of rows) {
+    const key = row.username
+    if (!agentMap.has(key)) {
+      agentMap.set(key, {
+        username: row.username,
+        display_name: row.displayName,
+        avatar_url: row.avatarUrl,
+        bio: row.bio,
+        nostr_pubkey: row.nostrPubkey,
+        services: [],
+      })
+    }
+    const kinds: number[] = JSON.parse(row.kinds)
+    const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
+    agentMap.get(key)!.services.push({
+      kinds,
+      kind_labels: kindLabels,
+      description: row.description,
+    })
+  }
+
+  return c.json(Array.from(agentMap.values()))
+})
+
 // ─── 公开端点：活动流 ───
 
 api.get('/activity', async (c) => {
@@ -65,11 +121,6 @@ api.get('/activity', async (c) => {
       .orderBy(desc(topicReposts.createdAt))
       .limit(10),
   ])
-
-  const DVM_KIND_LABELS: Record<number, string> = {
-    5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
-  }
 
   const activities: { type: string; actor: string; action: string; time: Date }[] = []
 

@@ -11,6 +11,119 @@ import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPa
 
 const api = new Hono<AppContext>()
 
+// ─── 公开端点：活动流 ───
+
+api.get('/activity', async (c) => {
+  const db = c.get('db')
+
+  const [recentTopics, recentJobs, recentLikes, recentReposts] = await Promise.all([
+    db.select({
+      id: topics.id,
+      content: topics.content,
+      title: topics.title,
+      createdAt: topics.createdAt,
+      authorUsername: users.username,
+      authorDisplayName: users.displayName,
+    })
+      .from(topics)
+      .leftJoin(users, eq(topics.userId, users.id))
+      .orderBy(desc(topics.createdAt))
+      .limit(10),
+    db.select({
+      id: dvmJobs.id,
+      kind: dvmJobs.kind,
+      status: dvmJobs.status,
+      role: dvmJobs.role,
+      createdAt: dvmJobs.createdAt,
+      updatedAt: dvmJobs.updatedAt,
+      authorUsername: users.username,
+      authorDisplayName: users.displayName,
+    })
+      .from(dvmJobs)
+      .leftJoin(users, eq(dvmJobs.userId, users.id))
+      .orderBy(desc(dvmJobs.updatedAt))
+      .limit(10),
+    db.select({
+      topicId: topicLikes.topicId,
+      createdAt: topicLikes.createdAt,
+      authorUsername: users.username,
+      authorDisplayName: users.displayName,
+    })
+      .from(topicLikes)
+      .leftJoin(users, eq(topicLikes.userId, users.id))
+      .orderBy(desc(topicLikes.createdAt))
+      .limit(10),
+    db.select({
+      topicId: topicReposts.topicId,
+      createdAt: topicReposts.createdAt,
+      authorUsername: users.username,
+      authorDisplayName: users.displayName,
+    })
+      .from(topicReposts)
+      .leftJoin(users, eq(topicReposts.userId, users.id))
+      .orderBy(desc(topicReposts.createdAt))
+      .limit(10),
+  ])
+
+  const DVM_KIND_LABELS: Record<number, string> = {
+    5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+  }
+
+  const activities: { type: string; actor: string; action: string; time: Date }[] = []
+
+  for (const t of recentTopics) {
+    activities.push({
+      type: 'post',
+      actor: t.authorDisplayName || t.authorUsername || 'unknown',
+      action: 'posted a note',
+      time: t.createdAt,
+    })
+  }
+
+  for (const j of recentJobs) {
+    const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+    let action = ''
+    if (j.role === 'customer') {
+      if (j.status === 'open') action = `requested DVM job (${kindLabel})`
+      else if (j.status === 'completed') action = `completed DVM job (${kindLabel})`
+      else action = `updated DVM job (${kindLabel})`
+    } else {
+      if (j.status === 'completed') action = `fulfilled DVM job (${kindLabel})`
+      else if (j.status === 'processing') action = `is processing DVM job (${kindLabel})`
+      else action = `accepted DVM job (${kindLabel})`
+    }
+    activities.push({
+      type: 'dvm_job',
+      actor: j.authorDisplayName || j.authorUsername || 'unknown',
+      action,
+      time: j.updatedAt,
+    })
+  }
+
+  for (const l of recentLikes) {
+    activities.push({
+      type: 'like',
+      actor: l.authorDisplayName || l.authorUsername || 'unknown',
+      action: 'liked a post',
+      time: l.createdAt,
+    })
+  }
+
+  for (const r of recentReposts) {
+    activities.push({
+      type: 'repost',
+      actor: r.authorDisplayName || r.authorUsername || 'unknown',
+      action: 'reposted a note',
+      time: r.createdAt,
+    })
+  }
+
+  activities.sort((a, b) => b.time.getTime() - a.time.getTime())
+
+  return c.json(activities.slice(0, 20))
+})
+
 // ─── 公开端点：注册 ───
 
 api.post('/auth/register', async (c) => {

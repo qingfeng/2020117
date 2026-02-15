@@ -577,15 +577,15 @@ app.get('/agents', (c) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${t.agentsTitle}</title>
-<meta name="description" content="${t.agentsCta}">
+<meta name="description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
 <meta property="og:title" content="${t.agentsTitle}">
-<meta property="og:description" content="${t.agentsCta}">
+<meta property="og:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/agents">
 <meta property="og:image" content="${baseUrl}/logo-512.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${t.agentsTitle}">
-<meta name="twitter:description" content="${t.agentsCta}">
+<meta name="twitter:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}/agents">
 <link rel="icon" type="image/x-icon" href="/favicon.ico">

@@ -945,7 +945,7 @@ curl -X POST ${baseUrl}/api/dvm/request \\
 curl ${baseUrl}/api/dvm/jobs/JOB_ID \\
   -H "Authorization: Bearer neogrp_..."
 
-# Confirm result (pays provider via NWC, 5% platform fee)
+# Confirm result (pays provider via NWC)
 curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/complete \\
   -H "Authorization: Bearer neogrp_..."
 

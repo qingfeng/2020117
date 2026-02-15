@@ -1,0 +1,347 @@
+import { eq, and } from 'drizzle-orm'
+import type { Database } from '../db'
+import type { Bindings } from '../types'
+import { users, dvmJobs } from '../db/schema'
+import { decryptNostrPrivkey, buildSignedEvent } from './nostr'
+import { nip04Encrypt, nip04Decrypt } from './nwc'
+import { fetchEventsFromRelay } from './nostr-community'
+import { buildJobRequestEvent } from './dvm'
+import { generateId } from '../lib/utils'
+
+// --- Intent parsing ---
+
+interface ParsedIntent {
+  kind: number
+  label: string
+}
+
+function parseIntent(text: string): ParsedIntent {
+  const lower = text.toLowerCase()
+
+  if (/\b(translate|翻译)\b/.test(lower)) {
+    return { kind: 5302, label: 'translation' }
+  }
+  if (/\b(summarize|summary|总结|摘要)\b/.test(lower)) {
+    return { kind: 5303, label: 'summarization' }
+  }
+  if (/\b(image|draw|picture|画|图|生成图)\b/.test(lower)) {
+    return { kind: 5200, label: 'text-to-image' }
+  }
+  return { kind: 5100, label: 'text generation' }
+}
+
+// --- Confirmation message ---
+
+function confirmationMessage(label: string): string {
+  const msgs: Record<string, string> = {
+    'translation': 'Got it! Working on translation...',
+    'summarization': 'Got it! Working on summarization...',
+    'text-to-image': 'Got it! Generating image...',
+    'text generation': 'Got it! Processing your request...',
+  }
+  return msgs[label] || 'Got it! Processing...'
+}
+
+// --- Poll board inbox: receive messages, create DVM jobs ---
+
+export async function pollBoardInbox(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+  if (!env.NOSTR_MASTER_KEY || !env.NOSTR_QUEUE) return
+
+  // Find board user
+  const boardUsers = await db
+    .select()
+    .from(users)
+    .where(eq(users.username, 'board'))
+    .limit(1)
+
+  if (boardUsers.length === 0) return
+  const board = boardUsers[0]
+
+  if (!board.nostrPubkey || !board.nostrPrivEncrypted || !board.nostrPrivIv) return
+
+  const boardPubkey = board.nostrPubkey
+  const masterKey = env.NOSTR_MASTER_KEY
+
+  // KV-based incremental polling
+  const KV_KEY = 'board_inbox_last_poll'
+  const sinceStr = await env.KV.get(KV_KEY)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 3600
+
+  const relayUrl = relayUrls[0]
+  let maxCreatedAt = since
+
+  try {
+    // Poll Kind 4 DMs to board
+    const dmResult = await fetchEventsFromRelay(relayUrl, {
+      kinds: [4],
+      '#p': [boardPubkey],
+      since,
+    })
+
+    // Poll Kind 1 mentions of board
+    const mentionResult = await fetchEventsFromRelay(relayUrl, {
+      kinds: [1],
+      '#p': [boardPubkey],
+      since,
+    })
+
+    const allEvents = [...dmResult.events, ...mentionResult.events]
+    console.log(`[Board] Fetched ${allEvents.length} events (${dmResult.events.length} DMs, ${mentionResult.events.length} mentions) since ${since}`)
+
+    // Decrypt board private key once for all DMs
+    const boardPrivkeyHex = await decryptNostrPrivkey(
+      board.nostrPrivEncrypted!,
+      board.nostrPrivIv!,
+      masterKey,
+    )
+
+    for (const event of allEvents) {
+      try {
+        // Skip board's own messages
+        if (event.pubkey === boardPubkey) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Dedup: check if we already created a job for this event
+        const existing = await db
+          .select({ id: dvmJobs.id })
+          .from(dvmJobs)
+          .where(eq(dvmJobs.requestEventId, event.id))
+          .limit(1)
+        if (existing.length > 0) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Extract message content
+        let content: string
+        const isKind4 = event.kind === 4
+
+        if (isKind4) {
+          // Decrypt Kind 4 DM
+          content = await nip04Decrypt(boardPrivkeyHex, event.pubkey, event.content)
+        } else {
+          // Kind 1: strip nostr:npub... mentions
+          content = event.content.replace(/nostr:npub[a-z0-9]+/gi, '').trim()
+        }
+
+        if (!content || content.length === 0) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Parse intent
+        const intent = parseIntent(content)
+        console.log(`[Board] Message from ${event.pubkey.slice(0, 8)}...: "${content.slice(0, 80)}" → kind ${intent.kind} (${intent.label})`)
+
+        // Build DVM job request event
+        const relays = relayUrls
+        const jobEvent = await buildJobRequestEvent({
+          privEncrypted: board.nostrPrivEncrypted!,
+          iv: board.nostrPrivIv!,
+          masterKey,
+          kind: intent.kind,
+          input: content,
+          inputType: 'text',
+          bidMsats: undefined,
+          relays,
+        })
+
+        // Save job to DB with board metadata in params
+        const jobId = generateId()
+        const now = new Date()
+        const params = JSON.stringify({
+          board_requester_pubkey: event.pubkey,
+          board_request_event_id: event.id,
+          board_request_kind: event.kind,
+        })
+
+        await db.insert(dvmJobs).values({
+          id: jobId,
+          userId: board.id,
+          role: 'customer',
+          kind: intent.kind,
+          eventId: jobEvent.id,
+          status: 'open',
+          input: content,
+          inputType: 'text',
+          bidMsats: null,
+          customerPubkey: jobEvent.pubkey,
+          requestEventId: event.id,
+          params,
+          createdAt: now,
+          updatedAt: now,
+        })
+
+        // Publish DVM job to relay
+        await env.NOSTR_QUEUE.send({ events: [jobEvent] })
+
+        console.log(`[Board] Created job ${jobId} (kind ${intent.kind}) for event ${event.id}`)
+
+        // Send confirmation reply
+        const confirmText = confirmationMessage(intent.label)
+        let replyEvent
+
+        if (isKind4) {
+          // Reply via Kind 4 DM
+          const encrypted = await nip04Encrypt(boardPrivkeyHex, event.pubkey, confirmText)
+          replyEvent = await buildSignedEvent({
+            privEncrypted: board.nostrPrivEncrypted!,
+            iv: board.nostrPrivIv!,
+            masterKey,
+            kind: 4,
+            content: encrypted,
+            tags: [['p', event.pubkey]],
+          })
+        } else {
+          // Reply via Kind 1 with e tag
+          replyEvent = await buildSignedEvent({
+            privEncrypted: board.nostrPrivEncrypted!,
+            iv: board.nostrPrivIv!,
+            masterKey,
+            kind: 1,
+            content: confirmText,
+            tags: [
+              ['e', event.id, '', 'reply'],
+              ['p', event.pubkey],
+            ],
+          })
+        }
+
+        await env.NOSTR_QUEUE.send({ events: [replyEvent] })
+
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      } catch (e) {
+        console.error(`[Board] Failed to process event ${event.id}:`, e)
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      }
+    }
+  } catch (e) {
+    console.error('[Board] Inbox poll failed:', e)
+  }
+
+  // Update KV timestamp
+  if (maxCreatedAt > since) {
+    await env.KV.put(KV_KEY, String(maxCreatedAt + 1))
+  }
+}
+
+// --- Poll board results: send results back to users ---
+
+export async function pollBoardResults(env: Bindings, db: Database): Promise<void> {
+  if (!env.NOSTR_MASTER_KEY || !env.NOSTR_QUEUE) return
+
+  // Find board user
+  const boardUsers = await db
+    .select()
+    .from(users)
+    .where(eq(users.username, 'board'))
+    .limit(1)
+
+  if (boardUsers.length === 0) return
+  const board = boardUsers[0]
+
+  if (!board.nostrPrivEncrypted || !board.nostrPrivIv) return
+
+  const masterKey = env.NOSTR_MASTER_KEY
+
+  // Find board's customer jobs with results ready
+  const readyJobs = await db
+    .select()
+    .from(dvmJobs)
+    .where(and(
+      eq(dvmJobs.userId, board.id),
+      eq(dvmJobs.role, 'customer'),
+      eq(dvmJobs.status, 'result_available'),
+    ))
+
+  if (readyJobs.length === 0) return
+
+  console.log(`[Board] Found ${readyJobs.length} jobs with results ready`)
+
+  // Decrypt board private key once
+  const boardPrivkeyHex = await decryptNostrPrivkey(
+    board.nostrPrivEncrypted!,
+    board.nostrPrivIv!,
+    masterKey,
+  )
+
+  for (const job of readyJobs) {
+    try {
+      // Parse board metadata from params
+      if (!job.params) {
+        // Not a board-created job, skip
+        await db.update(dvmJobs)
+          .set({ status: 'completed', updatedAt: new Date() })
+          .where(eq(dvmJobs.id, job.id))
+        continue
+      }
+
+      let boardMeta: {
+        board_requester_pubkey?: string
+        board_request_event_id?: string
+        board_request_kind?: number
+      }
+      try {
+        boardMeta = JSON.parse(job.params)
+      } catch {
+        await db.update(dvmJobs)
+          .set({ status: 'completed', updatedAt: new Date() })
+          .where(eq(dvmJobs.id, job.id))
+        continue
+      }
+
+      if (!boardMeta.board_requester_pubkey) {
+        await db.update(dvmJobs)
+          .set({ status: 'completed', updatedAt: new Date() })
+          .where(eq(dvmJobs.id, job.id))
+        continue
+      }
+
+      // Build result message (truncate to reasonable length)
+      const resultText = (job.result || 'No result').slice(0, 4000)
+
+      let replyEvent
+      if (boardMeta.board_request_kind === 4) {
+        // Reply via Kind 4 DM
+        const encrypted = await nip04Encrypt(boardPrivkeyHex, boardMeta.board_requester_pubkey, resultText)
+        replyEvent = await buildSignedEvent({
+          privEncrypted: board.nostrPrivEncrypted!,
+          iv: board.nostrPrivIv!,
+          masterKey,
+          kind: 4,
+          content: encrypted,
+          tags: [['p', boardMeta.board_requester_pubkey]],
+        })
+      } else {
+        // Reply via Kind 1 with e tag reference
+        const tags: string[][] = [['p', boardMeta.board_requester_pubkey]]
+        if (boardMeta.board_request_event_id) {
+          tags.push(['e', boardMeta.board_request_event_id, '', 'reply'])
+        }
+        replyEvent = await buildSignedEvent({
+          privEncrypted: board.nostrPrivEncrypted!,
+          iv: board.nostrPrivIv!,
+          masterKey,
+          kind: 1,
+          content: resultText,
+          tags,
+        })
+      }
+
+      await env.NOSTR_QUEUE.send({ events: [replyEvent] })
+
+      // Mark job as completed
+      await db.update(dvmJobs)
+        .set({ status: 'completed', updatedAt: new Date() })
+        .where(eq(dvmJobs.id, job.id))
+
+      console.log(`[Board] Sent result for job ${job.id} to ${boardMeta.board_requester_pubkey.slice(0, 8)}...`)
+    } catch (e) {
+      console.error(`[Board] Failed to send result for job ${job.id}:`, e)
+    }
+  }
+}

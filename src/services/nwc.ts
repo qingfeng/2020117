@@ -185,7 +185,7 @@ export async function resolveAndPayLightningAddress(
 
 // --- NIP-04 Encryption ---
 
-async function nip04Encrypt(privkeyHex: string, pubkeyHex: string, plaintext: string): Promise<string> {
+export async function nip04Encrypt(privkeyHex: string, pubkeyHex: string, plaintext: string): Promise<string> {
   const sharedPoint = secp256k1.getSharedSecret(hexToBytes(privkeyHex), hexToBytes('02' + pubkeyHex))
   const sharedX = sharedPoint.slice(1, 33)
 
@@ -200,7 +200,7 @@ async function nip04Encrypt(privkeyHex: string, pubkeyHex: string, plaintext: st
   return `${ctBase64}?iv=${ivBase64}`
 }
 
-async function nip04Decrypt(privkeyHex: string, pubkeyHex: string, ciphertext: string): Promise<string> {
+export async function nip04Decrypt(privkeyHex: string, pubkeyHex: string, ciphertext: string): Promise<string> {
   const [ctBase64, ivParam] = ciphertext.split('?iv=')
   if (!ivParam) throw new Error('Invalid NIP-04 ciphertext')
 

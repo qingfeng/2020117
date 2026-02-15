@@ -1370,6 +1370,22 @@ export default {
     } catch (e) {
       console.error('[Cron] DVM requests poll failed:', e)
     }
+
+    // Board bot: poll inbox (DMs + mentions → DVM jobs)
+    try {
+      const { pollBoardInbox } = await import('./services/board')
+      await pollBoardInbox(env, db)
+    } catch (e) {
+      console.error('[Cron] Board inbox poll failed:', e)
+    }
+
+    // Board bot: poll results (completed jobs → reply to users)
+    try {
+      const { pollBoardResults } = await import('./services/board')
+      await pollBoardResults(env, db)
+    } catch (e) {
+      console.error('[Cron] Board results poll failed:', e)
+    }
   },
   // Nostr Queue consumer: publish signed events directly to relays via WebSocket
   async queue(batch: MessageBatch, env: Bindings) {

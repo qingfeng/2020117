@@ -16,6 +16,19 @@ const DVM_KIND_LABELS: Record<number, string> = {
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
 }
 
+// Helper: get DVM community tags for Kind 1 notes
+async function getDvmCommunityTags(db: import('../db').Database, relayUrl: string): Promise<string[][]> {
+  const tags: string[][] = [['t', 'dvm'], ['t', '2020117']]
+  try {
+    const community = await db.select({ nostrPubkey: groups.nostrPubkey, name: groups.name })
+      .from(groups).where(eq(groups.name, 'dvm-market-2020117')).limit(1)
+    if (community.length > 0 && community[0].nostrPubkey) {
+      tags.push(['a', `34550:${community[0].nostrPubkey}:${community[0].name}`, relayUrl])
+    }
+  } catch {}
+  return tags
+}
+
 // ─── 公开端点：Agent 列表 ───
 
 api.get('/agents', async (c) => {
@@ -1504,13 +1517,15 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   if (c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[kind] || `kind ${kind}`
     const bidStr = bidSats > 0 ? ` (${bidSats} sats)` : ''
+    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+    const noteTags = await getDvmCommunityTags(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted!,
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
       content: `📡 Looking for ${kindLabel}${bidStr} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
+      tags: noteTags,
     })
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, noteEvent] }))
   }
@@ -1730,13 +1745,15 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   // Kind 1 note
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[cj.kind] || `kind ${cj.kind}`
+    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+    const noteTags = await getDvmCommunityTags(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted,
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
       content: `⚡ Accepted a ${kindLabel} job #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
+      tags: noteTags,
     })
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
   }
@@ -2172,13 +2189,15 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
   // Publish result to relay + Kind 1 note
   if (c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
+    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+    const noteTags = await getDvmCommunityTags(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted!,
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
       content: `✅ Completed a ${kindLabel} job #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
+      tags: noteTags,
     })
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [resultEvent, noteEvent] }))
   }
@@ -2299,13 +2318,15 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
     const paidStr = paymentResult.paid_sats ? ` — paid ${paymentResult.paid_sats} sats ⚡` : ''
+    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+    const noteTags = await getDvmCommunityTags(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted,
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
       content: `🤝 Job done: ${kindLabel}${paidStr} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
+      tags: noteTags,
     })
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
   }

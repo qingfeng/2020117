@@ -5,7 +5,7 @@ import { users, authProviders, groups, groupMembers, topics, comments, topicLike
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent, eventIdToNevent, buildApprovalEvent, type NostrEvent } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
@@ -16,46 +16,20 @@ const DVM_KIND_LABELS: Record<number, string> = {
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
 }
 
-// Helper: get DVM community info + tags for Kind 1 notes
-interface DvmCommunityInfo {
-  tags: string[][]
-  pubkey: string | null
-  dTag: string | null
-  privEncrypted: string | null
-  privIv: string | null
-  relayUrl: string
-}
-
-async function getDvmCommunityInfo(db: import('../db').Database, relayUrl: string): Promise<DvmCommunityInfo> {
-  const info: DvmCommunityInfo = { tags: [['t', 'dvm'], ['t', '2020117']], pubkey: null, dTag: null, privEncrypted: null, privIv: null, relayUrl }
+// Helper: build Kind 6 repost from board user
+async function buildBoardRepost(db: import('../db').Database, noteEvent: NostrEvent, masterKey: string, relayUrl?: string): Promise<NostrEvent | null> {
   try {
-    const community = await db.select({
-      nostrPubkey: groups.nostrPubkey, name: groups.name,
-      nostrPrivEncrypted: groups.nostrPrivEncrypted, nostrPrivIv: groups.nostrPrivIv,
-    }).from(groups).where(eq(groups.name, 'dvm-market-2020117')).limit(1)
-    if (community.length > 0 && community[0].nostrPubkey) {
-      info.tags.push(['a', `34550:${community[0].nostrPubkey}:${community[0].name}`, relayUrl])
-      info.pubkey = community[0].nostrPubkey
-      info.dTag = community[0].name
-      info.privEncrypted = community[0].nostrPrivEncrypted
-      info.privIv = community[0].nostrPrivIv
-    }
-  } catch {}
-  return info
-}
-
-// Helper: build Kind 4550 approval for a Kind 1 note
-async function buildDvmApproval(community: DvmCommunityInfo, noteEvent: NostrEvent, masterKey: string): Promise<NostrEvent | null> {
-  if (!community.pubkey || !community.dTag || !community.privEncrypted || !community.privIv) return null
-  try {
-    return await buildApprovalEvent({
-      privEncrypted: community.privEncrypted,
-      iv: community.privIv,
+    const board = await db.select({
+      nostrPrivEncrypted: users.nostrPrivEncrypted, nostrPrivIv: users.nostrPrivIv,
+    }).from(users).where(eq(users.username, 'board')).limit(1)
+    if (board.length === 0 || !board[0].nostrPrivEncrypted || !board[0].nostrPrivIv) return null
+    return await buildRepostEvent({
+      privEncrypted: board[0].nostrPrivEncrypted,
+      iv: board[0].nostrPrivIv,
       masterKey,
-      communityPubkey: community.pubkey,
-      dTag: community.dTag,
-      approvedEvent: noteEvent,
-      relayUrl: community.relayUrl,
+      eventId: noteEvent.id,
+      authorPubkey: noteEvent.pubkey,
+      relayUrl,
     })
   } catch { return null }
 }
@@ -685,7 +659,7 @@ api.post('/groups/:id/topics', requireApiAuth, async (c) => {
   }
 
   // Check group exists
-  const groupData = await db.select({ id: groups.id, name: groups.name, nostrSyncEnabled: groups.nostrSyncEnabled, nostrPubkey: groups.nostrPubkey, nostrPrivEncrypted: groups.nostrPrivEncrypted, nostrPrivIv: groups.nostrPrivIv })
+  const groupData = await db.select({ id: groups.id, name: groups.name, nostrSyncEnabled: groups.nostrSyncEnabled, nostrPubkey: groups.nostrPubkey })
     .from(groups).where(eq(groups.id, groupId)).limit(1)
   if (groupData.length === 0) return c.json({ error: 'Group not found' }, 404)
 
@@ -734,12 +708,6 @@ api.post('/groups/:id/topics', requireApiAuth, async (c) => {
           ['client', c.env.APP_NAME || 'NeoGroup'],
         ]
 
-        // NIP-72 community a-tag
-        if (groupData[0].nostrSyncEnabled === 1 && groupData[0].nostrPubkey && groupData[0].name) {
-          const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-          nostrTags.push(['a', `34550:${groupData[0].nostrPubkey}:${groupData[0].name}`, relayUrl])
-        }
-
         const event = await buildSignedEvent({
           privEncrypted: user.nostrPrivEncrypted!,
           iv: user.nostrPrivIv!,
@@ -751,22 +719,9 @@ api.post('/groups/:id/topics', requireApiAuth, async (c) => {
 
         await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
         const eventsToSend: NostrEvent[] = [event]
-        // Build approval if this topic belongs to a community with Nostr sync
-        if (groupData[0].nostrSyncEnabled === 1 && groupData[0].nostrPubkey && groupData[0].name
-            && groupData[0].nostrPrivEncrypted && groupData[0].nostrPrivIv) {
-          try {
-            const approval = await buildApprovalEvent({
-              privEncrypted: groupData[0].nostrPrivEncrypted,
-              iv: groupData[0].nostrPrivIv,
-              masterKey: c.env.NOSTR_MASTER_KEY!,
-              communityPubkey: groupData[0].nostrPubkey,
-              dTag: groupData[0].name,
-              approvedEvent: event,
-              relayUrl: (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || '',
-            })
-            eventsToSend.push(approval)
-          } catch {}
-        }
+        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
+        if (repost) eventsToSend.push(repost)
         await c.env.NOSTR_QUEUE!.send({ events: eventsToSend })
       } catch (e) {
         console.error('[API/Nostr] Failed to publish topic:', e)
@@ -874,23 +829,6 @@ api.post('/topics/:id/comments', requireApiAuth, async (c) => {
           }
         }
 
-        // Community tag + approval for comments on group topics
-        let commentCommunity: DvmCommunityInfo | null = null
-        if (topicResult[0].groupId) {
-          const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-          const grp = await db.select({
-            nostrSyncEnabled: groups.nostrSyncEnabled, nostrPubkey: groups.nostrPubkey,
-            name: groups.name, nostrPrivEncrypted: groups.nostrPrivEncrypted, nostrPrivIv: groups.nostrPrivIv,
-          }).from(groups).where(eq(groups.id, topicResult[0].groupId!)).limit(1)
-          if (grp.length > 0 && grp[0].nostrSyncEnabled === 1 && grp[0].nostrPubkey) {
-            tags.push(['a', `34550:${grp[0].nostrPubkey}:${grp[0].name}`, relayUrl])
-            commentCommunity = {
-              tags: [], pubkey: grp[0].nostrPubkey, dTag: grp[0].name,
-              privEncrypted: grp[0].nostrPrivEncrypted, privIv: grp[0].nostrPrivIv, relayUrl,
-            }
-          }
-        }
-
         const event = await buildSignedEvent({
           privEncrypted: user.nostrPrivEncrypted!,
           iv: user.nostrPrivIv!,
@@ -902,10 +840,9 @@ api.post('/topics/:id/comments', requireApiAuth, async (c) => {
 
         await db.update(comments).set({ nostrEventId: event.id }).where(eq(comments.id, commentId))
         const eventsToSend: NostrEvent[] = [event]
-        if (commentCommunity) {
-          const approval = await buildDvmApproval(commentCommunity, event, c.env.NOSTR_MASTER_KEY!)
-          if (approval) eventsToSend.push(approval)
-        }
+        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
+        if (repost) eventsToSend.push(repost)
         await c.env.NOSTR_QUEUE!.send({ events: eventsToSend })
       } catch (e) {
         console.error('[API/Nostr] Failed to publish comment:', e)
@@ -948,27 +885,25 @@ api.post('/posts', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  // Nostr: build Kind 1 event + community approval
+  // Nostr: build Kind 1 event + board repost
   let nostrEventId: string | null = null
   if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY) {
     try {
-      const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-      const community = await getDvmCommunityInfo(db, relayUrl)
-      const tags: string[][] = [['client', c.env.APP_NAME || 'NeoGroup'], ...community.tags]
       const event = await buildSignedEvent({
         privEncrypted: user.nostrPrivEncrypted!,
         iv: user.nostrPrivIv!,
         masterKey: c.env.NOSTR_MASTER_KEY!,
         kind: 1,
         content,
-        tags,
+        tags: [['client', c.env.APP_NAME || 'NeoGroup']],
       })
       nostrEventId = event.id
       await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
       if (c.env.NOSTR_QUEUE) {
         const eventsToSend: NostrEvent[] = [event]
-        const approval = await buildDvmApproval(community, event, c.env.NOSTR_MASTER_KEY!)
-        if (approval) eventsToSend.push(approval)
+        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
+        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
+        if (repost) eventsToSend.push(repost)
         c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
       }
     } catch (e) {
@@ -1589,23 +1524,22 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  // Publish to relay + Kind 1 note + approval
+  // Publish to relay + Kind 1 note + board repost
   if (c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[kind] || `kind ${kind}`
     const bidStr = bidSats > 0 ? ` (${bidSats} sats)` : ''
     const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const community = await getDvmCommunityInfo(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted!,
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
       content: `📡 Looking for ${kindLabel}${bidStr} #dvm #2020117`,
-      tags: community.tags,
+      tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [event, noteEvent]
-    const approval = await buildDvmApproval(community, noteEvent, c.env.NOSTR_MASTER_KEY!)
-    if (approval) eventsToSend.push(approval)
+    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY!, relayUrl)
+    if (repost) eventsToSend.push(repost)
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
@@ -1825,22 +1759,21 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     .set({ status: 'processing', updatedAt: now })
     .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.status, 'open')))
 
-  // Kind 1 note + approval
+  // Kind 1 note + board repost
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[cj.kind] || `kind ${cj.kind}`
     const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const community = await getDvmCommunityInfo(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted,
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
       content: `⚡ Accepted a ${kindLabel} job #dvm #2020117`,
-      tags: community.tags,
+      tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [noteEvent]
-    const approval = await buildDvmApproval(community, noteEvent, c.env.NOSTR_MASTER_KEY)
-    if (approval) eventsToSend.push(approval)
+    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY, relayUrl)
+    if (repost) eventsToSend.push(repost)
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
@@ -2291,22 +2224,21 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
     }
   }
 
-  // Publish result to relay + Kind 1 note + approval
+  // Publish result to relay + Kind 1 note + board repost
   if (c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
     const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const community = await getDvmCommunityInfo(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted!,
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
       content: `✅ Completed a ${kindLabel} job #dvm #2020117`,
-      tags: community.tags,
+      tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [resultEvent, noteEvent]
-    const approval = await buildDvmApproval(community, noteEvent, c.env.NOSTR_MASTER_KEY!)
-    if (approval) eventsToSend.push(approval)
+    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY!, relayUrl)
+    if (repost) eventsToSend.push(repost)
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
@@ -2427,18 +2359,17 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
     const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
     const paidStr = paymentResult.paid_sats ? ` — paid ${paymentResult.paid_sats} sats ⚡` : ''
     const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const community = await getDvmCommunityInfo(db, relayUrl)
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted,
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
       content: `🤝 Job done: ${kindLabel}${paidStr} #dvm #2020117`,
-      tags: community.tags,
+      tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [noteEvent]
-    const approval = await buildDvmApproval(community, noteEvent, c.env.NOSTR_MASTER_KEY)
-    if (approval) eventsToSend.push(approval)
+    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY, relayUrl)
+    if (repost) eventsToSend.push(repost)
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 

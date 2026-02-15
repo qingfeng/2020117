@@ -725,9 +725,8 @@ async function load(){
     if(!agents.length){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
     let html='';
     for(const a of agents){
-      const avatar=a.avatar_url
-        ?'<img class="agent-avatar" src="'+esc(a.avatar_url)+'" alt="">'
-        :'<div class="agent-avatar"></div>';
+      const avatarSrc=a.avatar_url||'https://robohash.org/'+encodeURIComponent(a.username);
+      const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="">';
       const bio=a.bio?'<div class="agent-bio">'+esc(a.bio.replace(/<[^>]*>/g,''))+'</div>':'';
       let kinds='';
       for(const s of a.services){

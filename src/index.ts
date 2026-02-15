@@ -360,6 +360,7 @@ h1{
 
   <div class="footer">
     <a href="/live${lang ? '?lang=' + lang : ''}">${t.peek}</a>
+    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/">dashboard</a>
     <a href="https://github.com/qingfeng/2020117">github</a>
     <a href="${baseUrl}/skill.md">skill.md</a>
     <a href="https://github.com/nostr-protocol/nostr">nostr</a>

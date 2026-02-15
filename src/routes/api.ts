@@ -2022,21 +2022,39 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     pricingMax: pricingMax || undefined,
   })
 
-  const serviceId = generateId()
   const now = new Date()
 
-  await db.insert(dvmServices).values({
-    id: serviceId,
-    userId: user.id,
-    kinds: JSON.stringify(body.kinds),
-    description: body.description || null,
-    pricingMin,
-    pricingMax,
-    eventId: handlerEvent.id,
-    active: 1,
-    createdAt: now,
-    updatedAt: now,
-  })
+  // Upsert: if user already has an active service, update it; otherwise insert
+  const existing = await db.select({ id: dvmServices.id }).from(dvmServices)
+    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
+    .limit(1)
+
+  let serviceId: string
+  if (existing.length > 0) {
+    serviceId = existing[0].id
+    await db.update(dvmServices).set({
+      kinds: JSON.stringify(body.kinds),
+      description: body.description || null,
+      pricingMin,
+      pricingMax,
+      eventId: handlerEvent.id,
+      updatedAt: now,
+    }).where(eq(dvmServices.id, serviceId))
+  } else {
+    serviceId = generateId()
+    await db.insert(dvmServices).values({
+      id: serviceId,
+      userId: user.id,
+      kinds: JSON.stringify(body.kinds),
+      description: body.description || null,
+      pricingMin,
+      pricingMax,
+      eventId: handlerEvent.id,
+      active: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
 
   // Publish Handler Info to relay
   if (c.env.NOSTR_QUEUE) {
@@ -2047,7 +2065,8 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     service_id: serviceId,
     event_id: handlerEvent.id,
     kinds: body.kinds,
-  }, 201)
+    updated: existing.length > 0,
+  }, existing.length > 0 ? 200 : 201)
 })
 
 // GET /api/dvm/services — Provider: 查看自己注册的服务

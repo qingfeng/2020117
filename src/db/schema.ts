@@ -212,7 +212,7 @@ export const dvmJobs = sqliteTable('dvm_job', {
 // DVM 服务注册表 (NIP-89)
 export const dvmServices = sqliteTable('dvm_service', {
   id: text('id').primaryKey(),
-  userId: text('user_id').notNull().references(() => users.id),
+  userId: text('user_id').notNull().references(() => users.id).unique(),
   kinds: text('kinds').notNull(),
   description: text('description'),
   pricingMin: integer('pricing_min'),

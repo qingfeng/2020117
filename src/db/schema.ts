@@ -231,6 +231,17 @@ export const dvmServices = sqliteTable('dvm_service', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// Nostr 举报表 (NIP-56 Kind 1984)
+export const nostrReports = sqliteTable('nostr_report', {
+  id: text('id').primaryKey(),
+  nostrEventId: text('nostr_event_id').unique(),
+  reporterPubkey: text('reporter_pubkey').notNull(),
+  targetPubkey: text('target_pubkey').notNull(),
+  targetEventId: text('target_event_id'),
+  reportType: text('report_type').notNull(), // nudity|malware|profanity|illegal|spam|impersonation|other
+  content: text('content'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
 
 // 类型导出
 export type User = typeof users.$inferSelect
@@ -251,3 +262,4 @@ export type NostrFollow = typeof nostrFollows.$inferSelect
 export type NostrCommunityFollow = typeof nostrCommunityFollows.$inferSelect
 export type DvmJob = typeof dvmJobs.$inferSelect
 export type DvmService = typeof dvmServices.$inferSelect
+export type NostrReport = typeof nostrReports.$inferSelect

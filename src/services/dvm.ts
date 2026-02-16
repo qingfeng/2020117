@@ -1,7 +1,7 @@
-import { eq, and, inArray, isNotNull } from 'drizzle-orm'
+import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, users } from '../db/schema'
+import { dvmJobs, dvmServices, users, nostrReports } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -347,6 +347,25 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
 
     let maxCreatedAt = since
 
+    // Build userId → totalZapReceived map for threshold check (static across events)
+    const userZapMap = new Map(activeServices.map(s => [s.userId, s.totalZapReceived || 0]))
+
+    // Build report count map for flagged check (static across events)
+    const providerPubkeys = providerUsers.map(u => u.nostrPubkey).filter((pk): pk is string => !!pk)
+    const reportCounts = new Map<string, number>()
+    if (providerPubkeys.length > 0) {
+      const rcRows = await db.select({
+        targetPubkey: nostrReports.targetPubkey,
+        count: sql<number>`COUNT(DISTINCT reporter_pubkey)`,
+      }).from(nostrReports)
+        .where(inArray(nostrReports.targetPubkey, providerPubkeys))
+        .groupBy(nostrReports.targetPubkey)
+      for (const row of rcRows) {
+        reportCounts.set(row.targetPubkey, row.count)
+      }
+    }
+    const REPORT_FLAG_THRESHOLD = 3
+
     for (const event of events) {
       if (!verifyEvent(event)) continue
 
@@ -383,9 +402,6 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       const minZapParam = paramTags.find(t => t[1] === 'min_zap_sats')
       const minZapSats = minZapParam ? parseInt(minZapParam[2]) : 0
 
-      // Build userId → totalZapReceived map for threshold check
-      const userZapMap = new Map(activeServices.map(s => [s.userId, s.totalZapReceived || 0]))
-
       // Create provider job for each matching user
       for (const [userId, kinds] of userKindsMap) {
         if (!kinds.has(event.kind)) continue
@@ -393,6 +409,13 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
         // Check min_zap_sats threshold
         if (minZapSats > 0 && (userZapMap.get(userId) || 0) < minZapSats) {
           console.log(`[DVM] Skipping provider ${userId}: zap ${userZapMap.get(userId) || 0} < required ${minZapSats}`)
+          continue
+        }
+
+        // Skip flagged providers
+        const pubkey = userPubkeyMap.get(userId)
+        if (pubkey && (reportCounts.get(pubkey) || 0) >= REPORT_FLAG_THRESHOLD) {
+          console.log(`[DVM] Skipping flagged provider ${userId}`)
           continue
         }
 
@@ -535,5 +558,97 @@ export async function pollProviderZaps(env: Bindings, db: Database): Promise<voi
     }
   } catch (e) {
     console.error('[DVM] Failed to poll provider zaps:', e)
+  }
+}
+
+// --- Cron: Poll Nostr Reports (Kind 1984) for DVM Providers ---
+
+export async function pollNostrReports(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Find active services with their provider pubkeys
+  const activeServices = await db
+    .select({
+      userId: dvmServices.userId,
+      nostrPubkey: users.nostrPubkey,
+    })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  if (activeServices.length === 0) return
+
+  const servicesWithPubkey = activeServices.filter(s => s.nostrPubkey)
+  if (servicesWithPubkey.length === 0) return
+
+  // KV-based incremental polling
+  const kv = env.KV
+  const sinceKey = 'nostr_reports_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 // Default: last 24h
+
+  const relayUrl = relayUrls[0]
+  let maxCreatedAt = since
+
+  const pubkeys = [...new Set(servicesWithPubkey.map(s => s.nostrPubkey!))]
+
+  try {
+    const { events } = await fetchEventsFromRelay(relayUrl, {
+      kinds: [1984],
+      '#p': pubkeys,
+      since,
+    })
+
+    console.log(`[DVM] Fetched ${events.length} report events since ${since}`)
+
+    for (const event of events) {
+      if (!verifyEvent(event)) continue
+
+      // Parse p tag for target pubkey and report type
+      const pTag = event.tags.find((t: string[]) => t[0] === 'p')
+      if (!pTag || !pTag[1]) continue
+      const targetPubkey = pTag[1]
+      const reportType = pTag[2] || 'other'
+
+      // Only count if targeting one of our providers
+      if (!pubkeys.includes(targetPubkey)) continue
+
+      // Optional e tag for target event
+      const eTag = event.tags.find((t: string[]) => t[0] === 'e')
+      const targetEventId = eTag?.[1] || null
+
+      // Dedup by nostrEventId
+      const existing = await db.select({ id: nostrReports.id }).from(nostrReports)
+        .where(eq(nostrReports.nostrEventId, event.id))
+        .limit(1)
+      if (existing.length > 0) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      await db.insert(nostrReports).values({
+        id: generateId(),
+        nostrEventId: event.id,
+        reporterPubkey: event.pubkey,
+        targetPubkey,
+        targetEventId,
+        reportType,
+        content: event.content || null,
+        createdAt: new Date(event.created_at * 1000),
+      })
+      console.log(`[DVM] Stored report ${event.id} against ${targetPubkey.slice(0, 8)}... (type: ${reportType})`)
+
+      if (event.created_at > maxCreatedAt) {
+        maxCreatedAt = event.created_at
+      }
+    }
+
+    // Update KV timestamp
+    if (maxCreatedAt > since) {
+      await kv.put(sinceKey, String(maxCreatedAt + 1))
+    }
+  } catch (e) {
+    console.error('[DVM] Failed to poll nostr reports:', e)
   }
 }

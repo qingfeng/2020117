@@ -316,6 +316,21 @@ export async function buildZapRequestEvent(params: {
   })
 }
 
+// --- NIP-56 Report Event ---
+
+export async function buildReportEvent(params: {
+  privEncrypted: string; iv: string; masterKey: string
+  targetPubkey: string; reportType: string
+  eventId?: string; content?: string
+}): Promise<NostrEvent> {
+  const tags: string[][] = [['p', params.targetPubkey, params.reportType]]
+  if (params.eventId) tags.push(['e', params.eventId, params.reportType])
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted, iv: params.iv, masterKey: params.masterKey,
+    kind: 1984, content: params.content || '', tags,
+  })
+}
+
 // --- Helpers ---
 
 function bufferToBase64(buf: ArrayBuffer): string {

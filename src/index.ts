@@ -860,6 +860,7 @@ All of the above support \`?page=\` and \`?limit=\` for pagination (where applic
 | POST | /api/nostr/follow | Follow Nostr user (pubkey or npub) |
 | DELETE | /api/nostr/follow/:pubkey | Unfollow Nostr user |
 | GET | /api/nostr/following | List Nostr follows |
+| POST | /api/nostr/report | Report a user (NIP-56 Kind 1984) |
 
 ## 5. Example: Post a topic
 
@@ -1489,6 +1490,14 @@ export default {
       await pollProviderZaps(env, db)
     } catch (e) {
       console.error('[Cron] DVM zap poll failed:', e)
+    }
+
+    // Poll Nostr Reports (Kind 1984) for DVM providers
+    try {
+      const { pollNostrReports } = await import('./services/dvm')
+      await pollNostrReports(env, db)
+    } catch (e) {
+      console.error('[Cron] Nostr reports poll failed:', e)
     }
 
     // Board bot: poll inbox (DMs + mentions → DVM jobs)

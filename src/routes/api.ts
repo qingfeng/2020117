@@ -1,15 +1,17 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, nostrReports } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
 const api = new Hono<AppContext>()
+
+const REPORT_FLAG_THRESHOLD = 3
 
 const DVM_KIND_LABELS: Record<number, string> = {
   5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
@@ -89,6 +91,7 @@ api.get('/agents', async (c) => {
       completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
       lastSeenAt: sql<number>`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
       avgResponseMs: dvmServices.avgResponseMs,
+      reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
     })
       .from(dvmServices)
       .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -120,6 +123,8 @@ api.get('/agents', async (c) => {
         avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
         total_zap_received_sats: row.totalZapReceived || 0,
         direct_request_enabled: !!row.directRequestEnabled,
+        report_count: row.reportCount || 0,
+        flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
       }
     }),
     meta: paginationMeta(total, page, limit),
@@ -178,6 +183,14 @@ api.get('/users/:identifier', async (c) => {
     directRequestEnabled: dvmServices.directRequestEnabled,
   }).from(dvmServices).where(and(eq(dvmServices.userId, u.id), eq(dvmServices.active, 1))).limit(1)
 
+  // Report count for agent
+  let reportCount = 0
+  if (agentSvc.length > 0 && u.nostrPubkey) {
+    const rc = await db.select({ count: sql<number>`COUNT(DISTINCT reporter_pubkey)` })
+      .from(nostrReports).where(eq(nostrReports.targetPubkey, u.nostrPubkey))
+    reportCount = rc[0]?.count || 0
+  }
+
   return c.json({
     id: u.id,
     username: u.username,
@@ -203,6 +216,8 @@ api.get('/users/:identifier', async (c) => {
         jobs_completed: agentSvc[0].jobsCompleted || 0,
         total_zap_received_sats: agentSvc[0].totalZapReceived || 0,
         direct_request_enabled: !!agentSvc[0].directRequestEnabled,
+        report_count: reportCount,
+        flagged: reportCount >= REPORT_FLAG_THRESHOLD,
       },
     } : {}),
   })
@@ -1413,6 +1428,87 @@ api.get('/nostr/following', requireApiAuth, async (c) => {
   return c.json({ following: list })
 })
 
+// POST /api/nostr/report — 举报 Nostr 用户 (NIP-56 Kind 1984)
+api.post('/nostr/report', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    target_pubkey?: string
+    report_type?: string
+    event_id?: string
+    content?: string
+  }
+
+  if (!body.target_pubkey) return c.json({ error: 'target_pubkey is required' }, 400)
+
+  // Resolve target pubkey (hex or npub)
+  let targetPubkey = body.target_pubkey.trim()
+  if (targetPubkey.startsWith('npub1')) {
+    const hex = npubToPubkey(targetPubkey)
+    if (!hex) return c.json({ error: 'Invalid npub' }, 400)
+    targetPubkey = hex
+  }
+  if (!/^[0-9a-f]{64}$/i.test(targetPubkey)) {
+    return c.json({ error: 'Invalid target_pubkey' }, 400)
+  }
+  targetPubkey = targetPubkey.toLowerCase()
+
+  const validReportTypes = ['nudity', 'malware', 'profanity', 'illegal', 'spam', 'impersonation', 'other']
+  const reportType = body.report_type || 'other'
+  if (!validReportTypes.includes(reportType)) {
+    return c.json({ error: `report_type must be one of: ${validReportTypes.join(', ')}` }, 400)
+  }
+
+  // Prevent self-report
+  if (targetPubkey === user.nostrPubkey) {
+    return c.json({ error: 'Cannot report yourself' }, 400)
+  }
+
+  // Prevent duplicate report (same reporter + target)
+  const existing = await db.select({ id: nostrReports.id }).from(nostrReports)
+    .where(and(eq(nostrReports.reporterPubkey, user.nostrPubkey!), eq(nostrReports.targetPubkey, targetPubkey)))
+    .limit(1)
+  if (existing.length > 0) {
+    return c.json({ error: 'You have already reported this user' }, 409)
+  }
+
+  // Build Kind 1984 event
+  const event = await buildReportEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY!,
+    targetPubkey,
+    reportType,
+    eventId: body.event_id,
+    content: body.content,
+  })
+
+  // Save to DB
+  const reportId = generateId()
+  await db.insert(nostrReports).values({
+    id: reportId,
+    nostrEventId: event.id,
+    reporterPubkey: user.nostrPubkey!,
+    targetPubkey,
+    targetEventId: body.event_id || null,
+    reportType,
+    content: body.content || null,
+    createdAt: new Date(),
+  })
+
+  // Broadcast to relay
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  return c.json({ report_id: reportId, event_id: event.id }, 201)
+})
+
 // ─── Feed: 时间线 ───
 
 // GET /api/feed
@@ -1993,9 +2089,25 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
       } else {
         // Broadcast: deliver to all matching providers
         const activeServices = await db
-          .select({ userId: dvmServices.userId, kinds: dvmServices.kinds, totalZapReceived: dvmServices.totalZapReceived })
+          .select({ userId: dvmServices.userId, kinds: dvmServices.kinds, totalZapReceived: dvmServices.totalZapReceived, nostrPubkey: users.nostrPubkey })
           .from(dvmServices)
+          .innerJoin(users, eq(dvmServices.userId, users.id))
           .where(eq(dvmServices.active, 1))
+
+        // Batch query report counts for all provider pubkeys
+        const providerPubkeys = activeServices.map(s => s.nostrPubkey).filter((pk): pk is string => !!pk)
+        const flaggedPubkeys = new Set<string>()
+        if (providerPubkeys.length > 0) {
+          const rcRows = await db.select({
+            targetPubkey: nostrReports.targetPubkey,
+            count: sql<number>`COUNT(DISTINCT reporter_pubkey)`,
+          }).from(nostrReports)
+            .where(inArray(nostrReports.targetPubkey, providerPubkeys))
+            .groupBy(nostrReports.targetPubkey)
+          for (const row of rcRows) {
+            if (row.count >= REPORT_FLAG_THRESHOLD) flaggedPubkeys.add(row.targetPubkey)
+          }
+        }
 
         for (const svc of activeServices) {
           if (svc.userId === user.id) continue // 不给自己投递
@@ -2006,6 +2118,12 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
             // Check min_zap_sats threshold
             if (minZapSats && (svc.totalZapReceived || 0) < minZapSats) {
               console.log(`[DVM] Skipping provider ${svc.userId}: zap ${svc.totalZapReceived || 0} < required ${minZapSats}`)
+              continue
+            }
+
+            // Skip flagged providers (report_count >= threshold)
+            if (svc.nostrPubkey && flaggedPubkeys.has(svc.nostrPubkey)) {
+              console.log(`[DVM] Skipping flagged provider ${svc.userId}`)
               continue
             }
 
@@ -2252,7 +2370,17 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
-  return c.json({ job_id: providerJobId, status: 'accepted', kind: cj.kind })
+  // Check if provider is flagged and add warning
+  let warning: string | undefined
+  if (user.nostrPubkey) {
+    const rc = await db.select({ count: sql<number>`COUNT(DISTINCT reporter_pubkey)` })
+      .from(nostrReports).where(eq(nostrReports.targetPubkey, user.nostrPubkey))
+    if ((rc[0]?.count || 0) >= REPORT_FLAG_THRESHOLD) {
+      warning = 'Your account has been flagged due to multiple reports. Some jobs may not be delivered to you.'
+    }
+  }
+
+  return c.json({ job_id: providerJobId, status: 'accepted', kind: cj.kind, ...(warning ? { warning } : {}) })
 })
 
 // POST /api/dvm/jobs/:id/reject — Customer: 拒绝结果，重新开放接单
@@ -2522,6 +2650,14 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
     .where(eq(dvmServices.userId, user.id))
     .orderBy(desc(dvmServices.createdAt))
 
+  // Report count for current user
+  let reportCount = 0
+  if (user.nostrPubkey) {
+    const rc = await db.select({ count: sql<number>`COUNT(DISTINCT reporter_pubkey)` })
+      .from(nostrReports).where(eq(nostrReports.targetPubkey, user.nostrPubkey))
+    reportCount = rc[0]?.count || 0
+  }
+
   return c.json({
     services: services.map(s => ({
       id: s.id,
@@ -2533,6 +2669,8 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
       reputation: buildReputationData(s),
+      report_count: reportCount,
+      flagged: reportCount >= REPORT_FLAG_THRESHOLD,
       created_at: s.createdAt,
     })),
   })

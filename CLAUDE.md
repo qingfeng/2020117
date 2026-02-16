@@ -28,7 +28,7 @@ src/
 ├── types.ts              # TypeScript 类型（Bindings、Variables、AppContext）
 ├── db/
 │   ├── index.ts          # createDb（Drizzle + D1）
-│   └── schema.ts         # 17 张表的 Drizzle schema
+│   └── schema.ts         # 18 张表的 Drizzle schema
 ├── lib/
 │   ├── utils.ts          # generateId、generateApiKey、hashApiKey、sanitizeHtml 等
 │   └── notifications.ts  # createNotification()
@@ -44,7 +44,7 @@ src/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 ```
 
-## 数据库（17 张表）
+## 数据库（18 张表）
 
 | 表 | 说明 |
 |---|------|
@@ -65,6 +65,7 @@ src/
 | `nostr_community_follow` | 关注的 Nostr 社区 |
 | `dvm_job` | NIP-90 DVM 任务（Customer/Provider 共用） |
 | `dvm_service` | DVM 服务注册（NIP-89），含 `direct_request_enabled` 定向接单开关 |
+| `nostr_report` | NIP-56 Kind 1984 举报记录（reporter_pubkey、target_pubkey、report_type） |
 
 ## 认证
 
@@ -110,6 +111,7 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 | 5xxx | DVM Job Request | 发布 DVM 任务时 |
 | 6xxx | DVM Job Result | Provider 提交结果时 |
 | 7000 | DVM Job Feedback | Provider 发送状态更新时 |
+| 1984 | Report (NIP-56) | 举报恶意用户时 |
 | 31990 | Handler Info (NIP-89) | 注册 DVM 服务时 |
 
 ### NIP-05
@@ -175,6 +177,7 @@ board 同时作为 DVM 网关机器人。Nostr 用户可以通过私信（Kind 4
 | `pollDvmResults()` | dvm.ts | NIP-90 Job Result/Feedback 轮询（Customer） |
 | `pollDvmRequests()` | dvm.ts | NIP-90 Job Request 轮询（Provider） |
 | `pollProviderZaps()` | dvm.ts | Kind 9735 Zap Receipt 轮询 → Provider 信誉累计 |
+| `pollNostrReports()` | dvm.ts | Kind 1984 举报轮询 → nostr_report 存储，flagged 降权 |
 | `pollBoardInbox()` | board.ts | Board 收信（DM/mention → DVM 任务） |
 | `pollBoardResults()` | board.ts | Board 发结果（DVM 完成 → 回复用户） |
 
@@ -335,6 +338,7 @@ POST /api/dvm/request
 | POST | /api/nostr/follow | 是 | 关注 Nostr 用户 |
 | DELETE | /api/nostr/follow/:pubkey | 是 | 取消关注 |
 | GET | /api/nostr/following | 是 | 关注列表 |
+| POST | /api/nostr/report | 是 | 举报用户（NIP-56 Kind 1984） |
 | GET | /api/dvm/market | 否 | 公开任务列表（支持 `status`、`sort`、`kind` 过滤） |
 | POST | /api/dvm/request | 是 | 发布任务（支持 `provider` 定向派单） |
 | GET | /api/dvm/jobs | 是 | 我的任务 |

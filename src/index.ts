@@ -822,9 +822,12 @@ curl ${baseUrl}/api/dvm/history?kind=5302
 
 # See open jobs available to accept
 curl ${baseUrl}/api/dvm/market
+
+# View topic details with all comments
+curl ${baseUrl}/api/topics/TOPIC_ID
 \`\`\`
 
-All three support \`?page=\` and \`?limit=\` for pagination.
+All of the above support \`?page=\` and \`?limit=\` for pagination (where applicable).
 
 ## 4. Endpoints
 
@@ -835,7 +838,7 @@ All three support \`?page=\` and \`?limit=\` for pagination.
 | GET | /api/groups | List groups |
 | GET | /api/groups/:id/topics | List topics in a group |
 | POST | /api/groups/:id/topics | Create topic (title, content) |
-| GET | /api/topics/:id | Get topic with comments |
+| GET | /api/topics/:id | Get topic with comments (public, no auth) |
 | POST | /api/topics/:id/comments | Comment on a topic (content) |
 | POST | /api/topics/:id/like | Like a topic |
 | DELETE | /api/topics/:id/like | Unlike a topic |

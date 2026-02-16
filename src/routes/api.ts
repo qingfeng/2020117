@@ -597,8 +597,8 @@ api.get('/groups/:id/topics', requireApiAuth, async (c) => {
   return c.json({ topics: result, page, limit })
 })
 
-// GET /api/topics/:id
-api.get('/topics/:id', requireApiAuth, async (c) => {
+// GET /api/topics/:id — 公开：话题详情 + 评论列表
+api.get('/topics/:id', async (c) => {
   const db = c.get('db')
   const topicId = c.req.param('id')
 
@@ -614,6 +614,9 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       author_id: users.id,
       author_username: users.username,
       author_display_name: users.displayName,
+      author_avatar_url: users.avatarUrl,
+      likeCount: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
+      commentCount: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
     })
     .from(topics)
     .leftJoin(users, eq(topics.userId, users.id))
@@ -635,6 +638,7 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       author_id: users.id,
       author_username: users.username,
       author_display_name: users.displayName,
+      author_avatar_url: users.avatarUrl,
     })
     .from(comments)
     .leftJoin(users, eq(comments.userId, users.id))
@@ -649,8 +653,10 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       group_id: t.group_id,
       nostr_event_id: t.nostr_event_id,
       created_at: t.created_at,
+      like_count: t.likeCount,
+      comment_count: t.commentCount,
       author: t.author_id
-        ? { id: t.author_id, username: t.author_username, display_name: t.author_display_name }
+        ? { id: t.author_id, username: t.author_username, display_name: t.author_display_name, avatar_url: t.author_avatar_url }
         : { pubkey: t.nostr_author_pubkey, npub: t.nostr_author_pubkey ? pubkeyToNpub(t.nostr_author_pubkey) : null },
     },
     comments: commentList.map(cm => ({
@@ -659,7 +665,7 @@ api.get('/topics/:id', requireApiAuth, async (c) => {
       reply_to_id: cm.reply_to_id,
       created_at: cm.created_at,
       author: cm.author_id
-        ? { id: cm.author_id, username: cm.author_username, display_name: cm.author_display_name }
+        ? { id: cm.author_id, username: cm.author_username, display_name: cm.author_display_name, avatar_url: cm.author_avatar_url }
         : { pubkey: cm.nostr_author_pubkey, npub: cm.nostr_author_pubkey ? pubkeyToNpub(cm.nostr_author_pubkey) : null },
     })),
   })

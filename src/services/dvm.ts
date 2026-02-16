@@ -483,21 +483,32 @@ export async function pollProviderZaps(env: Bindings, db: Database): Promise<voi
   const sinceStr = await kv.get(sinceKey)
   const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 // Default: last 24h
 
-  const relayUrl = relayUrls[0]
   let maxCreatedAt = since
 
   // Collect unique pubkeys
   const pubkeys = [...new Set(servicesWithPubkey.map(s => s.nostrPubkey!))]
 
   try {
-    // Query Kind 9735 (Zap Receipt) for all provider pubkeys
-    const { events } = await fetchEventsFromRelay(relayUrl, {
-      kinds: [9735],
-      '#p': pubkeys,
-      since,
-    })
+    // Query Kind 9735 (Zap Receipt) from all relays, dedup by event id
+    const allEvents: Map<string, any> = new Map()
+    for (const relayUrl of relayUrls) {
+      try {
+        const { events: relayEvents } = await fetchEventsFromRelay(relayUrl, {
+          kinds: [9735],
+          '#p': pubkeys,
+          since,
+        })
+        for (const e of relayEvents) {
+          if (!allEvents.has(e.id)) allEvents.set(e.id, e)
+        }
+        console.log(`[DVM] Fetched ${relayEvents.length} zap receipts from ${relayUrl}`)
+      } catch (e) {
+        console.warn(`[DVM] Failed to fetch zaps from ${relayUrl}:`, e)
+      }
+    }
+    const events = [...allEvents.values()]
 
-    console.log(`[DVM] Fetched ${events.length} zap receipts since ${since}`)
+    console.log(`[DVM] Total ${events.length} unique zap receipts since ${since}`)
 
     // Accumulate zap amounts per pubkey
     const zapAmountByPubkey = new Map<string, number>()
@@ -521,14 +532,30 @@ export async function pollProviderZaps(env: Bindings, db: Database): Promise<voi
         // Only count if targeting one of our providers
         if (!pubkeys.includes(targetPubkey)) continue
 
-        // Extract amount (in msats) from the zap request's amount tag
+        // Extract amount: try zap request amount tag first, fallback to bolt11
+        let sats = 0
         const amountTag = zapRequest.tags?.find((t: string[]) => t[0] === 'amount')
-        if (!amountTag || !amountTag[1]) continue
-
-        const msats = parseInt(amountTag[1])
-        if (isNaN(msats) || msats <= 0) continue
-
-        const sats = Math.floor(msats / 1000)
+        if (amountTag && amountTag[1]) {
+          const msats = parseInt(amountTag[1])
+          if (!isNaN(msats) && msats > 0) sats = Math.floor(msats / 1000)
+        }
+        if (sats === 0) {
+          // Fallback: parse bolt11 invoice amount from receipt tags
+          const bolt11Tag = event.tags.find((t: string[]) => t[0] === 'bolt11')
+          if (bolt11Tag && bolt11Tag[1]) {
+            const m = bolt11Tag[1].match(/^lnbc(\d+)([munp]?)/)
+            if (m) {
+              const num = parseInt(m[1])
+              const unit = m[2] || ''
+              if (unit === 'm') sats = num * 100000 // milli-BTC
+              else if (unit === 'u') sats = num * 100 // micro-BTC
+              else if (unit === 'n') sats = Math.floor(num / 10) // nano-BTC
+              else if (unit === 'p') sats = Math.floor(num / 10000) // pico-BTC
+              else sats = num * 100000000 // BTC
+            }
+          }
+        }
+        if (sats <= 0) continue
         const current = zapAmountByPubkey.get(targetPubkey) || 0
         zapAmountByPubkey.set(targetPubkey, current + sats)
       } catch {

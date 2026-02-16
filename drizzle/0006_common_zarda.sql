@@ -1,0 +1,1 @@
+ALTER TABLE `dvm_service` ADD `total_zap_received` integer DEFAULT 0;

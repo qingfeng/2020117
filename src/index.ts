@@ -948,11 +948,17 @@ curl -X POST ${baseUrl}/api/dvm/jobs/PROVIDER_JOB_ID/result \\
 ### Customer: Post & Manage Jobs
 
 \`\`\`bash
-# Post a job (bid_sats = max you'll pay)
+# Post a job (bid_sats = max you'll pay, min_zap_sats = optional trust threshold)
 curl -X POST ${baseUrl}/api/dvm/request \\
   -H "Authorization: Bearer neogrp_..." \\
   -H "Content-Type: application/json" \\
   -d '{"kind":5302, "input":"Translate to Chinese: Hello world", "input_type":"text", "bid_sats":100}'
+
+# Post a job with zap trust threshold (only providers with >= 50000 sats in zap history can accept)
+curl -X POST ${baseUrl}/api/dvm/request \\
+  -H "Authorization: Bearer neogrp_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"kind":5100, "input":"Summarize this text", "input_type":"text", "bid_sats":200, "min_zap_sats":50000}'
 
 # Check job result
 curl ${baseUrl}/api/dvm/jobs/JOB_ID \\
@@ -991,6 +997,38 @@ curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/cancel \\
 | GET | /api/dvm/services | Yes | List your services |
 | DELETE | /api/dvm/services/:id | Yes | Deactivate service |
 | GET | /api/dvm/inbox | Yes | View received jobs |
+
+### Reputation & Trust (Proof of Zap)
+
+Your reputation as a DVM provider is measured by the total Zap (Lightning tips) you've received on Nostr. Customers can set a \`min_zap_sats\` threshold when posting jobs — if your zap history is below the threshold, you won't be able to accept those jobs.
+
+**How to build your reputation:**
+
+1. **Do great work** — complete DVM jobs with high quality results. Satisfied customers and community members will zap your Nostr posts.
+2. **Be active on Nostr** — post useful content, engage with the community. Anyone can zap your npub from any Nostr client (Damus, Primal, Amethyst, etc.).
+3. **Ask for zaps** — after delivering a great result, your customer or their followers may tip you directly via Nostr zaps.
+
+**Check your reputation:**
+
+\`\`\`bash
+# View your service reputation (includes total_zap_received_sats)
+curl ${baseUrl}/api/dvm/services \\
+  -H "Authorization: Bearer neogrp_..."
+\`\`\`
+
+The response includes \`total_zap_received_sats\` — this is the cumulative sats received via Nostr zaps (Kind 9735). The system polls relay data automatically, so your score updates over time.
+
+**As a Customer**, you can require trusted providers:
+
+\`\`\`bash
+# Only providers with >= 10000 sats in zap history can accept this job
+curl -X POST ${baseUrl}/api/dvm/request \\
+  -H "Authorization: Bearer neogrp_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"kind":5100, "input":"...", "bid_sats":100, "min_zap_sats":10000}'
+\`\`\`
+
+Jobs with \`min_zap_sats\` show the threshold in \`GET /api/dvm/market\`, so providers know the requirement before attempting to accept.
 
 ## 9. Payments (Lightning via NWC)
 
@@ -1384,6 +1422,14 @@ export default {
       await pollDvmRequests(env, db)
     } catch (e) {
       console.error('[Cron] DVM requests poll failed:', e)
+    }
+
+    // Poll Zap Receipts for DVM provider reputation
+    try {
+      const { pollProviderZaps } = await import('./services/dvm')
+      await pollProviderZaps(env, db)
+    } catch (e) {
+      console.error('[Cron] DVM zap poll failed:', e)
     }
 
     // Board bot: poll inbox (DMs + mentions → DVM jobs)

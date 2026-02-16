@@ -121,6 +121,7 @@ export async function buildHandlerInfoEvent(params: {
     completion_rate: number
     avg_response_s: number | null
     total_earned_sats: number
+    total_zap_received_sats: number
     last_job_at: number | null
   }
 }): Promise<NostrEvent> {
@@ -290,6 +291,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       id: dvmServices.id,
       userId: dvmServices.userId,
       kinds: dvmServices.kinds,
+      totalZapReceived: dvmServices.totalZapReceived,
     })
     .from(dvmServices)
     .where(eq(dvmServices.active, 1))
@@ -377,9 +379,22 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
         ? JSON.stringify(Object.fromEntries(paramTags.map(t => [t[1], t[2]])))
         : null
 
+      // Parse min_zap_sats from param tags
+      const minZapParam = paramTags.find(t => t[1] === 'min_zap_sats')
+      const minZapSats = minZapParam ? parseInt(minZapParam[2]) : 0
+
+      // Build userId → totalZapReceived map for threshold check
+      const userZapMap = new Map(activeServices.map(s => [s.userId, s.totalZapReceived || 0]))
+
       // Create provider job for each matching user
       for (const [userId, kinds] of userKindsMap) {
         if (!kinds.has(event.kind)) continue
+
+        // Check min_zap_sats threshold
+        if (minZapSats > 0 && (userZapMap.get(userId) || 0) < minZapSats) {
+          console.log(`[DVM] Skipping provider ${userId}: zap ${userZapMap.get(userId) || 0} < required ${minZapSats}`)
+          continue
+        }
 
         const jobId = generateId()
         await db.insert(dvmJobs).values({
@@ -412,5 +427,113 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
     }
   } catch (e) {
     console.error('[DVM] Failed to poll requests:', e)
+  }
+}
+
+// --- Cron: Poll Zap Receipts for DVM Providers ---
+
+export async function pollProviderZaps(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Find active services with their provider pubkeys
+  const activeServices = await db
+    .select({
+      serviceId: dvmServices.id,
+      userId: dvmServices.userId,
+      totalZapReceived: dvmServices.totalZapReceived,
+      nostrPubkey: users.nostrPubkey,
+    })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  if (activeServices.length === 0) return
+
+  // Filter to services with pubkeys
+  const servicesWithPubkey = activeServices.filter(s => s.nostrPubkey)
+  if (servicesWithPubkey.length === 0) return
+
+  // KV-based incremental polling
+  const kv = env.KV
+  const sinceKey = 'dvm_zap_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 // Default: last 24h
+
+  const relayUrl = relayUrls[0]
+  let maxCreatedAt = since
+
+  // Collect unique pubkeys
+  const pubkeys = [...new Set(servicesWithPubkey.map(s => s.nostrPubkey!))]
+
+  try {
+    // Query Kind 9735 (Zap Receipt) for all provider pubkeys
+    const { events } = await fetchEventsFromRelay(relayUrl, {
+      kinds: [9735],
+      '#p': pubkeys,
+      since,
+    })
+
+    console.log(`[DVM] Fetched ${events.length} zap receipts since ${since}`)
+
+    // Accumulate zap amounts per pubkey
+    const zapAmountByPubkey = new Map<string, number>()
+
+    for (const event of events) {
+      // Parse the description tag (contains serialized Kind 9734 JSON)
+      const descTag = event.tags.find((t: string[]) => t[0] === 'description')
+      if (!descTag || !descTag[1]) continue
+
+      try {
+        const zapRequest = JSON.parse(descTag[1])
+
+        // Verify it's a Kind 9734 event
+        if (zapRequest.kind !== 9734) continue
+
+        // Find the target pubkey from the zap request's p tag
+        const pTag = zapRequest.tags?.find((t: string[]) => t[0] === 'p')
+        if (!pTag || !pTag[1]) continue
+        const targetPubkey = pTag[1]
+
+        // Only count if targeting one of our providers
+        if (!pubkeys.includes(targetPubkey)) continue
+
+        // Extract amount (in msats) from the zap request's amount tag
+        const amountTag = zapRequest.tags?.find((t: string[]) => t[0] === 'amount')
+        if (!amountTag || !amountTag[1]) continue
+
+        const msats = parseInt(amountTag[1])
+        if (isNaN(msats) || msats <= 0) continue
+
+        const sats = Math.floor(msats / 1000)
+        const current = zapAmountByPubkey.get(targetPubkey) || 0
+        zapAmountByPubkey.set(targetPubkey, current + sats)
+      } catch {
+        // Invalid description JSON, skip
+      }
+
+      if (event.created_at > maxCreatedAt) {
+        maxCreatedAt = event.created_at
+      }
+    }
+
+    // Update dvmServices with accumulated zap amounts
+    for (const [pubkey, additionalSats] of zapAmountByPubkey) {
+      const matchingServices = servicesWithPubkey.filter(s => s.nostrPubkey === pubkey)
+      for (const svc of matchingServices) {
+        const newTotal = (svc.totalZapReceived || 0) + additionalSats
+        await db.update(dvmServices)
+          .set({ totalZapReceived: newTotal, updatedAt: new Date() })
+          .where(eq(dvmServices.id, svc.serviceId))
+        console.log(`[DVM] Updated zap total for service ${svc.serviceId}: +${additionalSats} sats = ${newTotal} sats`)
+      }
+    }
+
+    // Update KV timestamp
+    if (maxCreatedAt > since) {
+      await kv.put(sinceKey, String(maxCreatedAt + 1))
+    }
+  } catch (e) {
+    console.error('[DVM] Failed to poll provider zaps:', e)
   }
 }

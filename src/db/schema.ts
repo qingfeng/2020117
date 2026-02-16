@@ -223,6 +223,7 @@ export const dvmServices = sqliteTable('dvm_service', {
   jobsRejected: integer('jobs_rejected').default(0),
   jobsCancelled: integer('jobs_cancelled').default(0),
   totalEarnedMsats: integer('total_earned_msats').default(0),
+  totalZapReceived: integer('total_zap_received').default(0),
   avgResponseMs: integer('avg_response_ms'),
   lastJobAt: integer('last_job_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),

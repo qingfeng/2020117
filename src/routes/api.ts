@@ -39,6 +39,7 @@ function buildReputationData(svc: {
   jobsCompleted: number | null
   jobsRejected: number | null
   totalEarnedMsats: number | null
+  totalZapReceived: number | null
   avgResponseMs: number | null
   lastJobAt: Date | null
 }) {
@@ -51,6 +52,7 @@ function buildReputationData(svc: {
     completion_rate: total > 0 ? Math.round((completed / total) * 100) / 100 : 0,
     avg_response_s: svc.avgResponseMs ? Math.round(svc.avgResponseMs / 1000) : null,
     total_earned_sats: svc.totalEarnedMsats ? Math.floor(svc.totalEarnedMsats / 1000) : 0,
+    total_zap_received_sats: svc.totalZapReceived || 0,
     last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
   }
 }
@@ -1466,18 +1468,23 @@ api.get('/dvm/market', async (c) => {
     .offset(offset)
 
   return c.json({
-    jobs: jobs.map(j => ({
-      id: j.id,
-      kind: j.kind,
-      status: j.status,
-      input: j.input,
-      input_type: j.inputType,
-      output: j.output,
-      bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
-      params: j.params ? JSON.parse(j.params) : null,
-      created_at: j.createdAt,
-      accept_url: `/api/dvm/jobs/${j.id}/accept`,
-    })),
+    jobs: jobs.map(j => {
+      const parsedParams = j.params ? JSON.parse(j.params) : null
+      const minZap = parsedParams?.min_zap_sats ? parseInt(parsedParams.min_zap_sats) : undefined
+      return {
+        id: j.id,
+        kind: j.kind,
+        status: j.status,
+        input: j.input,
+        input_type: j.inputType,
+        output: j.output,
+        bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
+        ...(minZap ? { min_zap_sats: minZap } : {}),
+        params: parsedParams,
+        created_at: j.createdAt,
+        accept_url: `/api/dvm/jobs/${j.id}/accept`,
+      }
+    }),
     page,
     limit,
   })
@@ -1498,6 +1505,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     input_type?: string
     output?: string
     bid_sats?: number
+    min_zap_sats?: number
     params?: Record<string, string>
   }
 
@@ -1514,6 +1522,20 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   const inputType = body.input_type || 'text'
   const bidSats = body.bid_sats || 0
   const bidMsats = bidSats ? bidSats * 1000 : undefined
+  const minZapSats = body.min_zap_sats && body.min_zap_sats > 0 ? Math.floor(body.min_zap_sats) : undefined
+
+  // Merge min_zap_sats into extraParams for the Nostr event param tags
+  const extraParams = { ...body.params }
+  if (minZapSats) {
+    extraParams.min_zap_sats = String(minZapSats)
+  }
+
+  // Merge min_zap_sats into stored params JSON
+  const storedParams = { ...body.params }
+  if (minZapSats) {
+    storedParams.min_zap_sats = String(minZapSats)
+  }
+  const paramsJson = Object.keys(storedParams).length > 0 ? JSON.stringify(storedParams) : null
 
   const relays = (c.env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
 
@@ -1526,7 +1548,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     inputType,
     output: body.output,
     bidMsats,
-    extraParams: body.params,
+    extraParams: Object.keys(extraParams).length > 0 ? extraParams : undefined,
     relays,
   })
 
@@ -1546,7 +1568,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     bidMsats: bidMsats || null,
     customerPubkey: event.pubkey,
     requestEventId: event.id,
-    params: body.params ? JSON.stringify(body.params) : null,
+    params: paramsJson,
     createdAt: now,
     updatedAt: now,
   })
@@ -1574,7 +1596,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   c.executionCtx.waitUntil((async () => {
     try {
       const activeServices = await db
-        .select({ userId: dvmServices.userId, kinds: dvmServices.kinds })
+        .select({ userId: dvmServices.userId, kinds: dvmServices.kinds, totalZapReceived: dvmServices.totalZapReceived })
         .from(dvmServices)
         .where(eq(dvmServices.active, 1))
 
@@ -1583,6 +1605,12 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
         try {
           const svcKinds = JSON.parse(svc.kinds) as number[]
           if (!svcKinds.includes(kind)) continue
+
+          // Check min_zap_sats threshold
+          if (minZapSats && (svc.totalZapReceived || 0) < minZapSats) {
+            console.log(`[DVM] Skipping provider ${svc.userId}: zap ${svc.totalZapReceived || 0} < required ${minZapSats}`)
+            continue
+          }
 
           // 检查是否已存在（防重复）
           const existing = await db
@@ -1607,7 +1635,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
             bidMsats: bidMsats || null,
             customerPubkey: event.pubkey,
             requestEventId: event.id,
-            params: body.params ? JSON.stringify(body.params) : null,
+            params: paramsJson,
             createdAt: now,
             updatedAt: now,
           })
@@ -1740,6 +1768,24 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   if (cj.userId === user.id) return c.json({ error: 'Cannot accept your own job' }, 400)
   if (cj.status === 'cancelled') return c.json({ error: 'Job is cancelled' }, 400)
   if (cj.status === 'completed') return c.json({ error: 'Job is already completed' }, 400)
+
+  // Check min_zap_sats threshold
+  if (cj.params) {
+    try {
+      const jobParams = JSON.parse(cj.params)
+      const minZap = jobParams.min_zap_sats ? parseInt(jobParams.min_zap_sats) : 0
+      if (minZap > 0) {
+        const providerSvc = await db.select({ totalZapReceived: dvmServices.totalZapReceived })
+          .from(dvmServices)
+          .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
+          .limit(1)
+        const zapTotal = providerSvc.length > 0 ? (providerSvc[0].totalZapReceived || 0) : 0
+        if (zapTotal < minZap) {
+          return c.json({ error: `This job requires at least ${minZap} sats in zap history (you have ${zapTotal})` }, 403)
+        }
+      }
+    } catch {}
+  }
 
   // error 状态允许重新接单，重置为 open
   if (cj.status === 'error') {
@@ -2074,6 +2120,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       pricing_min_sats: s.pricingMin ? Math.floor(s.pricingMin / 1000) : null,
       pricing_max_sats: s.pricingMax ? Math.floor(s.pricingMax / 1000) : null,
       active: !!s.active,
+      total_zap_received_sats: s.totalZapReceived || 0,
       reputation: buildReputationData(s),
       created_at: s.createdAt,
     })),

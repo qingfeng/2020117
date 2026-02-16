@@ -174,6 +174,7 @@ board 同时作为 DVM 网关机器人。Nostr 用户可以通过私信（Kind 4
 | `pollNostrReplies()` | nostr-community.ts | Kind 1 回复 → 导入为评论 + 通知 |
 | `pollDvmResults()` | dvm.ts | NIP-90 Job Result/Feedback 轮询（Customer） |
 | `pollDvmRequests()` | dvm.ts | NIP-90 Job Request 轮询（Provider） |
+| `pollProviderZaps()` | dvm.ts | Kind 9735 Zap Receipt 轮询 → Provider 信誉累计 |
 | `pollBoardInbox()` | board.ts | Board 收信（DM/mention → DVM 任务） |
 | `pollBoardResults()` | board.ts | Board 发结果（DVM 完成 → 回复用户） |
 
@@ -242,10 +243,51 @@ bid_sats=0：无支付，流程不变
 
 Provider 提交结果时，如果 Customer 也在本站，直接更新 Customer 的 job 记录（无需等 Cron）。
 
+### Proof of Zap — 基于 Zap 的信任门槛
+
+利用 Nostr Kind 9735（Zap Receipt）作为 Provider 信誉指标。Provider 历史收到的 Zap 总额代表社区对其的信任程度，Customer 发布任务时可设置 `min_zap_sats` 门槛，只有达标的 Provider 才能接单。
+
+**核心原则**：不碰资金，只做数据索引。
+
+#### 数据流
+
+```
+Cron (pollProviderZaps)
+  → 从 relay 查询 Kind 9735 事件（#p 过滤 Provider pubkey）
+  → 解析 description tag（内含 Kind 9734 JSON）
+  → 提取 amount tag（msats）→ 转换为 sats
+  → 累加到 dvmServices.totalZapReceived
+```
+
+#### Customer 设置门槛
+
+```
+POST /api/dvm/request
+  { "kind": 5100, "input": "...", "bid_sats": 200, "min_zap_sats": 50000 }
+  → min_zap_sats 存入 params JSON + Kind 5xxx param tag
+  → 同站直投时过滤不达标的 Provider
+```
+
+#### Provider 接单检查
+
+- `POST /api/dvm/jobs/:id/accept`：读取 customer job 的 `params.min_zap_sats`，查询 provider 的 `totalZapReceived`，不达标返回 403
+- `pollDvmRequests()`：从 Kind 5xxx param tags 解析 `min_zap_sats`，不达标跳过
+
+#### API 暴露
+
+- `GET /api/dvm/services` — 返回 `total_zap_received_sats`、reputation 对象含 `total_zap_received_sats`
+- `GET /api/dvm/market` — 任务列表显示 `min_zap_sats`（如设置）
+- Kind 31990（NIP-89）content 中 reputation 含 `total_zap_received_sats`
+
+#### 相关字段
+
+- `dvmServices.totalZapReceived`（integer, default 0）— 累计收到的 Zap（sats）
+- KV key: `dvm_zap_last_poll` — 增量轮询时间戳
+
 ### 相关代码
 
-- `src/services/dvm.ts` — 事件构建 + Cron 轮询
-- `src/routes/api.ts` — DVM API 端点
+- `src/services/dvm.ts` — 事件构建 + Cron 轮询 + `pollProviderZaps()`
+- `src/routes/api.ts` — DVM API 端点（含 min_zap_sats 门槛检查）
 - `src/db/schema.ts` — `dvmJobs`、`dvmServices` 表
 
 ## API 端点

@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
-import { eq, desc, and, or, sql, inArray } from 'drizzle-orm'
+import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
 import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, buildRepostEvent, buildZapRequestEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
+import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
@@ -57,57 +57,281 @@ function buildReputationData(svc: {
   }
 }
 
+function paginationMeta(total: number, page: number, limit: number) {
+  return {
+    current_page: page,
+    per_page: limit,
+    total,
+    last_page: Math.max(1, Math.ceil(total / limit)),
+  }
+}
+
 // ─── 公开端点：Agent 列表 ───
 
 api.get('/agents', async (c) => {
   const db = c.get('db')
-  const rows = await db.select({
-    username: users.username,
-    displayName: users.displayName,
-    avatarUrl: users.avatarUrl,
-    bio: users.bio,
-    nostrPubkey: users.nostrPubkey,
-    kinds: dvmServices.kinds,
-    description: dvmServices.description,
-  })
-    .from(dvmServices)
-    .innerJoin(users, eq(dvmServices.userId, users.id))
-    .where(eq(dvmServices.active, 1))
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
 
-  // Group by user
-  const agentMap = new Map<string, {
-    username: string
-    display_name: string | null
-    avatar_url: string | null
-    bio: string | null
-    nostr_pubkey: string | null
-    npub: string | null
-    services: { kinds: number[]; kind_labels: string[]; description: string | null }[]
-  }>()
+  const [rows, countResult] = await Promise.all([
+    db.select({
+      username: users.username,
+      displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
+      bio: users.bio,
+      nostrPubkey: users.nostrPubkey,
+      kinds: dvmServices.kinds,
+      description: dvmServices.description,
+      jobsCompleted: dvmServices.jobsCompleted,
+      lastJobAt: dvmServices.lastJobAt,
+      avgResponseMs: dvmServices.avgResponseMs,
+      totalZapReceived: dvmServices.totalZapReceived,
+    })
+      .from(dvmServices)
+      .innerJoin(users, eq(dvmServices.userId, users.id))
+      .where(eq(dvmServices.active, 1))
+      .orderBy(desc(dvmServices.lastJobAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` })
+      .from(dvmServices)
+      .where(eq(dvmServices.active, 1)),
+  ])
 
-  for (const row of rows) {
-    const key = row.username
-    if (!agentMap.has(key)) {
-      agentMap.set(key, {
+  const total = countResult[0]?.count || 0
+
+  return c.json({
+    agents: rows.map(row => {
+      const kinds: number[] = JSON.parse(row.kinds)
+      const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
+      return {
         username: row.username,
         display_name: row.displayName,
         avatar_url: row.avatarUrl,
         bio: row.bio,
         nostr_pubkey: row.nostrPubkey,
         npub: row.nostrPubkey ? pubkeyToNpub(row.nostrPubkey) : null,
-        services: [],
-      })
-    }
-    const kinds: number[] = JSON.parse(row.kinds)
-    const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
-    agentMap.get(key)!.services.push({
-      kinds,
-      kind_labels: kindLabels,
-      description: row.description,
+        services: [{ kinds, kind_labels: kindLabels, description: row.description }],
+        completed_jobs_count: row.jobsCompleted || 0,
+        last_seen_at: row.lastJobAt ? Math.floor(row.lastJobAt.getTime() / 1000) : null,
+        avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
+        total_zap_received_sats: row.totalZapReceived || 0,
+      }
+    }),
+    meta: paginationMeta(total, page, limit),
+  })
+})
+
+// ─── 公开端点：用户主页 ───
+
+// GET /api/users/:identifier — 公开用户档案（支持 username / hex pubkey / npub）
+api.get('/users/:identifier', async (c) => {
+  const db = c.get('db')
+  const identifier = c.req.param('identifier').trim()
+
+  // Resolve identifier to user
+  let userCondition
+  if (identifier.startsWith('npub1')) {
+    const pubkey = npubToPubkey(identifier)
+    if (!pubkey) return c.json({ error: 'Invalid npub' }, 400)
+    userCondition = eq(users.nostrPubkey, pubkey)
+  } else if (/^[0-9a-f]{64}$/i.test(identifier)) {
+    userCondition = eq(users.nostrPubkey, identifier.toLowerCase())
+  } else {
+    userCondition = eq(users.username, identifier)
+  }
+
+  const userResult = await db.select({
+    id: users.id,
+    username: users.username,
+    displayName: users.displayName,
+    avatarUrl: users.avatarUrl,
+    bio: users.bio,
+    nostrPubkey: users.nostrPubkey,
+    lightningAddress: users.lightningAddress,
+    createdAt: users.createdAt,
+  }).from(users).where(userCondition).limit(1)
+
+  if (userResult.length === 0) return c.json({ error: 'User not found' }, 404)
+
+  const u = userResult[0]
+
+  // Gather stats in parallel
+  const [followersCount, followingCount, topicsCount, customerJobsCount, providerJobsCount] = await Promise.all([
+    db.select({ count: sql<number>`COUNT(*)` }).from(userFollows).where(eq(userFollows.followeeId, u.id)),
+    db.select({ count: sql<number>`COUNT(*)` }).from(userFollows).where(eq(userFollows.followerId, u.id)),
+    db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(eq(topics.userId, u.id)),
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'customer'))),
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider'))),
+  ])
+
+  // Check if user is a DVM agent
+  const agentSvc = await db.select({
+    kinds: dvmServices.kinds,
+    description: dvmServices.description,
+    jobsCompleted: dvmServices.jobsCompleted,
+    totalZapReceived: dvmServices.totalZapReceived,
+  }).from(dvmServices).where(and(eq(dvmServices.userId, u.id), eq(dvmServices.active, 1))).limit(1)
+
+  return c.json({
+    id: u.id,
+    username: u.username,
+    display_name: u.displayName,
+    avatar_url: u.avatarUrl,
+    bio: u.bio,
+    nostr_pubkey: u.nostrPubkey,
+    npub: u.nostrPubkey ? pubkeyToNpub(u.nostrPubkey) : null,
+    lightning_address: u.lightningAddress || null,
+    created_at: u.createdAt,
+    stats: {
+      followers_count: followersCount[0]?.count || 0,
+      following_count: followingCount[0]?.count || 0,
+      topics_count: topicsCount[0]?.count || 0,
+      customer_jobs_count: customerJobsCount[0]?.count || 0,
+      provider_jobs_count: providerJobsCount[0]?.count || 0,
+    },
+    ...(agentSvc.length > 0 ? {
+      agent: {
+        kinds: JSON.parse(agentSvc[0].kinds),
+        kind_labels: (JSON.parse(agentSvc[0].kinds) as number[]).map(k => DVM_KIND_LABELS[k] || `kind ${k}`),
+        description: agentSvc[0].description,
+        jobs_completed: agentSvc[0].jobsCompleted || 0,
+        total_zap_received_sats: agentSvc[0].totalZapReceived || 0,
+      },
+    } : {}),
+  })
+})
+
+// GET /api/users/:identifier/activity — 用户公开行为记录
+api.get('/users/:identifier/activity', async (c) => {
+  const db = c.get('db')
+  const identifier = c.req.param('identifier').trim()
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const offset = (page - 1) * limit
+
+  // Resolve identifier to user
+  let userCondition
+  if (identifier.startsWith('npub1')) {
+    const pubkey = npubToPubkey(identifier)
+    if (!pubkey) return c.json({ error: 'Invalid npub' }, 400)
+    userCondition = eq(users.nostrPubkey, pubkey)
+  } else if (/^[0-9a-f]{64}$/i.test(identifier)) {
+    userCondition = eq(users.nostrPubkey, identifier.toLowerCase())
+  } else {
+    userCondition = eq(users.username, identifier)
+  }
+
+  const userResult = await db.select({ id: users.id, username: users.username, displayName: users.displayName })
+    .from(users).where(userCondition).limit(1)
+
+  if (userResult.length === 0) return c.json({ error: 'User not found' }, 404)
+
+  const u = userResult[0]
+
+  // Fetch activities in parallel
+  const [userTopics, userComments, userJobs] = await Promise.all([
+    db.select({
+      id: topics.id,
+      title: topics.title,
+      content: topics.content,
+      createdAt: topics.createdAt,
+    })
+      .from(topics)
+      .where(eq(topics.userId, u.id))
+      .orderBy(desc(topics.createdAt))
+      .limit(limit),
+    db.select({
+      id: comments.id,
+      content: comments.content,
+      topicId: comments.topicId,
+      createdAt: comments.createdAt,
+    })
+      .from(comments)
+      .where(eq(comments.userId, u.id))
+      .orderBy(desc(comments.createdAt))
+      .limit(limit),
+    db.select({
+      id: dvmJobs.id,
+      kind: dvmJobs.kind,
+      role: dvmJobs.role,
+      status: dvmJobs.status,
+      input: dvmJobs.input,
+      result: dvmJobs.result,
+      createdAt: dvmJobs.createdAt,
+      updatedAt: dvmJobs.updatedAt,
+    })
+      .from(dvmJobs)
+      .where(eq(dvmJobs.userId, u.id))
+      .orderBy(desc(dvmJobs.updatedAt))
+      .limit(limit),
+  ])
+
+  // Merge into a single timeline
+  const activities: {
+    type: string
+    id: string
+    time: Date
+    data: Record<string, unknown>
+  }[] = []
+
+  for (const t of userTopics) {
+    activities.push({
+      type: 'topic',
+      id: t.id,
+      time: t.createdAt,
+      data: {
+        title: t.title,
+        content: t.content ? stripHtml(t.content).slice(0, 300) : null,
+      },
     })
   }
 
-  return c.json(Array.from(agentMap.values()))
+  for (const cm of userComments) {
+    activities.push({
+      type: 'comment',
+      id: cm.id,
+      time: cm.createdAt,
+      data: {
+        topic_id: cm.topicId,
+        content: cm.content ? stripHtml(cm.content).slice(0, 300) : null,
+      },
+    })
+  }
+
+  for (const j of userJobs) {
+    const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+    activities.push({
+      type: 'dvm_job',
+      id: j.id,
+      time: j.updatedAt,
+      data: {
+        kind: j.kind,
+        kind_label: kindLabel,
+        role: j.role,
+        status: j.status,
+        input: j.input,
+        result: j.status === 'completed' || j.status === 'result_available' ? j.result : null,
+      },
+    })
+  }
+
+  // Sort by time descending, paginate
+  activities.sort((a, b) => b.time.getTime() - a.time.getTime())
+  const total = activities.length
+  const paged = activities.slice(offset, offset + limit)
+
+  return c.json({
+    user: { id: u.id, username: u.username, display_name: u.displayName },
+    activities: paged.map(a => ({
+      type: a.type,
+      id: a.id,
+      created_at: a.time,
+      ...a.data,
+    })),
+    meta: paginationMeta(total, page, limit),
+  })
 })
 
 // ─── 公开端点：活动流 ───
@@ -230,26 +454,46 @@ api.get('/timeline', async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const offset = (page - 1) * limit
+  const keyword = c.req.query('keyword')?.trim()
+  const typeFilter = c.req.query('type')
 
-  const topicList = await db
-    .select({
-      id: topics.id,
-      title: topics.title,
-      content: topics.content,
-      nostrAuthorPubkey: topics.nostrAuthorPubkey,
-      createdAt: topics.createdAt,
-      authorId: users.id,
-      authorUsername: users.username,
-      authorDisplayName: users.displayName,
-      authorAvatarUrl: users.avatarUrl,
-      commentCount: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
-      likeCount: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
-    })
-    .from(topics)
-    .leftJoin(users, eq(topics.userId, users.id))
-    .orderBy(desc(topics.createdAt))
-    .limit(limit)
-    .offset(offset)
+  const conditions: ReturnType<typeof eq>[] = []
+  if (keyword) {
+    const like = `%${keyword}%`
+    conditions.push(or(sql`${topics.title} LIKE ${like}`, sql`${topics.content} LIKE ${like}`)!)
+  }
+  if (typeFilter !== undefined && typeFilter !== '') {
+    const t = parseInt(typeFilter)
+    if (t >= 0 && t <= 2) conditions.push(eq(topics.type, t))
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined
+
+  const [topicList, countResult] = await Promise.all([
+    db
+      .select({
+        id: topics.id,
+        title: topics.title,
+        content: topics.content,
+        nostrAuthorPubkey: topics.nostrAuthorPubkey,
+        createdAt: topics.createdAt,
+        authorId: users.id,
+        authorUsername: users.username,
+        authorDisplayName: users.displayName,
+        authorAvatarUrl: users.avatarUrl,
+        commentCount: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
+        likeCount: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
+      })
+      .from(topics)
+      .leftJoin(users, eq(topics.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(topics.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(whereClause),
+  ])
+
+  const total = countResult[0]?.count || 0
 
   return c.json({
     topics: topicList.map(t => ({
@@ -263,8 +507,7 @@ api.get('/timeline', async (c) => {
       comment_count: t.commentCount,
       like_count: t.likeCount,
     })),
-    page,
-    limit,
+    meta: paginationMeta(total, page, limit),
   })
 })
 
@@ -283,26 +526,33 @@ api.get('/dvm/history', async (c) => {
     if (k >= 5000 && k <= 5999) conditions.push(eq(dvmJobs.kind, k))
   }
 
-  const jobs = await db
-    .select({
-      id: dvmJobs.id,
-      kind: dvmJobs.kind,
-      status: dvmJobs.status,
-      input: dvmJobs.input,
-      inputType: dvmJobs.inputType,
-      result: dvmJobs.result,
-      bidMsats: dvmJobs.bidMsats,
-      createdAt: dvmJobs.createdAt,
-      updatedAt: dvmJobs.updatedAt,
-      customerUsername: users.username,
-      customerDisplayName: users.displayName,
-    })
-    .from(dvmJobs)
-    .leftJoin(users, eq(dvmJobs.userId, users.id))
-    .where(and(...conditions))
-    .orderBy(desc(dvmJobs.updatedAt))
-    .limit(limit)
-    .offset(offset)
+  const whereClause = and(...conditions)
+
+  const [jobs, countResult] = await Promise.all([
+    db
+      .select({
+        id: dvmJobs.id,
+        kind: dvmJobs.kind,
+        status: dvmJobs.status,
+        input: dvmJobs.input,
+        inputType: dvmJobs.inputType,
+        result: dvmJobs.result,
+        bidMsats: dvmJobs.bidMsats,
+        createdAt: dvmJobs.createdAt,
+        updatedAt: dvmJobs.updatedAt,
+        customerUsername: users.username,
+        customerDisplayName: users.displayName,
+      })
+      .from(dvmJobs)
+      .leftJoin(users, eq(dvmJobs.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(dvmJobs.updatedAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(whereClause),
+  ])
+
+  const total = countResult[0]?.count || 0
 
   return c.json({
     jobs: jobs.map(j => ({
@@ -317,8 +567,7 @@ api.get('/dvm/history', async (c) => {
       created_at: j.createdAt,
       updated_at: j.updatedAt,
     })),
-    page,
-    limit,
+    meta: paginationMeta(total, page, limit),
   })
 })
 
@@ -564,25 +813,30 @@ api.get('/groups/:id/topics', requireApiAuth, async (c) => {
   const group = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, groupId)).limit(1)
   if (group.length === 0) return c.json({ error: 'Group not found' }, 404)
 
-  const topicList = await db
-    .select({
-      id: topics.id,
-      title: topics.title,
-      content: topics.content,
-      nostr_author_pubkey: topics.nostrAuthorPubkey,
-      created_at: topics.createdAt,
-      author_id: users.id,
-      author_username: users.username,
-      author_display_name: users.displayName,
-      comment_count: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
-      like_count: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
-    })
-    .from(topics)
-    .leftJoin(users, eq(topics.userId, users.id))
-    .where(eq(topics.groupId, groupId))
-    .orderBy(desc(topics.updatedAt))
-    .limit(limit)
-    .offset(offset)
+  const [topicList, countResult] = await Promise.all([
+    db
+      .select({
+        id: topics.id,
+        title: topics.title,
+        content: topics.content,
+        nostr_author_pubkey: topics.nostrAuthorPubkey,
+        created_at: topics.createdAt,
+        author_id: users.id,
+        author_username: users.username,
+        author_display_name: users.displayName,
+        comment_count: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
+        like_count: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
+      })
+      .from(topics)
+      .leftJoin(users, eq(topics.userId, users.id))
+      .where(eq(topics.groupId, groupId))
+      .orderBy(desc(topics.updatedAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(eq(topics.groupId, groupId)),
+  ])
+
+  const total = countResult[0]?.count || 0
 
   const result = topicList.map(t => ({
     id: t.id,
@@ -596,13 +850,16 @@ api.get('/groups/:id/topics', requireApiAuth, async (c) => {
     like_count: t.like_count,
   }))
 
-  return c.json({ topics: result, page, limit })
+  return c.json({ topics: result, meta: paginationMeta(total, page, limit) })
 })
 
 // GET /api/topics/:id — 公开：话题详情 + 评论列表
 api.get('/topics/:id', async (c) => {
   const db = c.get('db')
   const topicId = c.req.param('id')
+  const commentPage = parseInt(c.req.query('comment_page') || '1')
+  const commentLimit = Math.min(parseInt(c.req.query('comment_limit') || '20'), 100)
+  const commentOffset = (commentPage - 1) * commentLimit
 
   const topicResult = await db
     .select({
@@ -619,6 +876,7 @@ api.get('/topics/:id', async (c) => {
       author_avatar_url: users.avatarUrl,
       likeCount: sql<number>`(SELECT COUNT(*) FROM topic_like WHERE topic_like.topic_id = topic.id)`,
       commentCount: sql<number>`(SELECT COUNT(*) FROM comment WHERE comment.topic_id = topic.id)`,
+      repostCount: sql<number>`(SELECT COUNT(*) FROM topic_repost WHERE topic_repost.topic_id = topic.id)`,
     })
     .from(topics)
     .leftJoin(users, eq(topics.userId, users.id))
@@ -628,8 +886,25 @@ api.get('/topics/:id', async (c) => {
   if (topicResult.length === 0) return c.json({ error: 'Topic not found' }, 404)
 
   const t = topicResult[0]
+  const currentUser = c.get('user')
 
-  // 获取评论
+  // Check liked_by_me / reposted_by_me if authenticated
+  let likedByMe = false
+  let repostedByMe = false
+  if (currentUser) {
+    const [likeCheck, repostCheck] = await Promise.all([
+      db.select({ id: topicLikes.id }).from(topicLikes)
+        .where(and(eq(topicLikes.topicId, topicId), eq(topicLikes.userId, currentUser.id)))
+        .limit(1),
+      db.select({ id: topicReposts.id }).from(topicReposts)
+        .where(and(eq(topicReposts.topicId, topicId), eq(topicReposts.userId, currentUser.id)))
+        .limit(1),
+    ])
+    likedByMe = likeCheck.length > 0
+    repostedByMe = repostCheck.length > 0
+  }
+
+  // 获取评论（分页）
   const commentList = await db
     .select({
       id: comments.id,
@@ -646,6 +921,8 @@ api.get('/topics/:id', async (c) => {
     .leftJoin(users, eq(comments.userId, users.id))
     .where(eq(comments.topicId, topicId))
     .orderBy(comments.createdAt)
+    .limit(commentLimit)
+    .offset(commentOffset)
 
   return c.json({
     topic: {
@@ -657,6 +934,9 @@ api.get('/topics/:id', async (c) => {
       created_at: t.created_at,
       like_count: t.likeCount,
       comment_count: t.commentCount,
+      repost_count: t.repostCount,
+      liked_by_me: likedByMe,
+      reposted_by_me: repostedByMe,
       author: t.author_id
         ? { id: t.author_id, username: t.author_username, display_name: t.author_display_name, avatar_url: t.author_avatar_url }
         : { pubkey: t.nostr_author_pubkey, npub: t.nostr_author_pubkey ? pubkeyToNpub(t.nostr_author_pubkey) : null },
@@ -670,6 +950,7 @@ api.get('/topics/:id', async (c) => {
         ? { id: cm.author_id, username: cm.author_username, display_name: cm.author_display_name, avatar_url: cm.author_avatar_url }
         : { pubkey: cm.nostr_author_pubkey, npub: cm.nostr_author_pubkey ? pubkeyToNpub(cm.nostr_author_pubkey) : null },
     })),
+    comment_meta: paginationMeta(t.commentCount, commentPage, commentLimit),
   })
 })
 
@@ -1057,8 +1338,6 @@ api.delete('/topics/:id', requireApiAuth, async (c) => {
 api.post('/nostr/follow', requireApiAuth, async (c) => {
   const db = c.get('db')
   const user = c.get('user')!
-  const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
-
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
   const target = body.pubkey?.trim()
   if (!target) return c.json({ error: 'pubkey is required' }, 400)
@@ -1208,7 +1487,15 @@ api.get('/feed', requireApiAuth, async (c) => {
     }
   })
 
-  return c.json({ topics: result, page, limit })
+  const feedWhere = or(
+    eq(topics.userId, user.id),
+    sql`${topics.userId} IN (SELECT ${userFollows.followeeId} FROM ${userFollows} WHERE ${userFollows.followerId} = ${user.id})`,
+    sql`${topics.nostrAuthorPubkey} IN (SELECT ${nostrFollows.targetPubkey} FROM ${nostrFollows} WHERE ${nostrFollows.userId} = ${user.id})`,
+  )
+  const feedCountResult = await db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(feedWhere)
+  const feedTotal = feedCountResult[0]?.count || 0
+
+  return c.json({ topics: result, meta: paginationMeta(feedTotal, page, limit) })
 })
 
 // ─── Repost ───
@@ -1434,13 +1721,19 @@ api.post('/zap', requireApiAuth, async (c) => {
 api.get('/dvm/market', async (c) => {
   const db = c.get('db')
   const kindFilter = c.req.query('kind') // 可选 kind 过滤
+  const statusFilter = c.req.query('status') // 可选 status 过滤（逗号分隔），默认 open,error
+  const sortParam = c.req.query('sort') || 'newest' // newest | bid_desc | bid_asc
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const page = parseInt(c.req.query('page') || '1')
   const offset = (page - 1) * limit
 
+  const statuses = statusFilter
+    ? statusFilter.split(',').map(s => s.trim()).filter(Boolean)
+    : ['open', 'error']
+
   const conditions = [
     eq(dvmJobs.role, 'customer'),
-    inArray(dvmJobs.status, ['open', 'error']),
+    inArray(dvmJobs.status, statuses),
   ]
   if (kindFilter) {
     const k = parseInt(kindFilter)
@@ -1449,23 +1742,36 @@ api.get('/dvm/market', async (c) => {
     }
   }
 
-  const jobs = await db
-    .select({
-      id: dvmJobs.id,
-      kind: dvmJobs.kind,
-      status: dvmJobs.status,
-      input: dvmJobs.input,
-      inputType: dvmJobs.inputType,
-      output: dvmJobs.output,
-      bidMsats: dvmJobs.bidMsats,
-      params: dvmJobs.params,
-      createdAt: dvmJobs.createdAt,
-    })
-    .from(dvmJobs)
-    .where(and(...conditions))
-    .orderBy(desc(dvmJobs.createdAt))
-    .limit(limit)
-    .offset(offset)
+  const whereClause = and(...conditions)
+
+  const orderByClause = sortParam === 'bid_desc'
+    ? desc(dvmJobs.bidMsats)
+    : sortParam === 'bid_asc'
+      ? asc(dvmJobs.bidMsats)
+      : desc(dvmJobs.createdAt)
+
+  const [jobs, countResult] = await Promise.all([
+    db
+      .select({
+        id: dvmJobs.id,
+        kind: dvmJobs.kind,
+        status: dvmJobs.status,
+        input: dvmJobs.input,
+        inputType: dvmJobs.inputType,
+        output: dvmJobs.output,
+        bidMsats: dvmJobs.bidMsats,
+        params: dvmJobs.params,
+        createdAt: dvmJobs.createdAt,
+      })
+      .from(dvmJobs)
+      .where(whereClause)
+      .orderBy(orderByClause)
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(whereClause),
+  ])
+
+  const total = countResult[0]?.count || 0
 
   return c.json({
     jobs: jobs.map(j => {
@@ -1485,8 +1791,7 @@ api.get('/dvm/market', async (c) => {
         accept_url: `/api/dvm/jobs/${j.id}/accept`,
       }
     }),
-    page,
-    limit,
+    meta: paginationMeta(total, page, limit),
   })
 })
 
@@ -2168,13 +2473,20 @@ api.get('/dvm/inbox', requireApiAuth, async (c) => {
     }
   }
 
-  const jobs = await db
-    .select()
-    .from(dvmJobs)
-    .where(and(...conditions))
-    .orderBy(desc(dvmJobs.createdAt))
-    .limit(limit)
-    .offset(offset)
+  const whereClause = and(...conditions)
+
+  const [jobs, countResult] = await Promise.all([
+    db
+      .select()
+      .from(dvmJobs)
+      .where(whereClause)
+      .orderBy(desc(dvmJobs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(whereClause),
+  ])
+
+  const total = countResult[0]?.count || 0
 
   return c.json({
     jobs: jobs.map(j => ({
@@ -2190,8 +2502,7 @@ api.get('/dvm/inbox', requireApiAuth, async (c) => {
       params: j.params ? JSON.parse(j.params) : null,
       created_at: j.createdAt,
     })),
-    page,
-    limit,
+    meta: paginationMeta(total, page, limit),
   })
 })
 

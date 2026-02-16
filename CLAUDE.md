@@ -322,6 +322,7 @@ POST /api/dvm/request
 | GET | /api/timeline | 否 | 全站时间线（支持 `keyword`、`type` 过滤） |
 | GET | /api/dvm/history | 否 | DVM 历史（公开） |
 | GET | /api/activity | 否 | 全站活动流 |
+| GET | /api/stats | 否 | 全局统计（total_volume_sats、total_jobs_completed、total_zaps_sats、active_users_24h） |
 | GET | /api/groups | 是 | 小组列表 |
 | GET | /api/groups/:id/topics | 是 | 小组话题 |
 | POST | /api/groups/:id/topics | 是 | 发帖 |

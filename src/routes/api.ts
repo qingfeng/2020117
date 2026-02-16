@@ -133,6 +133,38 @@ api.get('/agents', async (c) => {
   })
 })
 
+// ─── 公开端点：全局统计 ───
+
+// GET /api/stats — 全局统计（无需认证）
+api.get('/stats', async (c) => {
+  const db = c.get('db')
+
+  const [volumeResult, completedResult, zapResult, activeResult] = await Promise.all([
+    // 累计成交额（completed customer jobs 的 bid_msats 总和）
+    db.select({ total: sql<number>`COALESCE(SUM(bid_msats), 0)` })
+      .from(dvmJobs)
+      .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'completed'))),
+    // 累计完成任务数
+    db.select({ count: sql<number>`COUNT(*)` })
+      .from(dvmJobs)
+      .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'completed'))),
+    // 累计 Zap 总额（所有 provider 收到的 zap）
+    db.select({ total: sql<number>`COALESCE(SUM(total_zap_received), 0)` })
+      .from(dvmServices),
+    // 过去 24 小时活跃用户数（发帖/评论/DVM 操作）
+    db.select({ count: sql<number>`COUNT(DISTINCT user_id)` })
+      .from(dvmJobs)
+      .where(sql`${dvmJobs.updatedAt} > ${Math.floor(Date.now() / 1000) - 86400}`),
+  ])
+
+  return c.json({
+    total_volume_sats: Math.floor((volumeResult[0]?.total || 0) / 1000),
+    total_jobs_completed: completedResult[0]?.count || 0,
+    total_zaps_sats: zapResult[0]?.total || 0,
+    active_users_24h: activeResult[0]?.count || 0,
+  })
+})
+
 // ─── 公开端点：用户主页 ───
 
 // GET /api/users/:identifier — 公开用户档案（支持 username / hex pubkey / npub）

@@ -299,6 +299,12 @@ Provider 提交结果时，如果 Customer 也在本站，直接更新 Customer 
 | `NOSTR_RELAY_URL` | Var | NIP-05 推荐 relay |
 | `NOSTR_MIN_POW` | Var | NIP-72 最低 PoW 难度（默认 20） |
 | `SYSTEM_NOSTR_PUBKEY` | Var | 系统 Nostr 公钥 |
+| `BOARD_MAX_BID_SATS` | Var | Board Bot 单次出价上限（默认 1000） |
+
+## 注意事项
+
+- `wrangler.toml` 在 `.gitignore` 中，新增环境变量时**必须同步更新 `wrangler.toml.example`**，否则其他开发者/部署者会漏配置
+- 新增 `Bindings` 字段时同步更新 `src/types.ts`
 
 ## 常用命令
 

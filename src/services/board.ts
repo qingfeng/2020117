@@ -3,7 +3,7 @@ import type { Database } from '../db'
 import type { Bindings } from '../types'
 import { users, dvmJobs } from '../db/schema'
 import { decryptNostrPrivkey, buildSignedEvent } from './nostr'
-import { nip04Encrypt, nip04Decrypt } from './nwc'
+import { nip04Encrypt, nip04Decrypt, decryptNwcUri, parseNwcUri, nwcPayInvoice, resolveAndPayLightningAddress } from './nwc'
 import { fetchEventsFromRelay } from './nostr-community'
 import { buildJobRequestEvent } from './dvm'
 import { generateId } from '../lib/utils'
@@ -30,16 +30,35 @@ function parseIntent(text: string): ParsedIntent {
   return { kind: 5100, label: 'text generation' }
 }
 
+// --- Bid amount parsing ---
+
+function parseBidSats(text: string, maxSats: number): number {
+  const patterns = [
+    /(\d+)\s*sats?\b/i,    // "100sats", "100 sats", "50sat"
+    /sats?\s*:\s*(\d+)/i,  // "sat:100", "sats:50"
+  ]
+  for (const pat of patterns) {
+    const m = text.match(pat)
+    if (m) {
+      const val = parseInt(m[1])
+      if (val > 0) return Math.min(val, maxSats)
+    }
+  }
+  return 0
+}
+
 // --- Confirmation message ---
 
-function confirmationMessage(label: string): string {
+function confirmationMessage(label: string, bidSats: number): string {
   const msgs: Record<string, string> = {
     'translation': 'Got it! Working on translation...',
     'summarization': 'Got it! Working on summarization...',
     'text-to-image': 'Got it! Generating image...',
     'text generation': 'Got it! Processing your request...',
   }
-  return msgs[label] || 'Got it! Processing...'
+  const base = msgs[label] || 'Got it! Processing...'
+  if (bidSats > 0) return `${base} (${bidSats} sats bid attached)`
+  return base
 }
 
 // --- Poll board inbox: receive messages, create DVM jobs ---
@@ -133,9 +152,12 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
           continue
         }
 
-        // Parse intent
+        // Parse intent and bid amount
         const intent = parseIntent(content)
-        console.log(`[Board] Message from ${event.pubkey.slice(0, 8)}...: "${content.slice(0, 80)}" → kind ${intent.kind} (${intent.label})`)
+        const maxSats = parseInt(env.BOARD_MAX_BID_SATS || '1000') || 1000
+        const bidSats = parseBidSats(content, maxSats)
+        const bidMsats = bidSats > 0 ? bidSats * 1000 : undefined
+        console.log(`[Board] Message from ${event.pubkey.slice(0, 8)}...: "${content.slice(0, 80)}" → kind ${intent.kind} (${intent.label})${bidSats > 0 ? ` (${bidSats} sats bid)` : ''}`)
 
         // Build DVM job request event
         const relays = relayUrls
@@ -146,7 +168,7 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
           kind: intent.kind,
           input: content,
           inputType: 'text',
-          bidMsats: undefined,
+          bidMsats,
           relays,
         })
 
@@ -157,6 +179,7 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
           board_requester_pubkey: event.pubkey,
           board_request_event_id: event.id,
           board_request_kind: event.kind,
+          board_bid_sats: bidSats > 0 ? bidSats : undefined,
         })
 
         await db.insert(dvmJobs).values({
@@ -168,7 +191,7 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
           status: 'open',
           input: content,
           inputType: 'text',
-          bidMsats: null,
+          bidMsats: bidMsats ?? null,
           customerPubkey: jobEvent.pubkey,
           requestEventId: event.id,
           params,
@@ -179,10 +202,10 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
         // Publish DVM job to relay
         await env.NOSTR_QUEUE.send({ events: [jobEvent] })
 
-        console.log(`[Board] Created job ${jobId} (kind ${intent.kind}) for event ${event.id}`)
+        console.log(`[Board] Created job ${jobId} (kind ${intent.kind}) for event ${event.id}${bidSats > 0 ? ` (${bidSats} sats bid)` : ''}`)
 
         // Send confirmation reply
-        const confirmText = confirmationMessage(intent.label)
+        const confirmText = confirmationMessage(intent.label, bidSats)
         let replyEvent
 
         if (isKind4) {
@@ -284,6 +307,7 @@ export async function pollBoardResults(env: Bindings, db: Database): Promise<voi
         board_requester_pubkey?: string
         board_request_event_id?: string
         board_request_kind?: number
+        board_bid_sats?: number
       }
       try {
         boardMeta = JSON.parse(job.params)
@@ -334,12 +358,58 @@ export async function pollBoardResults(env: Bindings, db: Database): Promise<voi
 
       await env.NOSTR_QUEUE.send({ events: [replyEvent] })
 
+      console.log(`[Board] Sent result for job ${job.id} to ${boardMeta.board_requester_pubkey.slice(0, 8)}...`)
+
+      // --- Payment: board pays provider if bid > 0 ---
+      const bidSats = boardMeta.board_bid_sats || (job.bidMsats ? Math.floor(job.bidMsats / 1000) : 0)
+      if (bidSats > 0 && board.nwcEncrypted && board.nwcIv && masterKey) {
+        try {
+          const priceSats = job.priceMsats ? Math.floor(job.priceMsats / 1000) : 0
+          const paymentSats = priceSats > 0 ? Math.min(bidSats, priceSats) : bidSats
+
+          const nwcUri = await decryptNwcUri(board.nwcEncrypted, board.nwcIv, masterKey)
+          const parsed = parseNwcUri(nwcUri)
+
+          if (job.bolt11) {
+            // Provider included a bolt11 invoice
+            const { preimage } = await nwcPayInvoice(parsed, job.bolt11)
+            await db.update(dvmJobs)
+              .set({ paymentHash: preimage, updatedAt: new Date() })
+              .where(eq(dvmJobs.id, job.id))
+            console.log(`[Board] Paid ${paymentSats} sats via bolt11 for job ${job.id} (preimage: ${preimage.slice(0, 16)}...)`)
+          } else {
+            // Find provider's lightning address
+            let providerAddress: string | null = null
+            if (job.providerPubkey) {
+              const providerUsers = await db
+                .select({ lightningAddress: users.lightningAddress })
+                .from(users)
+                .where(eq(users.nostrPubkey, job.providerPubkey))
+                .limit(1)
+              if (providerUsers.length > 0 && providerUsers[0].lightningAddress) {
+                providerAddress = providerUsers[0].lightningAddress
+              }
+            }
+
+            if (providerAddress) {
+              const { preimage } = await resolveAndPayLightningAddress(parsed, providerAddress, paymentSats)
+              await db.update(dvmJobs)
+                .set({ paymentHash: preimage, updatedAt: new Date() })
+                .where(eq(dvmJobs.id, job.id))
+              console.log(`[Board] Paid ${paymentSats} sats to ${providerAddress} for job ${job.id}`)
+            } else {
+              console.warn(`[Board] No bolt11 or lightning address for job ${job.id}, skipping payment`)
+            }
+          }
+        } catch (payErr) {
+          console.error(`[Board] Payment failed for job ${job.id}:`, payErr)
+        }
+      }
+
       // Mark job as completed
       await db.update(dvmJobs)
         .set({ status: 'completed', updatedAt: new Date() })
         .where(eq(dvmJobs.id, job.id))
-
-      console.log(`[Board] Sent result for job ${job.id} to ${boardMeta.board_requester_pubkey.slice(0, 8)}...`)
     } catch (e) {
       console.error(`[Board] Failed to send result for job ${job.id}:`, e)
     }

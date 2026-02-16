@@ -5,6 +5,7 @@ workers_dev = true
 
 [vars]
 APP_NAME = "2020117"
+BOARD_MAX_BID_SATS = "1000"
 
 [[d1_databases]]
 binding = "DB"

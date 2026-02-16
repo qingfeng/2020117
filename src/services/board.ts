@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
 import { users, dvmJobs } from '../db/schema'
@@ -148,6 +148,54 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
         }
 
         if (!content || content.length === 0) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Dedup: skip if board already has a recent job with the same input from the same pubkey
+        // This catches Nostr clients that re-send the same message with different event IDs
+        const fiveMinAgo = new Date((event.created_at - 300) * 1000)
+        const contentDup = await db
+          .select({ id: dvmJobs.id })
+          .from(dvmJobs)
+          .where(and(
+            eq(dvmJobs.userId, board.id),
+            eq(dvmJobs.role, 'customer'),
+            eq(dvmJobs.input, content),
+            sql`${dvmJobs.createdAt} >= ${Math.floor(fiveMinAgo.getTime() / 1000)}`,
+          ))
+          .limit(1)
+        if (contentDup.length > 0) {
+          console.log(`[Board] Skipping duplicate content from ${event.pubkey.slice(0, 8)}... (event ${event.id.slice(0, 12)}...)`)
+
+          // Notify sender that this is a duplicate
+          const dupText = 'Your message was already received and is being processed. Please wait for the result.'
+          let dupReply
+          if (event.kind === 4) {
+            const encrypted = await nip04Encrypt(boardPrivkeyHex, event.pubkey, dupText)
+            dupReply = await buildSignedEvent({
+              privEncrypted: board.nostrPrivEncrypted!,
+              iv: board.nostrPrivIv!,
+              masterKey,
+              kind: 4,
+              content: encrypted,
+              tags: [['p', event.pubkey]],
+            })
+          } else {
+            dupReply = await buildSignedEvent({
+              privEncrypted: board.nostrPrivEncrypted!,
+              iv: board.nostrPrivIv!,
+              masterKey,
+              kind: 1,
+              content: dupText,
+              tags: [
+                ['e', event.id, '', 'reply'],
+                ['p', event.pubkey],
+              ],
+            })
+          }
+          await env.NOSTR_QUEUE.send({ events: [dupReply] })
+
           if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
           continue
         }
@@ -328,13 +376,32 @@ export async function pollBoardResults(env: Bindings, db: Database): Promise<voi
       // Build result message (truncate to reasonable length)
       const resultText = (job.result || 'No result').slice(0, 4000)
 
+      // Determine signer: prefer provider's keys, fall back to board
+      let signerPrivEncrypted = board.nostrPrivEncrypted!
+      let signerPrivIv = board.nostrPrivIv!
+      let signerPrivkeyHex = boardPrivkeyHex
+
+      if (job.providerPubkey) {
+        const providerUsers = await db
+          .select()
+          .from(users)
+          .where(eq(users.nostrPubkey, job.providerPubkey))
+          .limit(1)
+        if (providerUsers.length > 0 && providerUsers[0].nostrPrivEncrypted && providerUsers[0].nostrPrivIv) {
+          const provider = providerUsers[0]
+          signerPrivEncrypted = provider.nostrPrivEncrypted!
+          signerPrivIv = provider.nostrPrivIv!
+          signerPrivkeyHex = await decryptNostrPrivkey(signerPrivEncrypted, signerPrivIv, masterKey)
+        }
+      }
+
       let replyEvent
       if (boardMeta.board_request_kind === 4) {
         // Reply via Kind 4 DM
-        const encrypted = await nip04Encrypt(boardPrivkeyHex, boardMeta.board_requester_pubkey, resultText)
+        const encrypted = await nip04Encrypt(signerPrivkeyHex, boardMeta.board_requester_pubkey, resultText)
         replyEvent = await buildSignedEvent({
-          privEncrypted: board.nostrPrivEncrypted!,
-          iv: board.nostrPrivIv!,
+          privEncrypted: signerPrivEncrypted,
+          iv: signerPrivIv,
           masterKey,
           kind: 4,
           content: encrypted,
@@ -347,8 +414,8 @@ export async function pollBoardResults(env: Bindings, db: Database): Promise<voi
           tags.push(['e', boardMeta.board_request_event_id, '', 'reply'])
         }
         replyEvent = await buildSignedEvent({
-          privEncrypted: board.nostrPrivEncrypted!,
-          iv: board.nostrPrivIv!,
+          privEncrypted: signerPrivEncrypted,
+          iv: signerPrivIv,
           masterKey,
           kind: 1,
           content: resultText,

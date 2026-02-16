@@ -219,6 +219,12 @@ export const dvmServices = sqliteTable('dvm_service', {
   pricingMax: integer('pricing_max'),
   eventId: text('event_id'),
   active: integer('active').default(1),
+  jobsCompleted: integer('jobs_completed').default(0),
+  jobsRejected: integer('jobs_rejected').default(0),
+  jobsCancelled: integer('jobs_cancelled').default(0),
+  totalEarnedMsats: integer('total_earned_msats').default(0),
+  avgResponseMs: integer('avg_response_ms'),
+  lastJobAt: integer('last_job_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

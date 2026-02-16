@@ -34,6 +34,27 @@ async function buildBoardRepost(db: import('../db').Database, noteEvent: NostrEv
   } catch { return null }
 }
 
+// Helper: build reputation object from dvmService fields
+function buildReputationData(svc: {
+  jobsCompleted: number | null
+  jobsRejected: number | null
+  totalEarnedMsats: number | null
+  avgResponseMs: number | null
+  lastJobAt: Date | null
+}) {
+  const completed = svc.jobsCompleted || 0
+  const rejected = svc.jobsRejected || 0
+  const total = completed + rejected
+  return {
+    jobs_completed: completed,
+    jobs_rejected: rejected,
+    completion_rate: total > 0 ? Math.round((completed / total) * 100) / 100 : 0,
+    avg_response_s: svc.avgResponseMs ? Math.round(svc.avgResponseMs / 1000) : null,
+    total_earned_sats: svc.totalEarnedMsats ? Math.floor(svc.totalEarnedMsats / 1000) : 0,
+    last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
+  }
+}
+
 // ─── 公开端点：Agent 列表 ───
 
 api.get('/agents', async (c) => {
@@ -1722,9 +1743,13 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   }
 
   // 检查是否已有活跃的 provider job（open/processing）
+  // Board customer job 的 requestEventId 是原始用户 event ID，eventId 是 Kind 5xxx
+  // pollDvmRequests 创建的 provider job 用的是 Kind 5xxx 作为 requestEventId
+  // 所以需要同时检查两个值
+  const eventIdsToCheck = [cj.requestEventId, cj.eventId].filter((id): id is string => !!id)
   const existing = await db.select({ id: dvmJobs.id, status: dvmJobs.status }).from(dvmJobs)
     .where(and(
-      eq(dvmJobs.requestEventId, cj.requestEventId!),
+      inArray(dvmJobs.requestEventId, eventIdsToCheck),
       eq(dvmJobs.userId, user.id),
       eq(dvmJobs.role, 'provider'),
       inArray(dvmJobs.status, ['open', 'processing']),
@@ -1735,7 +1760,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     return c.json({ job_id: existing[0].id, status: 'already_accepted' })
   }
 
-  // 创建 provider job + 更新 customer job 状态为 processing（从 market 下架）
+  // 创建 provider job，使用 eventId（Kind 5xxx）作为 requestEventId 以保持一致
   const providerJobId = generateId()
   const now = new Date()
   await db.insert(dvmJobs).values({
@@ -1749,7 +1774,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     output: cj.output,
     bidMsats: cj.bidMsats,
     customerPubkey: cj.customerPubkey,
-    requestEventId: cj.requestEventId,
+    requestEventId: cj.eventId || cj.requestEventId,
     params: cj.params,
     createdAt: now,
     updatedAt: now,
@@ -1810,15 +1835,35 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
     })
     .where(eq(dvmJobs.id, jobId))
 
-  // 把对应的 provider job 标记为 rejected（附带原因）
+  // 把对应的 provider job 标记为 rejected（附带原因）+ 更新声誉
   if (job[0].requestEventId) {
-    await db.update(dvmJobs)
-      .set({ status: 'rejected', result: reason, updatedAt: new Date() })
+    // Find the provider job to get the provider userId
+    const providerJobs = await db.select({ id: dvmJobs.id, userId: dvmJobs.userId }).from(dvmJobs)
       .where(and(
         eq(dvmJobs.requestEventId, job[0].requestEventId),
         eq(dvmJobs.role, 'provider'),
         inArray(dvmJobs.status, ['completed', 'result_available']),
       ))
+
+    if (providerJobs.length > 0) {
+      await db.update(dvmJobs)
+        .set({ status: 'rejected', result: reason, updatedAt: new Date() })
+        .where(eq(dvmJobs.id, providerJobs[0].id))
+
+      // Update provider reputation: jobsRejected++, jobsCompleted-- (rollback)
+      const providerSvc = await db.select().from(dvmServices)
+        .where(and(eq(dvmServices.userId, providerJobs[0].userId), eq(dvmServices.active, 1)))
+        .limit(1)
+
+      if (providerSvc.length > 0) {
+        const s = providerSvc[0]
+        await db.update(dvmServices).set({
+          jobsCompleted: Math.max(0, (s.jobsCompleted || 0) - 1),
+          jobsRejected: (s.jobsRejected || 0) + 1,
+          updatedAt: new Date(),
+        }).where(eq(dvmServices.id, s.id))
+      }
+    }
   }
 
   // 重新同站直投：给注册了对应 Kind 的 Provider 创建新的 provider job（排除已被拒绝的）
@@ -1943,6 +1988,13 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
   const pricingMin = body.pricing?.min_sats ? body.pricing.min_sats * 1000 : null
   const pricingMax = body.pricing?.max_sats ? body.pricing.max_sats * 1000 : null
 
+  // Fetch existing service for reputation data
+  const existing = await db.select().from(dvmServices)
+    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
+    .limit(1)
+
+  const reputation = existing.length > 0 ? buildReputationData(existing[0]) : undefined
+
   // Build NIP-89 Handler Info (Kind 31990)
   const handlerEvent = await buildHandlerInfoEvent({
     privEncrypted: user.nostrPrivEncrypted!,
@@ -1953,14 +2005,11 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     about: body.description,
     pricingMin: pricingMin || undefined,
     pricingMax: pricingMax || undefined,
+    userId: user.id,
+    reputation,
   })
 
   const now = new Date()
-
-  // Upsert: if user already has an active service, update it; otherwise insert
-  const existing = await db.select({ id: dvmServices.id }).from(dvmServices)
-    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
-    .limit(1)
 
   let serviceId: string
   if (existing.length > 0) {
@@ -2019,6 +2068,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       pricing_min_sats: s.pricingMin ? Math.floor(s.pricingMin / 1000) : null,
       pricing_max_sats: s.pricingMax ? Math.floor(s.pricingMax / 1000) : null,
       active: !!s.active,
+      reputation: buildReputationData(s),
       created_at: s.createdAt,
     })),
   })
@@ -2188,6 +2238,8 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
     bolt11,
   })
 
+  const now = new Date()
+
   // Update provider job
   await db.update(dvmJobs)
     .set({
@@ -2197,15 +2249,21 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       eventId: resultEvent.id,
       priceMsats: amountMsats || null,
       bolt11: bolt11 || null,
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .where(eq(dvmJobs.id, jobId))
 
   // If customer is also on this site, update their job directly
+  // Provider's requestEventId may be the Kind 5xxx event ID (from pollDvmRequests)
+  // Board customer jobs store Kind 5xxx as eventId, original user event as requestEventId
+  // So we check both requestEventId and eventId on customer side
   if (job[0].requestEventId) {
     const customerJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
       .where(and(
-        eq(dvmJobs.requestEventId, job[0].requestEventId),
+        or(
+          eq(dvmJobs.requestEventId, job[0].requestEventId),
+          eq(dvmJobs.eventId, job[0].requestEventId),
+        ),
         eq(dvmJobs.role, 'customer'),
       ))
       .limit(1)
@@ -2218,13 +2276,40 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
           providerPubkey: user.nostrPubkey,
           resultEventId: resultEvent.id,
           priceMsats: amountMsats || null,
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(eq(dvmJobs.id, customerJob[0].id))
     }
   }
 
-  // Publish result to relay + Kind 1 note + board repost
+  // Update provider reputation stats
+  const svc = await db.select().from(dvmServices)
+    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
+    .limit(1)
+
+  if (svc.length > 0) {
+    const s = svc[0]
+    const prevCompleted = s.jobsCompleted || 0
+    const newCompleted = prevCompleted + 1
+
+    // Calculate response time: from job accepted_at (or created_at) to now
+    const jobCreatedMs = job[0].createdAt.getTime()
+    const responseMs = now.getTime() - jobCreatedMs
+    const prevAvg = s.avgResponseMs || 0
+    const newAvgResponseMs = prevCompleted > 0
+      ? Math.round((prevAvg * prevCompleted + responseMs) / newCompleted)
+      : responseMs
+
+    await db.update(dvmServices).set({
+      jobsCompleted: newCompleted,
+      totalEarnedMsats: (s.totalEarnedMsats || 0) + (amountMsats || 0),
+      avgResponseMs: newAvgResponseMs,
+      lastJobAt: now,
+      updatedAt: now,
+    }).where(eq(dvmServices.id, s.id))
+  }
+
+  // Publish result to relay + Kind 1 note + board repost + updated Kind 31990
   if (c.env.NOSTR_QUEUE) {
     const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
     const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
@@ -2239,6 +2324,28 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
     const eventsToSend: NostrEvent[] = [resultEvent, noteEvent]
     const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY!, relayUrl)
     if (repost) eventsToSend.push(repost)
+
+    // Republish updated Kind 31990 with latest reputation
+    if (svc.length > 0) {
+      const s = svc[0]
+      const updatedSvc = await db.select().from(dvmServices).where(eq(dvmServices.id, s.id)).limit(1)
+      if (updatedSvc.length > 0) {
+        const handlerEvent = await buildHandlerInfoEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kinds: JSON.parse(updatedSvc[0].kinds),
+          name: user.displayName || user.username,
+          about: updatedSvc[0].description || undefined,
+          pricingMin: updatedSvc[0].pricingMin || undefined,
+          pricingMax: updatedSvc[0].pricingMax || undefined,
+          userId: user.id,
+          reputation: buildReputationData(updatedSvc[0]),
+        })
+        eventsToSend.push(handlerEvent)
+      }
+    }
+
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 

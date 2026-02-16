@@ -114,9 +114,18 @@ export async function buildHandlerInfoEvent(params: {
   about?: string
   pricingMin?: number
   pricingMax?: number
+  userId: string
+  reputation?: {
+    jobs_completed: number
+    jobs_rejected: number
+    completion_rate: number
+    avg_response_s: number | null
+    total_earned_sats: number
+    last_job_at: number | null
+  }
 }): Promise<NostrEvent> {
   const tags: string[][] = [
-    ['d', `neogroup-dvm-${Date.now()}`],
+    ['d', `neogroup-dvm-${params.userId}`],
   ]
   for (const k of params.kinds) {
     tags.push(['k', String(k)])
@@ -132,6 +141,7 @@ export async function buildHandlerInfoEvent(params: {
         ...(params.pricingMax ? { max: params.pricingMax } : {}),
       },
     } : {}),
+    ...(params.reputation ? { reputation: params.reputation } : {}),
   })
 
   return buildSignedEvent({

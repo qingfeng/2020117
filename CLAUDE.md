@@ -161,7 +161,7 @@ board 同时作为 DVM 网关机器人。Nostr 用户可以通过私信（Kind 4
 
 ## Cron 定时任务
 
-`scheduled` handler 每 5 分钟执行（`src/index.ts`）：
+`scheduled` handler 每 1 分钟执行（`src/index.ts`）：
 
 | 函数 | 来源 | 说明 |
 |------|------|------|

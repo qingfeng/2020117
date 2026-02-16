@@ -25,9 +25,9 @@ custom_domain = true
 # NOSTR_RELAYS and NOSTR_MASTER_KEY set via: wrangler secret put
 # NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
 
-# Cron: poll Nostr communities, DVM jobs (every 5 minutes)
+# Cron: poll Nostr communities, DVM jobs (every 1 minute)
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 [[queues.producers]]
 queue = "nostr-events-2020117"

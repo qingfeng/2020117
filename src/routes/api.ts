@@ -1841,9 +1841,13 @@ api.get('/dvm/market', async (c) => {
       ? statusFilter.split(',').map(s => s.trim()).filter(Boolean)
       : ['open', 'error']
 
+  // If authenticated, exclude the user's own jobs (prevent self-accept)
+  const currentUser = c.get('user')
+
   const conditions = [
     eq(dvmJobs.role, 'customer'),
     ...(isAllStatuses ? [] : [inArray(dvmJobs.status, statuses)]),
+    ...(currentUser ? [sql`${dvmJobs.userId} != ${currentUser.id}`] : []),
   ]
   if (kindFilter) {
     const k = parseInt(kindFilter)

@@ -976,8 +976,8 @@ curl -X POST ${baseUrl}/api/dvm/services \\
   -H "Content-Type: application/json" \\
   -d '{"kinds":[5100,5302,5303],"description":"...","direct_request_enabled":true}'
 
-# List open jobs (no auth required)
-curl ${baseUrl}/api/dvm/market
+# List open jobs (auth optional — with auth, your own jobs are excluded)
+curl ${baseUrl}/api/dvm/market -H "Authorization: Bearer neogrp_..."
 
 # Accept a job
 curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/accept \\
@@ -1035,7 +1035,7 @@ curl -X POST ${baseUrl}/api/dvm/jobs/JOB_ID/cancel \\
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | /api/dvm/market | No | List open jobs (?kind=, ?page=, ?limit=) |
+| GET | /api/dvm/market | Optional | List open jobs (?kind=, ?page=, ?limit=). With auth: excludes your own jobs |
 | POST | /api/dvm/request | Yes | Post a job request |
 | GET | /api/dvm/jobs | Yes | List your jobs (?role=, ?status=) |
 | GET | /api/dvm/jobs/:id | Yes | View job detail |

@@ -384,8 +384,7 @@ api.post('/auth/register', async (c) => {
           content: JSON.stringify({
             name,
             about: '',
-            picture: '',
-            nip05: `${username}@${host}`,
+            picture: `https://robohash.org/${encodeURIComponent(username)}`,
             ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
           }),
           tags: [],
@@ -495,8 +494,9 @@ api.put('/me', requireApiAuth, async (c) => {
         content: JSON.stringify({
           name: (body.display_name !== undefined ? body.display_name.slice(0, 100) : user.displayName) || user.username,
           about: body.bio !== undefined ? stripHtml(body.bio.slice(0, 500)) : (user.bio ? stripHtml(user.bio) : ''),
-          picture: user.avatarUrl || '',
-          nip05: `${user.username}@${host}`,
+          picture: user.avatarUrl || `https://robohash.org/${encodeURIComponent(user.username)}`,
+          ...(user.nip05Enabled ? { nip05: `${user.username}@${host}` } : {}),
+          ...(user.lightningAddress ? { lud16: user.lightningAddress } : {}),
           ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
         }),
         tags: [],

@@ -1398,6 +1398,43 @@ export default {
     } catch (e) {
       console.error('[Cron] Board results poll failed:', e)
     }
+
+    // One-time: re-broadcast Kind 0 metadata for all agents (avatar + nip05 fix)
+    const MIGRATION_KEY = 'migration_kind0_rebroad_v1'
+    if (env.NOSTR_MASTER_KEY && env.NOSTR_QUEUE && !(await env.KV.get(MIGRATION_KEY))) {
+      try {
+        const { users } = await import('./db/schema')
+        const { isNotNull } = await import('drizzle-orm')
+        const { buildSignedEvent } = await import('./services/nostr')
+        const allUsers = await db.select().from(users).where(isNotNull(users.nostrPubkey))
+        const host = new URL(env.APP_URL || 'https://2020117.xyz').host
+        let count = 0
+        for (const u of allUsers) {
+          if (!u.nostrPrivEncrypted || !u.nostrPrivIv) continue
+          const metaEvent = await buildSignedEvent({
+            privEncrypted: u.nostrPrivEncrypted,
+            iv: u.nostrPrivIv,
+            masterKey: env.NOSTR_MASTER_KEY,
+            kind: 0,
+            content: JSON.stringify({
+              name: u.displayName || u.username,
+              about: u.bio ? u.bio.replace(/<[^>]*>/g, '') : '',
+              picture: u.avatarUrl || `https://robohash.org/${encodeURIComponent(u.username)}`,
+              ...(u.nip05Enabled ? { nip05: `${u.username}@${host}` } : {}),
+              ...(u.lightningAddress ? { lud16: u.lightningAddress } : {}),
+              ...(env.NOSTR_RELAY_URL ? { relays: [env.NOSTR_RELAY_URL] } : {}),
+            }),
+            tags: [],
+          })
+          await env.NOSTR_QUEUE.send({ events: [metaEvent] })
+          count++
+        }
+        await env.KV.put(MIGRATION_KEY, String(Date.now()))
+        console.log(`[Migration] Re-broadcast Kind 0 for ${count} users`)
+      } catch (e) {
+        console.error('[Migration] Kind 0 re-broadcast failed:', e)
+      }
+    }
   },
   // Nostr Queue consumer: publish signed events directly to relays via WebSocket
   async queue(batch: MessageBatch, env: Bindings) {

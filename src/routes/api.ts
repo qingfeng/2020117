@@ -87,6 +87,7 @@ api.get('/agents', async (c) => {
       lastJobAt: dvmServices.lastJobAt,
       avgResponseMs: dvmServices.avgResponseMs,
       totalZapReceived: dvmServices.totalZapReceived,
+      directRequestEnabled: dvmServices.directRequestEnabled,
     })
       .from(dvmServices)
       .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -117,6 +118,7 @@ api.get('/agents', async (c) => {
         last_seen_at: row.lastJobAt ? Math.floor(row.lastJobAt.getTime() / 1000) : null,
         avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
         total_zap_received_sats: row.totalZapReceived || 0,
+        direct_request_enabled: !!row.directRequestEnabled,
       }
     }),
     meta: paginationMeta(total, page, limit),
@@ -172,6 +174,7 @@ api.get('/users/:identifier', async (c) => {
     description: dvmServices.description,
     jobsCompleted: dvmServices.jobsCompleted,
     totalZapReceived: dvmServices.totalZapReceived,
+    directRequestEnabled: dvmServices.directRequestEnabled,
   }).from(dvmServices).where(and(eq(dvmServices.userId, u.id), eq(dvmServices.active, 1))).limit(1)
 
   return c.json({
@@ -198,6 +201,7 @@ api.get('/users/:identifier', async (c) => {
         description: agentSvc[0].description,
         jobs_completed: agentSvc[0].jobsCompleted || 0,
         total_zap_received_sats: agentSvc[0].totalZapReceived || 0,
+        direct_request_enabled: !!agentSvc[0].directRequestEnabled,
       },
     } : {}),
   })
@@ -1811,6 +1815,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     output?: string
     bid_sats?: number
     min_zap_sats?: number
+    provider?: string
     params?: Record<string, string>
   }
 
@@ -1828,6 +1833,45 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   const bidSats = body.bid_sats || 0
   const bidMsats = bidSats ? bidSats * 1000 : undefined
   const minZapSats = body.min_zap_sats && body.min_zap_sats > 0 ? Math.floor(body.min_zap_sats) : undefined
+
+  // Validate provider (directed request)
+  let directedProviderId: string | null = null
+  if (body.provider) {
+    const providerIdentifier = body.provider.trim()
+    let providerCondition
+    if (providerIdentifier.startsWith('npub1')) {
+      const pubkey = npubToPubkey(providerIdentifier)
+      if (!pubkey) return c.json({ error: 'Invalid provider npub' }, 400)
+      providerCondition = eq(users.nostrPubkey, pubkey)
+    } else if (/^[0-9a-f]{64}$/i.test(providerIdentifier)) {
+      providerCondition = eq(users.nostrPubkey, providerIdentifier.toLowerCase())
+    } else {
+      providerCondition = eq(users.username, providerIdentifier)
+    }
+
+    const providerUser = await db.select({ id: users.id, lightningAddress: users.lightningAddress })
+      .from(users).where(providerCondition).limit(1)
+    if (providerUser.length === 0) return c.json({ error: 'Provider not found' }, 404)
+    if (providerUser[0].id === user.id) return c.json({ error: 'Cannot direct a job to yourself' }, 400)
+
+    const providerSvc = await db.select({
+      kinds: dvmServices.kinds,
+      directRequestEnabled: dvmServices.directRequestEnabled,
+    }).from(dvmServices)
+      .where(and(eq(dvmServices.userId, providerUser[0].id), eq(dvmServices.active, 1)))
+      .limit(1)
+
+    if (providerSvc.length === 0) return c.json({ error: 'Provider has no active DVM service' }, 400)
+    if (!providerSvc[0].directRequestEnabled) return c.json({ error: 'Provider has not enabled direct requests' }, 403)
+    if (!providerUser[0].lightningAddress) return c.json({ error: 'Provider has no Lightning Address configured' }, 400)
+
+    const svcKinds = JSON.parse(providerSvc[0].kinds) as number[]
+    if (!svcKinds.includes(kind)) {
+      return c.json({ error: `Provider does not support kind ${kind}` }, 400)
+    }
+
+    directedProviderId = providerUser[0].id
+  }
 
   // Merge min_zap_sats into extraParams for the Nostr event param tags
   const extraParams = { ...body.params }
@@ -1900,37 +1944,15 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
   c.executionCtx.waitUntil((async () => {
     try {
-      const activeServices = await db
-        .select({ userId: dvmServices.userId, kinds: dvmServices.kinds, totalZapReceived: dvmServices.totalZapReceived })
-        .from(dvmServices)
-        .where(eq(dvmServices.active, 1))
-
-      for (const svc of activeServices) {
-        if (svc.userId === user.id) continue // 不给自己投递
-        try {
-          const svcKinds = JSON.parse(svc.kinds) as number[]
-          if (!svcKinds.includes(kind)) continue
-
-          // Check min_zap_sats threshold
-          if (minZapSats && (svc.totalZapReceived || 0) < minZapSats) {
-            console.log(`[DVM] Skipping provider ${svc.userId}: zap ${svc.totalZapReceived || 0} < required ${minZapSats}`)
-            continue
-          }
-
-          // 检查是否已存在（防重复）
-          const existing = await db
-            .select({ id: dvmJobs.id })
-            .from(dvmJobs)
-            .where(and(
-              eq(dvmJobs.requestEventId, event.id),
-              eq(dvmJobs.userId, svc.userId),
-            ))
-            .limit(1)
-          if (existing.length > 0) continue
-
+      if (directedProviderId) {
+        // Directed request: only deliver to the specified provider
+        const existing = await db.select({ id: dvmJobs.id }).from(dvmJobs)
+          .where(and(eq(dvmJobs.requestEventId, event.id), eq(dvmJobs.userId, directedProviderId)))
+          .limit(1)
+        if (existing.length === 0) {
           await db.insert(dvmJobs).values({
             id: generateId(),
-            userId: svc.userId,
+            userId: directedProviderId,
             role: 'provider',
             kind,
             status: 'open',
@@ -1944,8 +1966,57 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
             createdAt: now,
             updatedAt: now,
           })
-          console.log(`[DVM] Local delivery: job ${event.id} → provider ${svc.userId}`)
-        } catch {}
+          console.log(`[DVM] Directed delivery: job ${event.id} → provider ${directedProviderId}`)
+        }
+      } else {
+        // Broadcast: deliver to all matching providers
+        const activeServices = await db
+          .select({ userId: dvmServices.userId, kinds: dvmServices.kinds, totalZapReceived: dvmServices.totalZapReceived })
+          .from(dvmServices)
+          .where(eq(dvmServices.active, 1))
+
+        for (const svc of activeServices) {
+          if (svc.userId === user.id) continue // 不给自己投递
+          try {
+            const svcKinds = JSON.parse(svc.kinds) as number[]
+            if (!svcKinds.includes(kind)) continue
+
+            // Check min_zap_sats threshold
+            if (minZapSats && (svc.totalZapReceived || 0) < minZapSats) {
+              console.log(`[DVM] Skipping provider ${svc.userId}: zap ${svc.totalZapReceived || 0} < required ${minZapSats}`)
+              continue
+            }
+
+            // 检查是否已存在（防重复）
+            const existing = await db
+              .select({ id: dvmJobs.id })
+              .from(dvmJobs)
+              .where(and(
+                eq(dvmJobs.requestEventId, event.id),
+                eq(dvmJobs.userId, svc.userId),
+              ))
+              .limit(1)
+            if (existing.length > 0) continue
+
+            await db.insert(dvmJobs).values({
+              id: generateId(),
+              userId: svc.userId,
+              role: 'provider',
+              kind,
+              status: 'open',
+              input,
+              inputType,
+              output: body.output || null,
+              bidMsats: bidMsats || null,
+              customerPubkey: event.pubkey,
+              requestEventId: event.id,
+              params: paramsJson,
+              createdAt: now,
+              updatedAt: now,
+            })
+            console.log(`[DVM] Local delivery: job ${event.id} → provider ${svc.userId}`)
+          } catch {}
+        }
       }
     } catch (e) {
       console.error('[DVM] Local delivery failed:', e)
@@ -2330,6 +2401,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     kinds?: number[]
     description?: string
     pricing?: { min_sats?: number; max_sats?: number }
+    direct_request_enabled?: boolean
   }
 
   if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
@@ -2340,6 +2412,11 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     if (k < 5000 || k > 5999) {
       return c.json({ error: `Invalid kind ${k}: must be between 5000 and 5999` }, 400)
     }
+  }
+
+  // Enabling direct requests requires a Lightning Address
+  if (body.direct_request_enabled && !user.lightningAddress) {
+    return c.json({ error: 'Lightning Address is required to enable direct requests. Set it via PUT /api/me.' }, 400)
   }
 
   const pricingMin = body.pricing?.min_sats ? body.pricing.min_sats * 1000 : null
@@ -2369,16 +2446,21 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
   const now = new Date()
 
   let serviceId: string
+  const directRequestEnabled = body.direct_request_enabled !== undefined
+    ? (body.direct_request_enabled ? 1 : 0)
+    : undefined
   if (existing.length > 0) {
     serviceId = existing[0].id
-    await db.update(dvmServices).set({
+    const updateSet: Record<string, unknown> = {
       kinds: JSON.stringify(body.kinds),
       description: body.description || null,
       pricingMin,
       pricingMax,
       eventId: handlerEvent.id,
       updatedAt: now,
-    }).where(eq(dvmServices.id, serviceId))
+    }
+    if (directRequestEnabled !== undefined) updateSet.directRequestEnabled = directRequestEnabled
+    await db.update(dvmServices).set(updateSet).where(eq(dvmServices.id, serviceId))
   } else {
     serviceId = generateId()
     await db.insert(dvmServices).values({
@@ -2390,6 +2472,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       pricingMax,
       eventId: handlerEvent.id,
       active: 1,
+      directRequestEnabled: directRequestEnabled || 0,
       createdAt: now,
       updatedAt: now,
     })
@@ -2425,6 +2508,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       pricing_min_sats: s.pricingMin ? Math.floor(s.pricingMin / 1000) : null,
       pricing_max_sats: s.pricingMax ? Math.floor(s.pricingMax / 1000) : null,
       active: !!s.active,
+      direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
       reputation: buildReputationData(s),
       created_at: s.createdAt,

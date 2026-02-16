@@ -106,8 +106,15 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
       since,
     })
 
-    const allEvents = [...dmResult.events, ...mentionResult.events]
-    console.log(`[Board] Fetched ${allEvents.length} events (${dmResult.events.length} DMs, ${mentionResult.events.length} mentions) since ${since}`)
+    // Poll Kind 9735 zap receipts to board
+    const zapResult = await fetchEventsFromRelay(relayUrl, {
+      kinds: [9735],
+      '#p': [boardPubkey],
+      since,
+    })
+
+    const allEvents = [...dmResult.events, ...mentionResult.events, ...zapResult.events]
+    console.log(`[Board] Fetched ${allEvents.length} events (${dmResult.events.length} DMs, ${mentionResult.events.length} mentions, ${zapResult.events.length} zaps) since ${since}`)
 
     // Decrypt board private key once for all DMs
     const boardPrivkeyHex = await decryptNostrPrivkey(
@@ -131,6 +138,132 @@ export async function pollBoardInbox(env: Bindings, db: Database): Promise<void>
           .where(eq(dvmJobs.requestEventId, event.id))
           .limit(1)
         if (existing.length > 0) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Handle Kind 9735 (Zap Receipt) — user zapped board to create a task
+        if (event.kind === 9735) {
+          const descTag = event.tags.find((t: string[]) => t[0] === 'description')
+          if (!descTag || !descTag[1]) {
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          let zapRequest: any
+          try {
+            zapRequest = JSON.parse(descTag[1])
+          } catch {
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          if (zapRequest.kind !== 9734) {
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          // Extract task content from zap comment
+          const zapContent = (zapRequest.content || '').trim()
+          if (!zapContent) {
+            // Pure tip, no task — skip
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          const senderPubkey = zapRequest.pubkey as string
+          if (!senderPubkey) {
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          // Extract zap amount from Kind 9734 amount tag
+          const amountTag = zapRequest.tags?.find((t: string[]) => t[0] === 'amount')
+          const msats = amountTag?.[1] ? parseInt(amountTag[1]) : 0
+          const zapSats = msats > 0 ? Math.floor(msats / 1000) : 0
+
+          // Content dedup check
+          const fiveMinAgoZap = new Date((event.created_at - 300) * 1000)
+          const zapContentDup = await db
+            .select({ id: dvmJobs.id })
+            .from(dvmJobs)
+            .where(and(
+              eq(dvmJobs.userId, board.id),
+              eq(dvmJobs.role, 'customer'),
+              eq(dvmJobs.input, zapContent),
+              sql`${dvmJobs.createdAt} >= ${Math.floor(fiveMinAgoZap.getTime() / 1000)}`,
+            ))
+            .limit(1)
+          if (zapContentDup.length > 0) {
+            console.log(`[Board] Skipping duplicate zap content from ${senderPubkey.slice(0, 8)}...`)
+            if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+            continue
+          }
+
+          // Parse intent — no BOARD_MAX_BID_SATS limit (user paid real sats)
+          const intent = parseIntent(zapContent)
+          const bidMsats = zapSats > 0 ? zapSats * 1000 : undefined
+          console.log(`[Board] Zap from ${senderPubkey.slice(0, 8)}...: ${zapSats} sats, "${zapContent.slice(0, 80)}" → kind ${intent.kind} (${intent.label})`)
+
+          // Build DVM job request event
+          const jobEvent = await buildJobRequestEvent({
+            privEncrypted: board.nostrPrivEncrypted!,
+            iv: board.nostrPrivIv!,
+            masterKey,
+            kind: intent.kind,
+            input: zapContent,
+            inputType: 'text',
+            bidMsats,
+            relays: relayUrls,
+          })
+
+          // Save job to DB
+          const jobId = generateId()
+          const now = new Date()
+          const params = JSON.stringify({
+            board_requester_pubkey: senderPubkey,
+            board_request_event_id: event.id,
+            board_request_kind: 9735,
+            board_bid_sats: zapSats > 0 ? zapSats : undefined,
+            board_zap_receipt_id: event.id,
+          })
+
+          await db.insert(dvmJobs).values({
+            id: jobId,
+            userId: board.id,
+            role: 'customer',
+            kind: intent.kind,
+            eventId: jobEvent.id,
+            status: 'open',
+            input: zapContent,
+            inputType: 'text',
+            bidMsats: bidMsats ?? null,
+            customerPubkey: jobEvent.pubkey,
+            requestEventId: event.id,
+            params,
+            createdAt: now,
+            updatedAt: now,
+          })
+
+          await env.NOSTR_QUEUE.send({ events: [jobEvent] })
+          console.log(`[Board] Created zap job ${jobId} (kind ${intent.kind}) for zap ${event.id.slice(0, 12)}... (${zapSats} sats)`)
+
+          // Send confirmation via Kind 1 reply (can't DM back to a zap)
+          const confirmText = `⚡ Received ${zapSats} sats zap! Working on ${intent.label}...`
+          const replyEvent = await buildSignedEvent({
+            privEncrypted: board.nostrPrivEncrypted!,
+            iv: board.nostrPrivIv!,
+            masterKey,
+            kind: 1,
+            content: confirmText,
+            tags: [
+              ['e', event.id, '', 'reply'],
+              ['p', senderPubkey],
+            ],
+          })
+
+          await env.NOSTR_QUEUE.send({ events: [replyEvent] })
+
           if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
           continue
         }

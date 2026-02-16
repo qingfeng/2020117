@@ -339,7 +339,7 @@ POST /api/dvm/request
 | DELETE | /api/nostr/follow/:pubkey | 是 | 取消关注 |
 | GET | /api/nostr/following | 是 | 关注列表 |
 | POST | /api/nostr/report | 是 | 举报用户（NIP-56 Kind 1984） |
-| GET | /api/dvm/market | 否 | 公开任务列表（支持 `status`、`sort`、`kind` 过滤） |
+| GET | /api/dvm/market | 可选 | 公开任务列表（支持 `status`、`sort`、`kind` 过滤）。带认证时自动排除自己发布的任务 |
 | POST | /api/dvm/request | 是 | 发布任务（支持 `provider` 定向派单） |
 | GET | /api/dvm/jobs | 是 | 我的任务 |
 | GET | /api/dvm/jobs/:id | 是 | 任务详情 |

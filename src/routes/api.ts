@@ -81,18 +81,19 @@ api.get('/agents', async (c) => {
       avatarUrl: users.avatarUrl,
       bio: users.bio,
       nostrPubkey: users.nostrPubkey,
+      userId: dvmServices.userId,
       kinds: dvmServices.kinds,
       description: dvmServices.description,
-      jobsCompleted: dvmServices.jobsCompleted,
-      lastJobAt: dvmServices.lastJobAt,
-      avgResponseMs: dvmServices.avgResponseMs,
       totalZapReceived: dvmServices.totalZapReceived,
       directRequestEnabled: dvmServices.directRequestEnabled,
+      completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
+      lastSeenAt: sql<number>`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
+      avgResponseMs: dvmServices.avgResponseMs,
     })
       .from(dvmServices)
       .innerJoin(users, eq(dvmServices.userId, users.id))
       .where(eq(dvmServices.active, 1))
-      .orderBy(desc(dvmServices.lastJobAt))
+      .orderBy(sql`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id) DESC NULLS LAST`)
       .limit(limit)
       .offset(offset),
     db.select({ count: sql<number>`COUNT(*)` })
@@ -114,8 +115,8 @@ api.get('/agents', async (c) => {
         nostr_pubkey: row.nostrPubkey,
         npub: row.nostrPubkey ? pubkeyToNpub(row.nostrPubkey) : null,
         services: [{ kinds, kind_labels: kindLabels, description: row.description }],
-        completed_jobs_count: row.jobsCompleted || 0,
-        last_seen_at: row.lastJobAt ? Math.floor(row.lastJobAt.getTime() / 1000) : null,
+        completed_jobs_count: row.completedJobsCount || 0,
+        last_seen_at: row.lastSeenAt || null,
         avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
         total_zap_received_sats: row.totalZapReceived || 0,
         direct_request_enabled: !!row.directRequestEnabled,
@@ -393,12 +394,13 @@ api.get('/activity', async (c) => {
       .limit(10),
   ])
 
-  const activities: { type: string; actor: string; action: string; time: Date }[] = []
+  const activities: { type: string; actor: string; actor_username: string | null; action: string; time: Date }[] = []
 
   for (const t of recentTopics) {
     activities.push({
       type: 'post',
       actor: t.authorDisplayName || t.authorUsername || 'unknown',
+      actor_username: t.authorUsername || null,
       action: 'posted a note',
       time: t.createdAt,
     })
@@ -419,6 +421,7 @@ api.get('/activity', async (c) => {
     activities.push({
       type: 'dvm_job',
       actor: j.authorDisplayName || j.authorUsername || 'unknown',
+      actor_username: j.authorUsername || null,
       action,
       time: j.updatedAt,
     })
@@ -432,6 +435,7 @@ api.get('/activity', async (c) => {
     activities.push({
       type: 'like',
       actor: actor || 'unknown',
+      actor_username: l.authorUsername || null,
       action: 'liked a post',
       time: l.createdAt,
     })
@@ -441,6 +445,7 @@ api.get('/activity', async (c) => {
     activities.push({
       type: 'repost',
       actor: r.authorDisplayName || r.authorUsername || 'unknown',
+      actor_username: r.authorUsername || null,
       action: 'reposted a note',
       time: r.createdAt,
     })
@@ -1731,13 +1736,16 @@ api.get('/dvm/market', async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const offset = (page - 1) * limit
 
-  const statuses = statusFilter
-    ? statusFilter.split(',').map(s => s.trim()).filter(Boolean)
-    : ['open', 'error']
+  const isAllStatuses = statusFilter === 'all'
+  const statuses = isAllStatuses
+    ? []
+    : statusFilter
+      ? statusFilter.split(',').map(s => s.trim()).filter(Boolean)
+      : ['open', 'error']
 
   const conditions = [
     eq(dvmJobs.role, 'customer'),
-    inArray(dvmJobs.status, statuses),
+    ...(isAllStatuses ? [] : [inArray(dvmJobs.status, statuses)]),
   ]
   if (kindFilter) {
     const k = parseInt(kindFilter)
@@ -1765,9 +1773,15 @@ api.get('/dvm/market', async (c) => {
         output: dvmJobs.output,
         bidMsats: dvmJobs.bidMsats,
         params: dvmJobs.params,
+        customerPubkey: dvmJobs.customerPubkey,
+        providerPubkey: dvmJobs.providerPubkey,
         createdAt: dvmJobs.createdAt,
+        customerUsername: users.username,
+        customerDisplayName: users.displayName,
+        customerAvatarUrl: users.avatarUrl,
       })
       .from(dvmJobs)
+      .leftJoin(users, eq(dvmJobs.userId, users.id))
       .where(whereClause)
       .orderBy(orderByClause)
       .limit(limit)
@@ -1791,6 +1805,14 @@ api.get('/dvm/market', async (c) => {
         bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
         ...(minZap ? { min_zap_sats: minZap } : {}),
         params: parsedParams,
+        customer: {
+          username: j.customerUsername,
+          display_name: j.customerDisplayName,
+          avatar_url: j.customerAvatarUrl,
+          pubkey: j.customerPubkey,
+          npub: j.customerPubkey ? pubkeyToNpub(j.customerPubkey) : null,
+        },
+        provider_pubkey: j.providerPubkey || null,
         created_at: j.createdAt,
         accept_url: `/api/dvm/jobs/${j.id}/accept`,
       }

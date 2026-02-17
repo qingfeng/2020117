@@ -1468,6 +1468,89 @@ app.post('/admin/nostr/rebroadcast-metadata', loadUser, async (c) => {
   return c.json({ ok: true, rebroadcast: count, total: nostrUsers.length })
 })
 
+// Admin: rebroadcast Kind 31990 (NIP-89 Handler Info) for all active DVM services
+app.post('/admin/nostr/rebroadcast-services', loadUser, async (c) => {
+  const db = c.get('db')
+  if (!c.env.NOSTR_MASTER_KEY || !c.env.NOSTR_QUEUE) {
+    return c.json({ error: 'Nostr not configured' }, 503)
+  }
+
+  // Auth: any authenticated user or raw master key
+  const user = c.get('user')
+  if (!user) {
+    const authHeader = c.req.header('Authorization') || ''
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
+    if (!bearerToken || bearerToken !== c.env.NOSTR_MASTER_KEY) return c.json({ error: 'Unauthorized' }, 401)
+  }
+
+  const { buildHandlerInfoEvent } = await import('./services/dvm')
+  const { users: usersTable, dvmServices } = await import('./db/schema')
+  const { eq } = await import('drizzle-orm')
+
+  const services = await db
+    .select({
+      userId: dvmServices.userId,
+      kinds: dvmServices.kinds,
+      description: dvmServices.description,
+      pricingMin: dvmServices.pricingMin,
+      pricingMax: dvmServices.pricingMax,
+      jobsCompleted: dvmServices.jobsCompleted,
+      jobsRejected: dvmServices.jobsRejected,
+      totalEarnedMsats: dvmServices.totalEarnedMsats,
+      totalZapReceived: dvmServices.totalZapReceived,
+      avgResponseMs: dvmServices.avgResponseMs,
+      lastJobAt: dvmServices.lastJobAt,
+      username: usersTable.username,
+      displayName: usersTable.displayName,
+      nostrPrivEncrypted: usersTable.nostrPrivEncrypted,
+      nostrPrivIv: usersTable.nostrPrivIv,
+    })
+    .from(dvmServices)
+    .innerJoin(usersTable, eq(dvmServices.userId, usersTable.id))
+    .where(eq(dvmServices.active, 1))
+
+  let count = 0
+  const events = []
+  for (const svc of services) {
+    if (!svc.nostrPrivEncrypted || !svc.nostrPrivIv) continue
+    try {
+      const kinds = JSON.parse(svc.kinds) as number[]
+      const completed = svc.jobsCompleted || 0
+      const rejected = svc.jobsRejected || 0
+      const event = await buildHandlerInfoEvent({
+        privEncrypted: svc.nostrPrivEncrypted,
+        iv: svc.nostrPrivIv,
+        masterKey: c.env.NOSTR_MASTER_KEY,
+        kinds,
+        name: svc.displayName || svc.username,
+        about: svc.description || undefined,
+        pricingMin: svc.pricingMin || undefined,
+        pricingMax: svc.pricingMax || undefined,
+        userId: svc.userId,
+        reputation: {
+          jobs_completed: completed,
+          jobs_rejected: rejected,
+          completion_rate: completed + rejected > 0 ? Math.round(completed / (completed + rejected) * 100) : 100,
+          avg_response_s: svc.avgResponseMs ? Math.round(svc.avgResponseMs / 1000) : null,
+          total_earned_sats: Math.floor((svc.totalEarnedMsats || 0) / 1000),
+          total_zap_received_sats: svc.totalZapReceived || 0,
+          last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
+        },
+      })
+      events.push(event)
+      count++
+    } catch (e) {
+      console.error(`[Nostr] Failed to build Kind 31990 for ${svc.username}:`, e)
+    }
+  }
+  if (events.length > 0) {
+    await c.env.NOSTR_QUEUE.send({ events })
+  }
+
+  console.log(`[Nostr] Re-broadcast Kind 31990 for ${count}/${services.length} services`)
+  return c.json({ ok: true, rebroadcast: count, total: services.length })
+})
+
 export default {
   fetch: app.fetch,
   // Cron: Nostr community poll + follow sync + DVM

@@ -6,7 +6,7 @@ import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvent } from '../services/dvm'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
 const api = new Hono<AppContext>()
@@ -2617,19 +2617,21 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
 
   const reputation = existing.length > 0 ? buildReputationData(existing[0]) : undefined
 
-  // Build NIP-89 Handler Info (Kind 31990)
-  const handlerEvent = await buildHandlerInfoEvent({
+  // Build NIP-89 Handler Info (Kind 31990) — one event per kind
+  const handlerEvents = await buildHandlerInfoEvents({
     privEncrypted: user.nostrPrivEncrypted!,
     iv: user.nostrPrivIv!,
     masterKey: c.env.NOSTR_MASTER_KEY!,
     kinds: body.kinds,
     name: user.displayName || user.username,
+    picture: user.avatarUrl || `https://robohash.org/${encodeURIComponent(user.username)}`,
     about: body.description,
     pricingMin: pricingMin || undefined,
     pricingMax: pricingMax || undefined,
     userId: user.id,
     reputation,
   })
+  const handlerEvent = handlerEvents[0] // use first event ID for DB
 
   const now = new Date()
 
@@ -2668,7 +2670,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
 
   // Publish Handler Info to relay
   if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [handlerEvent] }))
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: handlerEvents }))
   }
 
   return c.json({
@@ -2976,19 +2978,20 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       const s = svc[0]
       const updatedSvc = await db.select().from(dvmServices).where(eq(dvmServices.id, s.id)).limit(1)
       if (updatedSvc.length > 0) {
-        const handlerEvent = await buildHandlerInfoEvent({
+        const handlerEvts = await buildHandlerInfoEvents({
           privEncrypted: user.nostrPrivEncrypted!,
           iv: user.nostrPrivIv!,
           masterKey: c.env.NOSTR_MASTER_KEY!,
           kinds: JSON.parse(updatedSvc[0].kinds),
           name: user.displayName || user.username,
+          picture: user.avatarUrl || `https://robohash.org/${encodeURIComponent(user.username)}`,
           about: updatedSvc[0].description || undefined,
           pricingMin: updatedSvc[0].pricingMin || undefined,
           pricingMax: updatedSvc[0].pricingMax || undefined,
           userId: user.id,
           reputation: buildReputationData(updatedSvc[0]),
         })
-        eventsToSend.push(handlerEvent)
+        eventsToSend.push(...handlerEvts)
       }
     }
 

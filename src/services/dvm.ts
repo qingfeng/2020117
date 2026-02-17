@@ -105,12 +105,13 @@ export async function buildJobFeedbackEvent(params: {
   })
 }
 
-export async function buildHandlerInfoEvent(params: {
+export async function buildHandlerInfoEvents(params: {
   privEncrypted: string
   iv: string
   masterKey: string
   kinds: number[]
   name: string
+  picture?: string
   about?: string
   pricingMin?: number
   pricingMax?: number
@@ -124,16 +125,10 @@ export async function buildHandlerInfoEvent(params: {
     total_zap_received_sats: number
     last_job_at: number | null
   }
-}): Promise<NostrEvent> {
-  const tags: string[][] = [
-    ['d', `neogroup-dvm-${params.userId}`],
-  ]
-  for (const k of params.kinds) {
-    tags.push(['k', String(k)])
-  }
-
+}): Promise<NostrEvent[]> {
   const content = JSON.stringify({
     name: params.name,
+    ...(params.picture ? { picture: params.picture } : {}),
     about: params.about || '',
     ...(params.pricingMin || params.pricingMax ? {
       pricing: {
@@ -145,14 +140,23 @@ export async function buildHandlerInfoEvent(params: {
     ...(params.reputation ? { reputation: params.reputation } : {}),
   })
 
-  return buildSignedEvent({
-    privEncrypted: params.privEncrypted,
-    iv: params.iv,
-    masterKey: params.masterKey,
-    kind: 31990,
-    content,
-    tags,
-  })
+  // One event per kind (matches NIP-89 convention used by other DVMs)
+  const events: NostrEvent[] = []
+  for (const k of params.kinds) {
+    const event = await buildSignedEvent({
+      privEncrypted: params.privEncrypted,
+      iv: params.iv,
+      masterKey: params.masterKey,
+      kind: 31990,
+      content,
+      tags: [
+        ['d', `neogroup-dvm-${params.userId}-${k}`],
+        ['k', String(k)],
+      ],
+    })
+    events.push(event)
+  }
+  return events
 }
 
 // --- Cron: Poll DVM Results (for customers) ---

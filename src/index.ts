@@ -1408,15 +1408,12 @@ app.post('/admin/nostr/rebroadcast-metadata', loadUser, async (c) => {
     return c.json({ error: 'Nostr not configured' }, 503)
   }
 
-  const authHeader = c.req.header('Authorization') || ''
-  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
-  if (bearerToken) {
-    if (bearerToken !== c.env.NOSTR_MASTER_KEY) return c.json({ error: 'Invalid token' }, 403)
-  } else {
-    const user = c.get('user')
-    if (!user) return c.json({ error: 'Unauthorized' }, 401)
-    const firstUser = await db.query.users.findFirst({ orderBy: (u, { asc }) => [asc(u.createdAt)] })
-    if (!firstUser || firstUser.id !== user.id) return c.json({ error: 'Forbidden' }, 403)
+  // Auth: any authenticated user or raw master key
+  const user = c.get('user')
+  if (!user) {
+    const authHeader = c.req.header('Authorization') || ''
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
+    if (!bearerToken || bearerToken !== c.env.NOSTR_MASTER_KEY) return c.json({ error: 'Unauthorized' }, 401)
   }
 
   const { buildSignedEvent } = await import('./services/nostr')
@@ -1483,7 +1480,7 @@ app.post('/admin/nostr/rebroadcast-services', loadUser, async (c) => {
     if (!bearerToken || bearerToken !== c.env.NOSTR_MASTER_KEY) return c.json({ error: 'Unauthorized' }, 401)
   }
 
-  const { buildHandlerInfoEvent } = await import('./services/dvm')
+  const { buildHandlerInfoEvents } = await import('./services/dvm')
   const { users: usersTable, dvmServices } = await import('./db/schema')
   const { eq } = await import('drizzle-orm')
 
@@ -1502,6 +1499,7 @@ app.post('/admin/nostr/rebroadcast-services', loadUser, async (c) => {
       lastJobAt: dvmServices.lastJobAt,
       username: usersTable.username,
       displayName: usersTable.displayName,
+      avatarUrl: usersTable.avatarUrl,
       nostrPrivEncrypted: usersTable.nostrPrivEncrypted,
       nostrPrivIv: usersTable.nostrPrivIv,
     })
@@ -1517,12 +1515,13 @@ app.post('/admin/nostr/rebroadcast-services', loadUser, async (c) => {
       const kinds = JSON.parse(svc.kinds) as number[]
       const completed = svc.jobsCompleted || 0
       const rejected = svc.jobsRejected || 0
-      const event = await buildHandlerInfoEvent({
+      const handlerEvts = await buildHandlerInfoEvents({
         privEncrypted: svc.nostrPrivEncrypted,
         iv: svc.nostrPrivIv,
         masterKey: c.env.NOSTR_MASTER_KEY,
         kinds,
         name: svc.displayName || svc.username,
+        picture: svc.avatarUrl || `https://robohash.org/${encodeURIComponent(svc.username)}`,
         about: svc.description || undefined,
         pricingMin: svc.pricingMin || undefined,
         pricingMax: svc.pricingMax || undefined,
@@ -1537,7 +1536,7 @@ app.post('/admin/nostr/rebroadcast-services', loadUser, async (c) => {
           last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
         },
       })
-      events.push(event)
+      events.push(...handlerEvts)
       count++
     } catch (e) {
       console.error(`[Nostr] Failed to build Kind 31990 for ${svc.username}:`, e)

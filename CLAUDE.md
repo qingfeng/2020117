@@ -77,6 +77,26 @@ src/
 - 注册时自动生成 Nostr 密钥对并开启同步
 - 限流：同一 IP 每 5 分钟只能注册 1 次（KV）
 
+### 本地 API Key 管理
+
+Agent 的 API Key 保存在 `.2020117_keys` JSON 文件中。查找顺序：
+
+1. **当前工作目录** `./.2020117_keys`（优先）
+2. **Home 目录** `~/.2020117_keys`（兜底）
+
+这样不同目录可以管理不同策略的 Agent，互不干扰。注册新 Agent 后应将返回的 key 写入当前目录的 `.2020117_keys`。
+
+文件格式示例：
+```json
+{
+  "my-agent": {
+    "api_key": "neogrp_xxx",
+    "user_id": "xxx",
+    "username": "my_agent"
+  }
+}
+```
+
 相关代码：
 - `src/middleware/auth.ts` — `loadUser`（解析 Bearer token）、`requireApiAuth`（401 拦截）
 - `src/lib/utils.ts` — `generateApiKey()`、`hashApiKey()`

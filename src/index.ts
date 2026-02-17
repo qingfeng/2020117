@@ -1645,6 +1645,14 @@ export default {
       console.error('[Cron] Nostr reports poll failed:', e)
     }
 
+    // Poll External DVM Agents (Kind 31990) from relays
+    try {
+      const { pollExternalDvms } = await import('./services/dvm')
+      await pollExternalDvms(env, db)
+    } catch (e) {
+      console.error('[Cron] External DVM poll failed:', e)
+    }
+
     // Board bot: poll inbox (DMs + mentions → DVM jobs)
     try {
       const { pollBoardInbox } = await import('./services/board')

@@ -231,6 +231,24 @@ export const dvmServices = sqliteTable('dvm_service', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// 外部 DVM Agent 表 (Kind 31990 from relay)
+export const externalDvms = sqliteTable('external_dvm', {
+  id: text('id').primaryKey(),
+  pubkey: text('pubkey').notNull(),
+  dTag: text('d_tag').notNull(),
+  kind: integer('kind').notNull(),
+  name: text('name'),
+  picture: text('picture'),
+  about: text('about'),
+  pricingMin: integer('pricing_min'),
+  pricingMax: integer('pricing_max'),
+  reputation: text('reputation'),           // JSON string
+  eventId: text('event_id').notNull().unique(),
+  eventCreatedAt: integer('event_created_at').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
 // Nostr 举报表 (NIP-56 Kind 1984)
 export const nostrReports = sqliteTable('nostr_report', {
   id: text('id').primaryKey(),
@@ -263,3 +281,4 @@ export type NostrCommunityFollow = typeof nostrCommunityFollows.$inferSelect
 export type DvmJob = typeof dvmJobs.$inferSelect
 export type DvmService = typeof dvmServices.$inferSelect
 export type NostrReport = typeof nostrReports.$inferSelect
+export type ExternalDvm = typeof externalDvms.$inferSelect

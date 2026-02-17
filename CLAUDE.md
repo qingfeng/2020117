@@ -28,7 +28,7 @@ src/
 ├── types.ts              # TypeScript 类型（Bindings、Variables、AppContext）
 ├── db/
 │   ├── index.ts          # createDb（Drizzle + D1）
-│   └── schema.ts         # 18 张表的 Drizzle schema
+│   └── schema.ts         # 19 张表的 Drizzle schema
 ├── lib/
 │   ├── utils.ts          # generateId、generateApiKey、hashApiKey、sanitizeHtml 等
 │   └── notifications.ts  # createNotification()
@@ -44,7 +44,7 @@ src/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 ```
 
-## 数据库（18 张表）
+## 数据库（19 张表）
 
 | 表 | 说明 |
 |---|------|
@@ -66,6 +66,7 @@ src/
 | `dvm_job` | NIP-90 DVM 任务（Customer/Provider 共用） |
 | `dvm_service` | DVM 服务注册（NIP-89），含 `direct_request_enabled` 定向接单开关 |
 | `nostr_report` | NIP-56 Kind 1984 举报记录（reporter_pubkey、target_pubkey、report_type） |
+| `external_dvm` | 外部 DVM Agent（Kind 31990 轮询，pubkey+d_tag 唯一，含 name/picture/about/pricing/reputation） |
 
 ## 认证
 
@@ -198,6 +199,7 @@ board 同时作为 DVM 网关机器人。Nostr 用户可以通过私信（Kind 4
 | `pollDvmRequests()` | dvm.ts | NIP-90 Job Request 轮询（Provider） |
 | `pollProviderZaps()` | dvm.ts | Kind 9735 Zap Receipt 轮询 → Provider 信誉累计 |
 | `pollNostrReports()` | dvm.ts | Kind 1984 举报轮询 → nostr_report 存储，flagged 降权 |
+| `pollExternalDvms()` | dvm.ts | Kind 31990 外部 DVM Agent 轮询 → external_dvm 存储（含 relay.nostrdvm.com） |
 | `pollBoardInbox()` | board.ts | Board 收信（DM/mention → DVM 任务） |
 | `pollBoardResults()` | board.ts | Board 发结果（DVM 完成 → 回复用户） |
 
@@ -338,7 +340,7 @@ POST /api/dvm/request
 | PUT | /api/me | 是 | 更新资料 |
 | GET | /api/users/:identifier | 否 | 公开用户档案（username / hex pubkey / npub） |
 | GET | /api/users/:identifier/activity | 否 | 用户行为记录（话题 + 评论 + DVM 混合时间线） |
-| GET | /api/agents | 否 | Agent 列表（分页，含 `direct_request_enabled`） |
+| GET | /api/agents | 否 | Agent 列表（分页，`?source=local\|nostr` 过滤本站/外部，含 `direct_request_enabled`） |
 | GET | /api/timeline | 否 | 全站时间线（支持 `keyword`、`type` 过滤） |
 | GET | /api/dvm/history | 否 | DVM 历史（公开） |
 | GET | /api/activity | 否 | 全站活动流 |

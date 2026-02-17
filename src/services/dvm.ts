@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, users, nostrReports } from '../db/schema'
+import { dvmJobs, dvmServices, users, nostrReports, externalDvms } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -681,5 +681,157 @@ export async function pollNostrReports(env: Bindings, db: Database): Promise<voi
     }
   } catch (e) {
     console.error('[DVM] Failed to poll nostr reports:', e)
+  }
+}
+
+// --- Cron: Poll External DVM Agents (Kind 31990) ---
+
+export async function pollExternalDvms(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  // Add dedicated DVM relay
+  const allRelays = [...new Set([...relayUrls, 'wss://relay.nostrdvm.com'])]
+  if (allRelays.length === 0) return
+
+  // KV-based incremental polling
+  // Kind 31990 = parameterized replaceable events, may have old created_at.
+  // First poll: no `since` filter to get all existing events.
+  // Subsequent polls: use `since` for incremental updates.
+  const kv = env.KV
+  const sinceKey = 'external_dvm_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : undefined
+
+  // Get local pubkeys to exclude
+  const localUsers = await db
+    .select({ nostrPubkey: users.nostrPubkey })
+    .from(users)
+    .where(isNotNull(users.nostrPubkey))
+  const localPubkeys = new Set(localUsers.map(u => u.nostrPubkey!))
+
+  // Fetch Kind 31990 from all relays, dedup by event id
+  const allEvents: Map<string, any> = new Map()
+  for (const relayUrl of allRelays) {
+    try {
+      const filter: Record<string, any> = { kinds: [31990] }
+      if (since) filter.since = since
+      const { events: relayEvents } = await fetchEventsFromRelay(relayUrl, filter)
+      for (const e of relayEvents) {
+        if (!allEvents.has(e.id)) allEvents.set(e.id, e)
+      }
+      console.log(`[DVM] Fetched ${relayEvents.length} Kind 31990 events from ${relayUrl}`)
+    } catch (e) {
+      console.warn(`[DVM] Failed to fetch Kind 31990 from ${relayUrl}:`, e)
+    }
+  }
+  const events = [...allEvents.values()]
+  console.log(`[DVM] Total ${events.length} unique Kind 31990 events since ${since}`)
+
+  let maxCreatedAt = since || 0
+  let upsertCount = 0
+
+  for (const event of events) {
+    if (!verifyEvent(event)) continue
+
+    // Skip local pubkeys
+    if (localPubkeys.has(event.pubkey)) {
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      continue
+    }
+
+    // Extract d tag and k tag
+    const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+    const kTag = event.tags.find((t: string[]) => t[0] === 'k')?.[1]
+    if (!dTag || !kTag) {
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      continue
+    }
+
+    const kind = parseInt(kTag)
+    if (isNaN(kind) || kind < 5000 || kind > 5999) {
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      continue
+    }
+
+    // Parse content JSON
+    let name: string | null = null
+    let picture: string | null = null
+    let about: string | null = null
+    let pricingMin: number | null = null
+    let pricingMax: number | null = null
+    let reputation: string | null = null
+
+    try {
+      const content = JSON.parse(event.content)
+      name = content.name || null
+      picture = content.picture || content.image || null
+      about = content.about || null
+      if (content.pricing) {
+        pricingMin = content.pricing.min || null
+        pricingMax = content.pricing.max || null
+      }
+      if (content.reputation) {
+        reputation = JSON.stringify(content.reputation)
+      }
+    } catch {
+      // Content may not be JSON, use tags fallback
+    }
+
+    // Upsert by (pubkey, d_tag): only update if new event is newer
+    const existing = await db
+      .select({ id: externalDvms.id, eventCreatedAt: externalDvms.eventCreatedAt })
+      .from(externalDvms)
+      .where(and(eq(externalDvms.pubkey, event.pubkey), eq(externalDvms.dTag, dTag)))
+      .limit(1)
+
+    const now = new Date()
+
+    if (existing.length > 0) {
+      if (event.created_at > existing[0].eventCreatedAt) {
+        await db.update(externalDvms)
+          .set({
+            kind,
+            name,
+            picture,
+            about,
+            pricingMin,
+            pricingMax,
+            reputation,
+            eventId: event.id,
+            eventCreatedAt: event.created_at,
+            updatedAt: now,
+          })
+          .where(eq(externalDvms.id, existing[0].id))
+        upsertCount++
+      }
+    } else {
+      await db.insert(externalDvms).values({
+        id: generateId(),
+        pubkey: event.pubkey,
+        dTag,
+        kind,
+        name,
+        picture,
+        about,
+        pricingMin,
+        pricingMax,
+        reputation,
+        eventId: event.id,
+        eventCreatedAt: event.created_at,
+        createdAt: now,
+        updatedAt: now,
+      })
+      upsertCount++
+    }
+
+    if (event.created_at > maxCreatedAt) {
+      maxCreatedAt = event.created_at
+    }
+  }
+
+  console.log(`[DVM] Upserted ${upsertCount} external DVM records`)
+
+  // Update KV timestamp
+  if (maxCreatedAt > (since || 0)) {
+    await kv.put(sinceKey, String(maxCreatedAt + 1))
   }
 }

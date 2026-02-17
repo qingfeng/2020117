@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, nostrReports } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, nostrReports, externalDvms } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
@@ -74,10 +74,12 @@ api.get('/agents', async (c) => {
   const db = c.get('db')
   const page = parseInt(c.req.query('page') || '1')
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
-  const offset = (page - 1) * limit
+  const source = c.req.query('source') // 'local' | 'nostr' | undefined (all)
 
-  const [rows, countResult] = await Promise.all([
-    db.select({
+  // --- Local agents ---
+  let localAgents: any[] = []
+  if (source !== 'nostr') {
+    const rows = await db.select({
       username: users.username,
       displayName: users.displayName,
       avatarUrl: users.avatarUrl,
@@ -97,21 +99,12 @@ api.get('/agents', async (c) => {
       .from(dvmServices)
       .innerJoin(users, eq(dvmServices.userId, users.id))
       .where(eq(dvmServices.active, 1))
-      .orderBy(sql`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id) DESC NULLS LAST`)
-      .limit(limit)
-      .offset(offset),
-    db.select({ count: sql<number>`COUNT(*)` })
-      .from(dvmServices)
-      .where(eq(dvmServices.active, 1)),
-  ])
 
-  const total = countResult[0]?.count || 0
-
-  return c.json({
-    agents: rows.map(row => {
+    localAgents = rows.map(row => {
       const kinds: number[] = JSON.parse(row.kinds)
       const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
       return {
+        source: 'local' as const,
         username: row.username,
         display_name: row.displayName,
         avatar_url: row.avatarUrl,
@@ -127,8 +120,65 @@ api.get('/agents', async (c) => {
         direct_request_enabled: !!row.directRequestEnabled,
         report_count: row.reportCount || 0,
         flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
+        _sort_ts: row.lastSeenAt || 0,
       }
-    }),
+    })
+  }
+
+  // --- External agents (from external_dvm table) ---
+  let externalAgents: any[] = []
+  if (source !== 'local') {
+    const extRows = await db.select().from(externalDvms)
+
+    // Group by pubkey to aggregate kinds
+    const byPubkey = new Map<string, typeof extRows>()
+    for (const row of extRows) {
+      const existing = byPubkey.get(row.pubkey) || []
+      existing.push(row)
+      byPubkey.set(row.pubkey, existing)
+    }
+
+    for (const [pubkey, rows] of byPubkey) {
+      const kinds = rows.map(r => r.kind)
+      const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
+      // Use the most recent row for metadata
+      const latest = rows.reduce((a, b) => a.eventCreatedAt > b.eventCreatedAt ? a : b)
+      externalAgents.push({
+        source: 'nostr' as const,
+        username: null,
+        display_name: latest.name || `${pubkey.slice(0, 12)}...`,
+        avatar_url: latest.picture || null,
+        bio: latest.about || null,
+        nostr_pubkey: pubkey,
+        npub: pubkeyToNpub(pubkey),
+        services: [{ kinds, kind_labels: kindLabels, description: latest.about }],
+        completed_jobs_count: 0,
+        earned_sats: 0,
+        last_seen_at: latest.eventCreatedAt,
+        avg_response_time_s: null,
+        total_zap_received_sats: 0,
+        direct_request_enabled: false,
+        report_count: 0,
+        flagged: false,
+        _sort_ts: latest.eventCreatedAt,
+      })
+    }
+  }
+
+  // Local first, then external; each group sorted by last_seen_at descending
+  localAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
+  externalAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
+  const allAgents = [...localAgents, ...externalAgents]
+
+  const total = allAgents.length
+  const offset = (page - 1) * limit
+  const paged = allAgents.slice(offset, offset + limit)
+
+  // Strip internal sort field
+  const agents = paged.map(({ _sort_ts, ...rest }) => rest)
+
+  return c.json({
+    agents,
     meta: paginationMeta(total, page, limit),
   })
 })

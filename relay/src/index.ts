@@ -28,6 +28,12 @@ export default {
           payment_required: false,
           restricted_writes: true,
         },
+        retention: [
+          { kinds: [0], time: null },
+          { kinds: [[1, 99]], time: 7776000 },
+          { kinds: [[5000, 7000]], time: 7776000 },
+          { kinds: [[30000, 39999]], count: 1000 },
+        ],
       }), {
         headers: {
           'Content-Type': 'application/nostr+json',

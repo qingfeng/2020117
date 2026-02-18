@@ -5,13 +5,17 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "gateway": "node dist/gateway.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@contextvm/sdk": "^0.4.9",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
   }
 }

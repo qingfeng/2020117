@@ -11,5 +11,5 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "gateway.ts", "gateway-server.ts"]
 }

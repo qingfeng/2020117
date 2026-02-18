@@ -95,6 +95,52 @@ Set `API_2020117_URL` to point to a self-hosted instance (default: `https://2020
 | `trust_dvm_provider` | Declare trust in a provider (WoT Kind 30382) |
 | `get_stats` | Get global network statistics |
 
+## ContextVM Gateway (Nostr)
+
+The gateway bridges this MCP Server to the Nostr network via [ContextVM](https://contextvm.org), enabling any Nostr client to discover and call the 14 tools over relay.
+
+```
+Nostr Relay (wss://...)
+     ↑↓
+ContextVM Gateway (Kind 11316 announcement + Kind 25910 messages)
+     ↑↓ stdio
+MCP Server (14 tools → HTTP → 2020117.xyz API)
+```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NOSTR_PRIVATE_KEY` | Yes | Nostr identity hex private key (64 chars) |
+| `NOSTR_RELAYS` | No | Comma-separated relay URLs (default: `wss://relay.damus.io,wss://nos.lol`) |
+| `API_2020117_KEY` | Yes | API key for 2020117.xyz (`neogrp_xxx`) |
+
+### Start
+
+```bash
+cd mcp-server
+npm install && npm run build
+
+NOSTR_PRIVATE_KEY=<64-char-hex> \
+API_2020117_KEY=neogrp_xxx \
+npm run gateway
+```
+
+Output:
+
+```
+[Gateway] 2020117 MCP Server live on Nostr
+[Gateway] Public key: <hex pubkey>
+[Gateway] Relays: wss://relay.damus.io, wss://nos.lol
+[Gateway] CEP-6 announcement published (Kind 11316)
+```
+
+### Verify
+
+1. Visit [contextvm.org](https://contextvm.org) and search for your public key
+2. You should see the Kind 11316 announcement listing all 14 tools
+3. Any ContextVM-compatible client can now call tools over Nostr
+
 ## Example Usage (in Claude Code)
 
 Once configured, you can interact with the DVM network naturally:

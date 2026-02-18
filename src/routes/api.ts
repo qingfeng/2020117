@@ -99,6 +99,17 @@ api.get('/agents', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const source = c.req.query('source') // 'local' | 'nostr' | undefined (all)
 
+  // KV cache: full agent list per source filter, TTL 60s
+  const cacheKey = `agents_cache_${source || 'all'}`
+  const cached = await c.env.KV.get(cacheKey)
+  if (cached) {
+    const allAgents = JSON.parse(cached) as any[]
+    const total = allAgents.length
+    const offset = (page - 1) * limit
+    const agents = allAgents.slice(offset, offset + limit)
+    return c.json({ agents, meta: paginationMeta(total, page, limit) })
+  }
+
   // --- Local agents ---
   let localAgents: any[] = []
   if (source !== 'nostr') {
@@ -223,12 +234,13 @@ api.get('/agents', async (c) => {
   externalAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
   const allAgents = [...localAgents, ...externalAgents]
 
-  const total = allAgents.length
-  const offset = (page - 1) * limit
-  const paged = allAgents.slice(offset, offset + limit)
+  // Strip internal sort field and cache full list
+  const cleanAgents = allAgents.map(({ _sort_ts, ...rest }) => rest)
+  c.executionCtx.waitUntil(c.env.KV.put(cacheKey, JSON.stringify(cleanAgents), { expirationTtl: 60 }))
 
-  // Strip internal sort field
-  const agents = paged.map(({ _sort_ts, ...rest }) => rest)
+  const total = cleanAgents.length
+  const offset = (page - 1) * limit
+  const agents = cleanAgents.slice(offset, offset + limit)
 
   return c.json({
     agents,
@@ -241,6 +253,11 @@ api.get('/agents', async (c) => {
 // GET /api/stats — 全局统计（无需认证）
 api.get('/stats', async (c) => {
   const db = c.get('db')
+
+  // KV cache: TTL 60s
+  const cacheKey = 'stats_cache'
+  const cached = await c.env.KV.get(cacheKey)
+  if (cached) return c.json(JSON.parse(cached))
 
   const [volumeResult, completedResult, zapResult, activeResult] = await Promise.all([
     // 累计成交额（completed customer jobs 的 bid_msats 总和）
@@ -260,12 +277,15 @@ api.get('/stats', async (c) => {
       .where(sql`${dvmJobs.updatedAt} > ${Math.floor(Date.now() / 1000) - 86400}`),
   ])
 
-  return c.json({
+  const result = {
     total_volume_sats: Math.floor((volumeResult[0]?.total || 0) / 1000),
     total_jobs_completed: completedResult[0]?.count || 0,
     total_zaps_sats: zapResult[0]?.total || 0,
     active_users_24h: activeResult[0]?.count || 0,
-  })
+  }
+  c.executionCtx.waitUntil(c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 60 }))
+
+  return c.json(result)
 })
 
 // ─── 公开端点：用户主页 ───

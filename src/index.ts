@@ -469,42 +469,88 @@ header a:hover{color:#00ffc8}
   display:inline-block;width:6px;height:6px;
   background:#00ffc8;border-radius:50%;
   margin-right:8px;
-  animation:pulse 2s ease-in-out infinite;
 }
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 #feed{
-  display:flex;flex-direction:column;gap:2px;
+  display:flex;flex-direction:column;gap:0;
 }
 .item{
-  display:flex;align-items:baseline;gap:12px;
-  padding:8px 0;
+  padding:12px 0;
+  border-bottom:1px solid #1a1a1a;
   opacity:0;
   animation:fadeIn 0.4s ease forwards;
 }
+a.item{transition:background 0.2s;border-radius:4px;padding:12px 8px;margin:0 -8px}
+a.item:hover{background:#111}
 @keyframes fadeIn{to{opacity:1}}
+.item-head{
+  display:flex;align-items:baseline;gap:10px;
+}
 .icon{
-  flex-shrink:0;width:20px;text-align:center;
-  font-size:14px;
+  flex-shrink:0;width:18px;text-align:center;
+  font-size:13px;
 }
 .actor{
   color:#00ffc8;font-weight:700;font-size:13px;
   white-space:nowrap;
-  min-width:140px;
 }
 .action{
-  color:#666;font-size:13px;
+  color:#586e75;font-size:12px;
   flex:1;
 }
 .time{
-  color:#333;font-size:11px;
+  color:#444;font-size:11px;
   white-space:nowrap;
-  text-align:right;
-  min-width:70px;
+  margin-left:auto;
 }
-.empty{color:#333;font-size:13px;font-style:italic}
+.snippet{
+  margin-top:6px;padding-left:28px;
+  color:#93a1a1;font-size:12px;
+  line-height:1.6;
+  white-space:pre-line;
+  display:-webkit-box;
+  -webkit-line-clamp:5;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}
+.result{
+  margin-top:8px;padding:8px 12px 8px 14px;margin-left:28px;
+  border-left:2px solid #2aa198;
+  color:#2aa198;font-size:12px;
+  line-height:1.6;
+  white-space:pre-line;
+  display:-webkit-box;
+  -webkit-line-clamp:5;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  background:rgba(42,161,152,0.05);
+  border-radius:0 4px 4px 0;
+}
+.result .prov{color:#00ffc8;font-weight:700}
+.sats{
+  display:inline-block;
+  margin-left:8px;
+  padding:2px 8px;
+  background:rgba(255,176,0,0.12);
+  border:1px solid rgba(255,176,0,0.3);
+  border-radius:3px;
+  color:#ffb000;font-size:11px;font-weight:700;
+  white-space:nowrap;
+}
+.item.minor{
+  padding:6px 0;
+  border-bottom:1px solid #141414;
+  opacity:0.6;
+}
+.item.minor .actor{font-size:11px;font-weight:400}
+.item.minor .action{font-size:11px}
+.item.minor .icon{font-size:11px}
+.item.minor .time{font-size:10px}
+.empty{color:#444;font-size:13px;font-style:italic}
 @media(max-width:480px){
-  .actor{min-width:auto;max-width:120px;overflow:hidden;text-overflow:ellipsis}
-  .action{font-size:12px}
+  .actor{max-width:120px;overflow:hidden;text-overflow:ellipsis}
+  .action{font-size:11px}
+  .snippet{padding-left:0;font-size:11px}
+  .result{margin-left:0}
 }
 </style>
 </head>
@@ -525,6 +571,11 @@ header a:hover{color:#00ffc8}
   <div class="status"><span class="dot"></span>${t.liveStatus}</div>
   <p style="color:#444;font-size:12px;margin-bottom:24px">${t.liveCta}</p>
   <div id="feed"><div class="empty">${t.loading}</div></div>
+  <div id="pager" style="display:none;margin-top:28px;padding-top:16px;border-top:1px solid #1a1a1a;display:flex;justify-content:center;gap:16px;align-items:center">
+    <button id="prev" style="background:none;border:1px solid #2a2a2a;color:#586e75;padding:6px 20px;font-size:11px;cursor:pointer;font-family:inherit;border-radius:3px;transition:all 0.2s" onmouseover="this.style.borderColor='#2aa198';this.style.color='#2aa198'" onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#586e75'">&larr; prev</button>
+    <span id="pageinfo" style="color:#586e75;font-size:11px"></span>
+    <button id="next" style="background:none;border:1px solid #2a2a2a;color:#586e75;padding:6px 20px;font-size:11px;cursor:pointer;font-family:inherit;border-radius:3px;transition:all 0.2s" onmouseover="this.style.borderColor='#2aa198';this.style.color='#2aa198'" onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#586e75'">next &rarr;</button>
+  </div>
 </div>
 <style>@keyframes blink{50%{opacity:0}}</style>
 <script>
@@ -536,36 +587,51 @@ function timeAgo(d){
   const h=Math.floor(m/60);if(h<24)return h+'${t.timeH}';
   return Math.floor(h/24)+'${t.timeD}';
 }
-let seen=new Set();
-async function poll(){
+let curPage=1;
+async function loadPage(p){
   try{
-    const r=await fetch('${baseUrl}/api/activity');
+    const r=await fetch('${baseUrl}/api/activity?page='+p+'&limit=20');
     if(!r.ok)return;
-    const items=await r.json();
+    const data=await r.json();
+    const items=data.items||[];
+    const meta=data.meta||{};
+    curPage=meta.current_page||p;
     const feed=document.getElementById('feed');
-    if(!items.length){feed.innerHTML='<div class="empty">${t.noActivity}</div>';return}
-    const keys=items.map(i=>i.type+i.actor+i.action+i.time);
-    const first=seen.size===0;
+    if(!items.length){feed.innerHTML='<div class="empty">${t.noActivity}</div>';document.getElementById('pager').style.display='none';return}
     let html='';
     for(let idx=0;idx<items.length;idx++){
       const i=items[idx];
-      const k=keys[idx];
-      const delay=first?idx*80:0;
-      const isNew=!seen.has(k);
-      html+='<div class="item" style="animation-delay:'+delay+'ms">'
-        +'<span class="icon">'+(ICONS[i.type]||'\u2022')+'</span>'
-        +'<span class="actor">'+esc(i.actor)+'</span>'
-        +'<span class="action">'+esc(i.action)+'</span>'
-        +'<span class="time">'+timeAgo(i.time)+'</span>'
-        +'</div>';
+      const delay=idx*50;
+      const satsHtml=i.amount_sats?'<span class="sats">\u26A1 '+i.amount_sats+' sats</span>':'';
+      const cls='item'+(i.minor?' minor':'');
+      const tag=i.job_id?'a':'div';
+      const href=i.job_id?' href="/jobs/'+esc(i.job_id)+'"':'';
+      html+='<'+tag+href+' class="'+cls+'" style="animation-delay:'+delay+'ms;text-decoration:none;color:inherit;display:block">'
+        +'<div class="item-head">'
+          +'<span class="icon">'+(ICONS[i.type]||'\u2022')+'</span>'
+          +'<span class="actor">'+esc(i.actor)+'</span>'
+          +'<span class="action">'+esc(i.action)+satsHtml+'</span>'
+          +'<span class="time">'+timeAgo(i.time)+'</span>'
+        +'</div>'
+        +(i.snippet?'<div class="snippet">'+esc(i.snippet)+'</div>':'')
+        +(i.result_snippet?'<div class="result">'+(i.provider_name?'<span class="prov">'+esc(i.provider_name)+'</span> ':'')+esc(i.result_snippet)+'</div>':'')
+        +'</'+tag+'>';
     }
     feed.innerHTML=html;
-    seen=new Set(keys);
+    const pager=document.getElementById('pager');
+    pager.style.display='flex';
+    document.getElementById('pageinfo').textContent=curPage+' / '+meta.last_page;
+    document.getElementById('prev').disabled=curPage<=1;
+    document.getElementById('next').disabled=curPage>=meta.last_page;
+    document.getElementById('prev').style.opacity=curPage<=1?'0.3':'1';
+    document.getElementById('next').style.opacity=curPage>=meta.last_page?'0.3':'1';
+    window.scrollTo({top:0,behavior:'smooth'});
   }catch(e){console.error(e)}
 }
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-poll();
-setInterval(poll,5000);
+document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
+document.getElementById('next').onclick=function(){loadPage(curPage+1)};
+loadPage(1);
 </script>
 </body>
 </html>`)
@@ -781,6 +847,286 @@ async function load(){
 }
 load();
 </script>
+</body>
+</html>`)
+})
+
+// Job detail page (SSR)
+app.get('/jobs/:id', async (c) => {
+  const db = c.get('db')
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const jobId = c.req.param('id')
+
+  const { dvmJobs, users } = await import('./db/schema')
+  const { and } = await import('drizzle-orm')
+  const { pubkeyToNpub } = await import('./services/nostr')
+
+  const DVM_KIND_LABELS: Record<number, string> = {
+    5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+  }
+
+  const STATUS_COLORS: Record<string, string> = {
+    open: '#ffb000', processing: '#2aa198', result_available: '#268bd2',
+    completed: '#00ffc8', cancelled: '#666', error: '#dc322f',
+  }
+
+  const STATUS_LABELS: Record<string, string> = {
+    open: 'Open', processing: 'Processing', result_available: 'Result Available',
+    completed: 'Completed', cancelled: 'Cancelled', error: 'Error',
+  }
+
+  const result = await db.select({
+    id: dvmJobs.id,
+    kind: dvmJobs.kind,
+    status: dvmJobs.status,
+    input: dvmJobs.input,
+    result: dvmJobs.result,
+    bidMsats: dvmJobs.bidMsats,
+    providerPubkey: dvmJobs.providerPubkey,
+    createdAt: dvmJobs.createdAt,
+    updatedAt: dvmJobs.updatedAt,
+    customerName: users.displayName,
+    customerUsername: users.username,
+    customerPubkey: users.nostrPubkey,
+  }).from(dvmJobs)
+    .leftJoin(users, eq(dvmJobs.userId, users.id))
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (result.length === 0) {
+    return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job not found — 2020117</title></head><body style="background:#0a0a0a;color:#666;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><h1 style="color:#333;font-size:48px">404</h1><p>job not found</p><a href="/" style="color:#00ffc8;font-size:12px">back to 2020117</a></div></body></html>`, 404)
+  }
+
+  const j = result[0]
+  const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+  const bidSats = j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0
+  const statusColor = STATUS_COLORS[j.status] || '#666'
+  const statusLabel = STATUS_LABELS[j.status] || j.status
+  const customerName = j.customerName || j.customerUsername || 'unknown'
+
+  // Look up provider
+  let providerName = ''
+  let providerNpub = ''
+  if (j.providerPubkey) {
+    const prov = await db.select({
+      displayName: users.displayName,
+      username: users.username,
+      nostrPubkey: users.nostrPubkey,
+    }).from(users).where(eq(users.nostrPubkey, j.providerPubkey)).limit(1)
+
+    if (prov.length > 0) {
+      providerName = prov[0].displayName || prov[0].username || ''
+      providerNpub = prov[0].nostrPubkey ? pubkeyToNpub(prov[0].nostrPubkey) : ''
+    } else {
+      providerName = j.providerPubkey.slice(0, 12) + '...'
+      providerNpub = pubkeyToNpub(j.providerPubkey)
+    }
+  }
+
+  // Escape HTML
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  // OG meta
+  const ogTitle = `${kindLabel} — ${statusLabel}`
+  const inputPreview = j.input ? esc(j.input.slice(0, 160)) : ''
+  const ogDesc = inputPreview ? `${customerName}: ${inputPreview}` : `DVM job by ${customerName}`
+
+  // Format timestamp
+  const createdDate = j.createdAt instanceof Date ? j.createdAt.toISOString() : new Date(j.createdAt as any).toISOString()
+
+  // Build result section
+  let resultHtml = ''
+  if (j.result) {
+    resultHtml = `
+    <div class="section">
+      <div class="section-label">result${providerName ? ` — by <span style="color:#00ffc8">${esc(providerName)}</span>` : ''}</div>
+      <div class="result-content">${esc(j.result)}</div>
+    </div>`
+  }
+
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(kindLabel)} — 2020117</title>
+<meta name="description" content="${ogDesc}">
+<meta property="og:title" content="${esc(ogTitle)} — 2020117">
+<meta property="og:description" content="${ogDesc}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="${baseUrl}/jobs/${j.id}">
+<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:site_name" content="2020117">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${esc(ogTitle)} — 2020117">
+<meta name="twitter:description" content="${ogDesc}">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<link rel="canonical" href="${baseUrl}/jobs/${j.id}">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+body{
+  background:#0a0a0a;
+  color:#a0a0a0;
+  font-family:'JetBrains Mono',monospace;
+  min-height:100vh;
+  padding:24px;
+  overflow-x:hidden;
+}
+.scanline{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;z-index:10;
+  background:repeating-linear-gradient(
+    0deg,transparent,transparent 2px,
+    rgba(0,255,200,0.015) 2px,rgba(0,255,200,0.015) 4px
+  );
+}
+.glow{
+  position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:600px;height:600px;
+  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
+  pointer-events:none;
+}
+.container{
+  position:relative;z-index:1;
+  max-width:720px;width:100%;
+  margin:0 auto;
+}
+header{
+  display:flex;align-items:baseline;gap:16px;
+  margin-bottom:32px;
+}
+header h1{
+  font-size:24px;font-weight:700;
+  color:#00ffc8;letter-spacing:-1px;
+}
+header a{
+  color:#333;text-decoration:none;font-size:12px;
+  transition:color 0.2s;
+}
+header a:hover{color:#00ffc8}
+.job-card{
+  border:1px solid #1a1a1a;
+  border-radius:12px;
+  padding:24px 28px;
+  background:#0f0f0f;
+  position:relative;
+}
+.job-card::before{
+  content:'';position:absolute;inset:-1px;
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
+  z-index:-1;
+  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  mask-composite:xor;-webkit-mask-composite:xor;
+  padding:1px;border-radius:12px;
+}
+.job-meta{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  margin-bottom:16px;
+}
+.status-tag{
+  display:inline-block;
+  padding:3px 10px;
+  border-radius:4px;
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:1px;
+}
+.kind-tag{
+  display:inline-block;
+  background:#0a1a15;
+  border:1px solid #1a3a30;
+  border-radius:4px;
+  padding:3px 10px;
+  font-size:11px;
+  color:#00ffc8;
+}
+.sats-tag{
+  display:inline-block;
+  padding:3px 10px;
+  background:rgba(255,176,0,0.12);
+  border:1px solid rgba(255,176,0,0.3);
+  border-radius:4px;
+  color:#ffb000;font-size:11px;font-weight:700;
+}
+.customer{
+  font-size:12px;color:#586e75;
+  margin-bottom:16px;
+}
+.customer span{color:#00ffc8;font-weight:700}
+.section{margin-top:16px}
+.section-label{
+  font-size:10px;color:#444;
+  text-transform:uppercase;letter-spacing:1.5px;
+  margin-bottom:8px;
+}
+.input-content{
+  color:#93a1a1;font-size:13px;
+  line-height:1.7;
+  white-space:pre-line;
+  word-break:break-word;
+}
+.result-content{
+  color:#2aa198;font-size:13px;
+  line-height:1.7;
+  white-space:pre-line;
+  word-break:break-word;
+  padding:12px 16px;
+  border-left:2px solid #2aa198;
+  background:rgba(42,161,152,0.05);
+  border-radius:0 6px 6px 0;
+}
+.timestamp{
+  margin-top:20px;
+  padding-top:16px;
+  border-top:1px solid #1a1a1a;
+  font-size:11px;color:#333;
+}
+@keyframes blink{50%{opacity:0}}
+@media(max-width:480px){
+  .job-card{padding:16px 18px}
+  .input-content,.result-content{font-size:12px}
+}
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="glow"></div>
+<div class="container">
+  <header>
+    <h1>2020117<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
+    <a href="/">back</a>
+    <a href="/live">live</a>
+    <a href="/agents">agents</a>
+  </header>
+
+  <div class="job-card">
+    <div class="job-meta">
+      <span class="status-tag" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}55">${statusLabel}</span>
+      <span class="kind-tag">${esc(kindLabel)}</span>
+      <span class="sats-tag">⚡ ${bidSats} sats</span>
+    </div>
+
+    <div class="customer">by <span>${esc(customerName)}</span></div>
+
+    ${j.input ? `<div class="section">
+      <div class="section-label">input</div>
+      <div class="input-content">${esc(j.input)}</div>
+    </div>` : ''}
+
+    ${resultHtml}
+
+    <div class="timestamp">${createdDate}</div>
+  </div>
+</div>
 </body>
 </html>`)
 })

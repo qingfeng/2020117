@@ -442,6 +442,9 @@ api.get('/users/:identifier/activity', async (c) => {
 
 api.get('/activity', async (c) => {
   const db = c.get('db')
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') || '20')), 50)
+  const fetchLimit = 50 // fetch generously from each table
 
   const [recentTopics, recentJobs, recentLikes, recentReposts] = await Promise.all([
     db.select({
@@ -455,12 +458,17 @@ api.get('/activity', async (c) => {
       .from(topics)
       .leftJoin(users, eq(topics.userId, users.id))
       .orderBy(desc(topics.createdAt))
-      .limit(10),
+      .limit(fetchLimit),
     db.select({
       id: dvmJobs.id,
       kind: dvmJobs.kind,
       status: dvmJobs.status,
-      role: dvmJobs.role,
+      input: dvmJobs.input,
+      output: dvmJobs.output,
+      result: dvmJobs.result,
+      providerPubkey: dvmJobs.providerPubkey,
+      bidMsats: dvmJobs.bidMsats,
+      priceMsats: dvmJobs.priceMsats,
       createdAt: dvmJobs.createdAt,
       updatedAt: dvmJobs.updatedAt,
       authorUsername: users.username,
@@ -468,91 +476,156 @@ api.get('/activity', async (c) => {
     })
       .from(dvmJobs)
       .leftJoin(users, eq(dvmJobs.userId, users.id))
+      .where(eq(dvmJobs.role, 'customer'))
       .orderBy(desc(dvmJobs.updatedAt))
-      .limit(10),
+      .limit(fetchLimit),
     db.select({
       topicId: topicLikes.topicId,
       createdAt: topicLikes.createdAt,
       authorUsername: users.username,
       authorDisplayName: users.displayName,
       nostrAuthorPubkey: topicLikes.nostrAuthorPubkey,
+      topicTitle: topics.title,
+      topicContent: topics.content,
     })
       .from(topicLikes)
       .leftJoin(users, eq(topicLikes.userId, users.id))
+      .leftJoin(topics, eq(topicLikes.topicId, topics.id))
       .orderBy(desc(topicLikes.createdAt))
-      .limit(10),
+      .limit(fetchLimit),
     db.select({
       topicId: topicReposts.topicId,
       createdAt: topicReposts.createdAt,
       authorUsername: users.username,
       authorDisplayName: users.displayName,
+      topicTitle: topics.title,
+      topicContent: topics.content,
     })
       .from(topicReposts)
       .leftJoin(users, eq(topicReposts.userId, users.id))
+      .leftJoin(topics, eq(topicReposts.topicId, topics.id))
       .orderBy(desc(topicReposts.createdAt))
-      .limit(10),
+      .limit(fetchLimit),
   ])
 
-  const activities: { type: string; actor: string; actor_username: string | null; action: string; time: Date }[] = []
+  const stripHtml = (s: string) => s.replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim()
+  const snippet = (s: string | null | undefined, max = 200) => {
+    if (!s) return null
+    const clean = stripHtml(s).replace(/[^\S\n]+/g, ' ').replace(/\n{2,}/g, '\n').trim()
+    return clean.length > max ? clean.slice(0, max) + '...' : clean || null
+  }
+
+  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; minor?: boolean; time: Date }[] = []
 
   for (const t of recentTopics) {
+    const text = t.title ? `${t.title} — ${stripHtml(t.content || '')}` : (t.content || '')
     activities.push({
       type: 'post',
       actor: t.authorDisplayName || t.authorUsername || 'unknown',
       actor_username: t.authorUsername || null,
       action: 'posted a note',
+      snippet: snippet(text),
       time: t.createdAt,
     })
   }
 
+  // Look up provider display names for completed jobs
+  const providerPubkeys = recentJobs.map(j => j.providerPubkey).filter((p): p is string => !!p)
+  const providerMap: Record<string, { username: string | null; displayName: string | null }> = {}
+  if (providerPubkeys.length > 0) {
+    const providers = await db.select({ nostrPubkey: users.nostrPubkey, username: users.username, displayName: users.displayName })
+      .from(users)
+      .where(inArray(users.nostrPubkey, [...new Set(providerPubkeys)]))
+    for (const p of providers) {
+      if (p.nostrPubkey) providerMap[p.nostrPubkey] = { username: p.username, displayName: p.displayName }
+    }
+  }
+
   for (const j of recentJobs) {
     const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
-    let action = ''
-    if (j.role === 'customer') {
-      if (j.status === 'open') action = `requested DVM job (${kindLabel})`
-      else if (j.status === 'completed') action = `completed DVM job (${kindLabel})`
-      else action = `updated DVM job (${kindLabel})`
-    } else {
-      if (j.status === 'completed') action = `fulfilled DVM job (${kindLabel})`
-      else if (j.status === 'processing') action = `is processing DVM job (${kindLabel})`
-      else action = `accepted DVM job (${kindLabel})`
-    }
+    const resultText = j.result || j.output
+    const providerInfo = j.providerPubkey ? providerMap[j.providerPubkey] : null
+    const providerName = providerInfo?.displayName || providerInfo?.username || null
+
+    const msats = j.priceMsats || j.bidMsats
+    const amountSats = (msats && j.status === 'completed') ? Math.round(msats / 1000) : null
+
     activities.push({
       type: 'dvm_job',
       actor: j.authorDisplayName || j.authorUsername || 'unknown',
       actor_username: j.authorUsername || null,
-      action,
+      action: `requested ${kindLabel}`,
+      snippet: snippet(j.input),
+      provider_name: providerName,
+      result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null,
+      amount_sats: amountSats,
+      job_id: j.id,
       time: j.updatedAt,
     })
   }
 
+  // Group likes by actor
+  const likeGroups = new Map<string, { actor: string; actor_username: string | null; count: number; time: Date }>()
   for (const l of recentLikes) {
     let actor = l.authorDisplayName || l.authorUsername || ''
-    if (!actor && l.nostrAuthorPubkey) {
-      actor = l.nostrAuthorPubkey.slice(0, 12) + '...'
+    if (!actor && l.nostrAuthorPubkey) actor = l.nostrAuthorPubkey.slice(0, 12) + '...'
+    actor = actor || 'unknown'
+    const key = l.authorUsername || actor
+    const existing = likeGroups.get(key)
+    if (existing) {
+      existing.count++
+      if (l.createdAt > existing.time) existing.time = l.createdAt
+    } else {
+      likeGroups.set(key, { actor, actor_username: l.authorUsername || null, count: 1, time: l.createdAt })
     }
+  }
+  for (const g of likeGroups.values()) {
     activities.push({
       type: 'like',
-      actor: actor || 'unknown',
-      actor_username: l.authorUsername || null,
-      action: 'liked a post',
-      time: l.createdAt,
+      actor: g.actor,
+      actor_username: g.actor_username,
+      action: g.count > 1 ? `liked ${g.count} posts` : 'liked a post',
+      snippet: null,
+      minor: true,
+      time: g.time,
     })
   }
 
+  // Group reposts by actor
+  const repostGroups = new Map<string, { actor: string; actor_username: string | null; count: number; time: Date }>()
   for (const r of recentReposts) {
+    const actor = r.authorDisplayName || r.authorUsername || 'unknown'
+    const key = r.authorUsername || actor
+    const existing = repostGroups.get(key)
+    if (existing) {
+      existing.count++
+      if (r.createdAt > existing.time) existing.time = r.createdAt
+    } else {
+      repostGroups.set(key, { actor, actor_username: r.authorUsername || null, count: 1, time: r.createdAt })
+    }
+  }
+  for (const g of repostGroups.values()) {
     activities.push({
       type: 'repost',
-      actor: r.authorDisplayName || r.authorUsername || 'unknown',
-      actor_username: r.authorUsername || null,
-      action: 'reposted a note',
-      time: r.createdAt,
+      actor: g.actor,
+      actor_username: g.actor_username,
+      action: g.count > 1 ? `reposted ${g.count} notes` : 'reposted a note',
+      snippet: null,
+      minor: true,
+      time: g.time,
     })
   }
 
   activities.sort((a, b) => b.time.getTime() - a.time.getTime())
 
-  return c.json(activities.slice(0, 20))
+  const total = activities.length
+  const start = (page - 1) * limit
+  const paged = activities.slice(start, start + limit)
+
+  return c.json({
+    items: paged,
+    meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) },
+  })
 })
 
 // ─── 公开端点：全站时间线 ───
@@ -2138,7 +2211,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
-      content: `📡 Looking for ${kindLabel}${bidStr} #dvm #2020117`,
+      content: `📡 Looking for ${kindLabel}${bidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [event, noteEvent]
@@ -2355,6 +2428,77 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
   })
 })
 
+// GET /api/dvm/jobs/:id/public — 公开任务详情（无需认证，只返回 customer job）
+api.get('/dvm/jobs/:id/public', async (c) => {
+  const db = c.get('db')
+  const jobId = c.req.param('id')
+
+  const result = await db.select({
+    id: dvmJobs.id,
+    kind: dvmJobs.kind,
+    status: dvmJobs.status,
+    input: dvmJobs.input,
+    result: dvmJobs.result,
+    bidMsats: dvmJobs.bidMsats,
+    providerPubkey: dvmJobs.providerPubkey,
+    createdAt: dvmJobs.createdAt,
+    updatedAt: dvmJobs.updatedAt,
+    customerName: users.displayName,
+    customerUsername: users.username,
+    customerPubkey: users.nostrPubkey,
+  }).from(dvmJobs)
+    .leftJoin(users, eq(dvmJobs.userId, users.id))
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (result.length === 0) return c.json({ error: 'Job not found' }, 404)
+
+  const j = result[0]
+  const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+
+  // Look up provider name if available
+  let provider: { name: string | null; username: string | null; npub: string | null } | null = null
+  if (j.providerPubkey) {
+    const prov = await db.select({
+      displayName: users.displayName,
+      username: users.username,
+      nostrPubkey: users.nostrPubkey,
+    }).from(users).where(eq(users.nostrPubkey, j.providerPubkey)).limit(1)
+
+    if (prov.length > 0) {
+      provider = {
+        name: prov[0].displayName || prov[0].username,
+        username: prov[0].username,
+        npub: prov[0].nostrPubkey ? pubkeyToNpub(prov[0].nostrPubkey) : null,
+      }
+    } else {
+      provider = {
+        name: j.providerPubkey.slice(0, 12) + '...',
+        username: null,
+        npub: pubkeyToNpub(j.providerPubkey),
+      }
+    }
+  }
+
+  return c.json({
+    id: j.id,
+    kind: j.kind,
+    kind_label: kindLabel,
+    status: j.status,
+    input: j.input,
+    result: j.result,
+    bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
+    customer: {
+      name: j.customerName || j.customerUsername,
+      username: j.customerUsername,
+      npub: j.customerPubkey ? pubkeyToNpub(j.customerPubkey) : null,
+    },
+    provider,
+    created_at: j.createdAt,
+    updated_at: j.updatedAt,
+  })
+})
+
 // POST /api/dvm/jobs/:id/accept — Provider: 接单（为自己创建 provider job）
 api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   const db = c.get('db')
@@ -2449,7 +2593,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
-      content: `⚡ Accepted a ${kindLabel} job #dvm #2020117`,
+      content: `⚡ Accepted a ${kindLabel} job\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [noteEvent]
@@ -2955,6 +3099,7 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
   // Provider's requestEventId may be the Kind 5xxx event ID (from pollDvmRequests)
   // Board customer jobs store Kind 5xxx as eventId, original user event as requestEventId
   // So we check both requestEventId and eventId on customer side
+  let customerJobId: string | null = null
   if (job[0].requestEventId) {
     const customerJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
       .where(and(
@@ -2967,6 +3112,7 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       .limit(1)
 
     if (customerJob.length > 0) {
+      customerJobId = customerJob[0].id
       await db.update(dvmJobs)
         .set({
           status: 'result_available',
@@ -3016,7 +3162,7 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       iv: user.nostrPrivIv!,
       masterKey: c.env.NOSTR_MASTER_KEY!,
       kind: 1,
-      content: `✅ Completed a ${kindLabel} job #dvm #2020117`,
+      content: `✅ Completed a ${kindLabel} job${customerJobId ? `\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${customerJobId}` : ''} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [resultEvent, noteEvent]
@@ -3170,7 +3316,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       iv: user.nostrPrivIv,
       masterKey: c.env.NOSTR_MASTER_KEY,
       kind: 1,
-      content: `🤝 Job done: ${kindLabel}${paidStr} #dvm #2020117`,
+      content: `🤝 Job done: ${kindLabel}${paidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [noteEvent]

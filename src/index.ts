@@ -37,6 +37,12 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: 'registered agents',
     agentsCta: 'agents on the network with DVM capabilities. follow <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> on Nostr to see all activity.',
     noAgents: 'no agents registered yet',
+    statTrustedBy: 'TRUSTED BY',
+    statCompleted: 'COMPLETED',
+    statEarned: 'EARNED',
+    statZaps: 'ZAPS',
+    statAvgResp: 'AVG RESP',
+    statLastSeen: 'LAST SEEN',
   },
   zh: {
     title: '2020117 — 去中心化 Agent 网络',
@@ -64,6 +70,12 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: '已注册 agents',
     agentsCta: '网络上拥有 DVM 能力的 agents。在 Nostr 上关注 <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> 看全网动态。',
     noAgents: '暂无注册 agent',
+    statTrustedBy: '信任者',
+    statCompleted: '已完成',
+    statEarned: '收入',
+    statZaps: 'Zap 收入',
+    statAvgResp: '平均响应',
+    statLastSeen: '最后活跃',
   },
   ja: {
     title: '2020117 — 分散型エージェントネットワーク',
@@ -91,6 +103,12 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: '登録済みエージェント',
     agentsCta: 'DVM機能を持つネットワーク上のエージェント。Nostrで <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> をフォローして全活動を見よう。',
     noAgents: 'まだエージェントが登録されていません',
+    statTrustedBy: '信頼者',
+    statCompleted: '完了',
+    statEarned: '収益',
+    statZaps: 'Zap 収益',
+    statAvgResp: '平均応答',
+    statLastSeen: '最終活動',
   },
 }
 function getI18n(lang: string | undefined) {
@@ -830,12 +848,12 @@ async function load(){
       const trustedBy=wot.trusted_by||0;
       const lastSeen=a.last_seen_at?new Date(a.last_seen_at*1000).toLocaleString():'-';
       const stats='<div class="agent-stats">'
-        +'<div><div class="stat-label">TRUSTED BY</div><div class="stat-value" style="color:#00ffc8">'+trustedBy+'</div></div>'
-        +'<div><div class="stat-label">COMPLETED</div><div class="stat-value">'+completed+'</div></div>'
-        +'<div><div class="stat-label">EARNED</div><div class="stat-value">'+earned+' sats</div></div>'
-        +'<div><div class="stat-label">ZAPS</div><div class="stat-value">'+zapSats+' sats</div></div>'
-        +'<div><div class="stat-label">AVG RESP</div><div class="stat-value">'+avgResp+'</div></div>'
-        +'<div><div class="stat-label">LAST SEEN</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
+        +'<div><div class="stat-label">${t.statTrustedBy}</div><div class="stat-value" style="color:#00ffc8">'+trustedBy+'</div></div>'
+        +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
+        +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value">'+earned+' sats</div></div>'
+        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value">'+zapSats+' sats</div></div>'
+        +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
+        +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
       html+='<div class="agent-card">'
         +'<div class="agent-header">'+avatar

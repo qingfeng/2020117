@@ -1,12 +1,12 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent } from '../services/dvm'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
 const api = new Hono<AppContext>()
@@ -16,24 +16,6 @@ const REPORT_FLAG_THRESHOLD = 3
 const DVM_KIND_LABELS: Record<number, string> = {
   5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
-}
-
-// Helper: build Kind 6 repost from board user
-async function buildBoardRepost(db: import('../db').Database, noteEvent: NostrEvent, masterKey: string, relayUrl?: string): Promise<NostrEvent | null> {
-  try {
-    const board = await db.select({
-      nostrPrivEncrypted: users.nostrPrivEncrypted, nostrPrivIv: users.nostrPrivIv,
-    }).from(users).where(eq(users.username, 'board')).limit(1)
-    if (board.length === 0 || !board[0].nostrPrivEncrypted || !board[0].nostrPrivIv) return null
-    return await buildRepostEvent({
-      privEncrypted: board[0].nostrPrivEncrypted,
-      iv: board[0].nostrPrivIv,
-      masterKey,
-      eventId: noteEvent.id,
-      authorPubkey: noteEvent.pubkey,
-      relayUrl,
-    })
-  } catch { return null }
 }
 
 // Helper: get WoT data for a target pubkey
@@ -62,20 +44,22 @@ function buildReputationData(svc: {
   totalZapReceived: number | null
   avgResponseMs: number | null
   lastJobAt: Date | null
-}, wotData?: { trusted_by: number; trusted_by_your_follows: number }) {
+}, wotData?: { trusted_by: number; trusted_by_your_follows: number }, reviewData?: { avg_rating: number; review_count: number }) {
   const completed = svc.jobsCompleted || 0
   const rejected = svc.jobsRejected || 0
   const total = completed + rejected
   const trustedBy = wotData?.trusted_by || 0
   const zapSats = svc.totalZapReceived || 0
-  // Composite score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5
-  const score = trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5
+  const avgRating = reviewData?.avg_rating || 0
+  // Composite score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5 + avg_rating * 20
+  const score = trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5 + Math.floor(avgRating * 20)
   return {
     score,
     wot: wotData || { trusted_by: 0, trusted_by_your_follows: 0 },
     zaps: {
       total_received_sats: zapSats,
     },
+    reviews: reviewData || { avg_rating: 0, review_count: 0 },
     platform: {
       jobs_completed: completed,
       jobs_rejected: rejected,
@@ -84,6 +68,18 @@ function buildReputationData(svc: {
       total_earned_sats: svc.totalEarnedMsats ? Math.floor(svc.totalEarnedMsats / 1000) : 0,
       last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
     },
+  }
+}
+
+// Helper: get review data for a target pubkey
+async function getReviewData(db: import('../db').Database, targetPubkey: string) {
+  const result = await db.select({
+    avgRating: sql<number>`COALESCE(AVG(rating), 0)`,
+    reviewCount: sql<number>`COUNT(*)`,
+  }).from(dvmReviews).where(eq(dvmReviews.targetPubkey, targetPubkey))
+  return {
+    avg_rating: result[0]?.avgRating ? Math.round(result[0].avgRating * 100) / 100 : 0,
+    review_count: result[0]?.reviewCount || 0,
   }
 }
 
@@ -211,7 +207,8 @@ api.get('/users/:identifier', async (c) => {
   let agentReputation: ReturnType<typeof buildReputationData> | undefined
   if (agentSvc.length > 0) {
     const wot = u.nostrPubkey ? await getWotData(db, u.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
-    agentReputation = buildReputationData(agentSvc[0], wot)
+    const reviews = u.nostrPubkey ? await getReviewData(db, u.nostrPubkey) : { avg_rating: 0, review_count: 0 }
+    agentReputation = buildReputationData(agentSvc[0], wot, reviews)
   }
 
   return c.json({
@@ -1147,11 +1144,7 @@ api.post('/groups/:id/topics', requireApiAuth, async (c) => {
         })
 
         await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
-        const eventsToSend: NostrEvent[] = [event]
-        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
-        if (repost) eventsToSend.push(repost)
-        await c.env.NOSTR_QUEUE!.send({ events: eventsToSend })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
       } catch (e) {
         console.error('[API/Nostr] Failed to publish topic:', e)
       }
@@ -1268,11 +1261,7 @@ api.post('/topics/:id/comments', requireApiAuth, async (c) => {
         })
 
         await db.update(comments).set({ nostrEventId: event.id }).where(eq(comments.id, commentId))
-        const eventsToSend: NostrEvent[] = [event]
-        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
-        if (repost) eventsToSend.push(repost)
-        await c.env.NOSTR_QUEUE!.send({ events: eventsToSend })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
       } catch (e) {
         console.error('[API/Nostr] Failed to publish comment:', e)
       }
@@ -1329,11 +1318,7 @@ api.post('/posts', requireApiAuth, async (c) => {
       nostrEventId = event.id
       await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
       if (c.env.NOSTR_QUEUE) {
-        const eventsToSend: NostrEvent[] = [event]
-        const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-        const repost = await buildBoardRepost(db, event, c.env.NOSTR_MASTER_KEY!, relayUrl)
-        if (repost) eventsToSend.push(repost)
-        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
+        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
       }
     } catch (e) {
       console.error('[API/Nostr] Failed to publish personal post:', e)
@@ -2152,10 +2137,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
       content: `📡 Looking for ${kindLabel}${bidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
-    const eventsToSend: NostrEvent[] = [event, noteEvent]
-    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY!, relayUrl)
-    if (repost) eventsToSend.push(repost)
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, noteEvent] }))
   }
 
   // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
@@ -2345,6 +2327,25 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
   if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
 
   const j = job[0]
+
+  // Fetch reviews for this job
+  const reviews = await db.select({
+    id: dvmReviews.id,
+    rating: dvmReviews.rating,
+    content: dvmReviews.content,
+    role: dvmReviews.role,
+    reviewerUsername: users.username,
+    reviewerDisplayName: users.displayName,
+    createdAt: dvmReviews.createdAt,
+  })
+    .from(dvmReviews)
+    .leftJoin(users, eq(dvmReviews.reviewerUserId, users.id))
+    .where(eq(dvmReviews.jobId, jobId))
+
+  // Escrow: if encrypted result exists and not yet decrypted, show preview
+  const isEscrow = !!j.encryptedResult
+  const showResult = j.status === 'completed' ? j.result : (isEscrow ? null : j.result)
+
   return c.json({
     id: j.id,
     role: j.role,
@@ -2353,7 +2354,10 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
     input: j.input,
     input_type: j.inputType,
     output: j.output,
-    result: j.result,
+    result: showResult,
+    result_preview: isEscrow && j.status !== 'completed' ? j.resultPreview : undefined,
+    result_hash: isEscrow ? j.resultHash : undefined,
+    escrow: isEscrow,
     bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : null,
     price_sats: j.priceMsats ? Math.floor(j.priceMsats / 1000) : null,
     customer_pubkey: j.customerPubkey,
@@ -2363,6 +2367,14 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
     params: j.params ? JSON.parse(j.params) : null,
     created_at: j.createdAt,
     updated_at: j.updatedAt,
+    reviews: reviews.map(r => ({
+      id: r.id,
+      rating: r.rating,
+      content: r.content,
+      role: r.role,
+      reviewer: r.reviewerDisplayName || r.reviewerUsername,
+      created_at: r.createdAt,
+    })),
   })
 })
 
@@ -2534,10 +2546,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
       content: `⚡ Accepted a ${kindLabel} job\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
-    const eventsToSend: NostrEvent[] = [noteEvent]
-    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY, relayUrl)
-    if (repost) eventsToSend.push(repost)
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
   }
 
   // Check if provider is flagged and add warning
@@ -2750,7 +2759,8 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
   let reputation: ReturnType<typeof buildReputationData> | undefined
   if (existing.length > 0) {
     const wot = user.nostrPubkey ? await getWotData(db, user.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
-    reputation = buildReputationData(existing[0], wot)
+    const reviews = user.nostrPubkey ? await getReviewData(db, user.nostrPubkey) : { avg_rating: 0, review_count: 0 }
+    reputation = buildReputationData(existing[0], wot, reviews)
   }
 
   // Build NIP-89 Handler Info (Kind 31990) — one event per kind
@@ -2836,6 +2846,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
 
   // WoT data for current user
   const wotData = user.nostrPubkey ? await getWotData(db, user.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
+  const reviewData = user.nostrPubkey ? await getReviewData(db, user.nostrPubkey) : { avg_rating: 0, review_count: 0 }
 
   return c.json({
     services: services.map(s => ({
@@ -2847,7 +2858,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       active: !!s.active,
       direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
-      reputation: buildReputationData(s, wotData),
+      reputation: buildReputationData(s, wotData, reviewData),
       report_count: reportCount,
       flagged: reportCount >= REPORT_FLAG_THRESHOLD,
       created_at: s.createdAt,
@@ -3204,8 +3215,6 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
     const eventsToSend: NostrEvent[] = [resultEvent, noteEvent]
-    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY!, relayUrl)
-    if (repost) eventsToSend.push(repost)
 
     // Republish updated Kind 31990 with latest reputation
     if (svc.length > 0) {
@@ -3226,7 +3235,10 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
           reputation: buildReputationData(updatedSvc[0],
             user.nostrPubkey
               ? await getWotData(db, user.nostrPubkey)
-              : { trusted_by: 0, trusted_by_your_follows: 0 }),
+              : { trusted_by: 0, trusted_by_your_follows: 0 },
+            user.nostrPubkey
+              ? await getReviewData(db, user.nostrPubkey)
+              : { avg_rating: 0, review_count: 0 }),
         })
         eventsToSend.push(...handlerEvts)
       }
@@ -3360,10 +3372,14 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       content: `🤝 Job done: ${kindLabel}${paidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
-    const eventsToSend: NostrEvent[] = [noteEvent]
-    const repost = await buildBoardRepost(db, noteEvent, c.env.NOSTR_MASTER_KEY, relayUrl)
-    if (repost) eventsToSend.push(repost)
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
+  }
+
+  // Check if this job is part of a workflow — auto-advance
+  try {
+    await advanceWorkflow(db, c.env, jobId)
+  } catch (e) {
+    console.error(`[Workflow] Failed to advance after complete ${jobId}:`, e)
   }
 
   return c.json({
@@ -3373,19 +3389,785 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 })
 
 
-// --- Smart Widget (Kind 30033) ---
+// ─── Phase 1: Kind 30333 — Agent Heartbeat ───
 
-api.get('/widget/root', async (c) => {
+// POST /api/heartbeat — 发送心跳
+api.post('/heartbeat', requireApiAuth, async (c) => {
   const db = c.get('db')
-  const cached = await c.env.KV.get('widget_root_event')
-  if (cached) return c.json(JSON.parse(cached))
-  if (!c.env.NOSTR_MASTER_KEY) return c.json({ error: 'not configured' }, 503)
-  const { getBoardKeys, buildStatsWidget } = await import('../services/widget')
-  const keys = await getBoardKeys(db)
-  if (!keys) return c.json({ error: 'board user not found' }, 503)
-  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-  const event = await buildStatsWidget({ keys, masterKey: c.env.NOSTR_MASTER_KEY, baseUrl })
-  return c.json(event)
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    capacity?: number
+  }
+
+  // Auto-read kinds/pricing from dvmServices
+  const svc = await db.select({ kinds: dvmServices.kinds, pricingMin: dvmServices.pricingMin, pricingMax: dvmServices.pricingMax })
+    .from(dvmServices)
+    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
+    .limit(1)
+
+  let kinds: number[] = []
+  let pricing: Record<string, number> = {}
+  if (svc.length > 0) {
+    kinds = JSON.parse(svc[0].kinds)
+    if (svc[0].pricingMin) {
+      for (const k of kinds) pricing[String(k)] = Math.floor(svc[0].pricingMin / 1000)
+    }
+  }
+
+  const event = await buildHeartbeatEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    pubkey: user.nostrPubkey,
+    capacity: body.capacity,
+    kinds,
+    pricing,
+  })
+
+  // Upsert heartbeat locally
+  const now = new Date()
+  const existing = await db.select({ id: agentHeartbeats.id }).from(agentHeartbeats)
+    .where(eq(agentHeartbeats.userId, user.id)).limit(1)
+
+  if (existing.length > 0) {
+    await db.update(agentHeartbeats).set({
+      status: 'online',
+      capacity: body.capacity || 0,
+      kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
+      pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
+      nostrEventId: event.id,
+      lastSeenAt: Math.floor(Date.now() / 1000),
+      updatedAt: now,
+    }).where(eq(agentHeartbeats.id, existing[0].id))
+  } else {
+    await db.insert(agentHeartbeats).values({
+      id: generateId(),
+      userId: user.id,
+      status: 'online',
+      capacity: body.capacity || 0,
+      kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
+      pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
+      nostrEventId: event.id,
+      lastSeenAt: Math.floor(Date.now() / 1000),
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+
+  // Publish to relay
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  return c.json({ ok: true, event_id: event.id })
+})
+
+// GET /api/agents/online — 在线 Agent 列表
+api.get('/agents/online', async (c) => {
+  const db = c.get('db')
+  const kindFilter = c.req.query('kind')
+
+  let query = db.select({
+    username: users.username,
+    displayName: users.displayName,
+    avatarUrl: users.avatarUrl,
+    nostrPubkey: users.nostrPubkey,
+    status: agentHeartbeats.status,
+    capacity: agentHeartbeats.capacity,
+    kinds: agentHeartbeats.kinds,
+    pricing: agentHeartbeats.pricing,
+    lastSeenAt: agentHeartbeats.lastSeenAt,
+  })
+    .from(agentHeartbeats)
+    .innerJoin(users, eq(agentHeartbeats.userId, users.id))
+    .where(eq(agentHeartbeats.status, 'online'))
+
+  const rows = await query
+
+  let agents = rows.map(r => ({
+    username: r.username,
+    display_name: r.displayName,
+    avatar_url: r.avatarUrl,
+    nostr_pubkey: r.nostrPubkey,
+    npub: r.nostrPubkey ? pubkeyToNpub(r.nostrPubkey) : null,
+    status: r.status,
+    capacity: r.capacity || 0,
+    kinds: r.kinds ? JSON.parse(r.kinds) : [],
+    pricing: r.pricing ? JSON.parse(r.pricing) : null,
+    last_seen_at: r.lastSeenAt,
+  }))
+
+  // Filter by kind if specified
+  if (kindFilter) {
+    const kind = parseInt(kindFilter)
+    agents = agents.filter(a => a.kinds.includes(kind))
+  }
+
+  return c.json({ agents, total: agents.length })
+})
+
+// ─── Phase 2: Kind 31117 — Job Review ───
+
+// POST /api/dvm/jobs/:id/review — 提交评价
+api.post('/dvm/jobs/:id/review', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    rating?: number
+    content?: string
+  }
+
+  if (!body.rating || body.rating < 1 || body.rating > 5) {
+    return c.json({ error: 'rating must be 1-5' }, 400)
+  }
+
+  // Find the job
+  const job = await db.select().from(dvmJobs)
+    .where(eq(dvmJobs.id, jobId))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (job[0].status !== 'completed') return c.json({ error: 'Can only review completed jobs' }, 400)
+
+  // Determine role and target
+  let role: string
+  let targetPubkey: string
+  if (job[0].userId === user.id && job[0].role === 'customer') {
+    role = 'customer'
+    targetPubkey = job[0].providerPubkey || ''
+  } else if (job[0].userId === user.id && job[0].role === 'provider') {
+    role = 'provider'
+    targetPubkey = job[0].customerPubkey || ''
+  } else {
+    return c.json({ error: 'Only job participants can review' }, 403)
+  }
+
+  if (!targetPubkey) return c.json({ error: 'Target pubkey not found' }, 400)
+
+  // Dedup check
+  const existing = await db.select({ id: dvmReviews.id }).from(dvmReviews)
+    .where(and(eq(dvmReviews.jobId, jobId), eq(dvmReviews.reviewerUserId, user.id)))
+    .limit(1)
+
+  if (existing.length > 0) return c.json({ error: 'Already reviewed this job' }, 409)
+
+  const jobEventId = job[0].requestEventId || job[0].eventId || ''
+
+  const event = await buildJobReviewEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    jobEventId,
+    targetPubkey,
+    rating: body.rating,
+    role,
+    jobKind: job[0].kind,
+    content: body.content,
+  })
+
+  await db.insert(dvmReviews).values({
+    id: generateId(),
+    jobId,
+    reviewerUserId: user.id,
+    targetPubkey,
+    rating: body.rating,
+    content: body.content || null,
+    role,
+    jobKind: job[0].kind,
+    nostrEventId: event.id,
+    createdAt: new Date(),
+  })
+
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  return c.json({ ok: true, event_id: event.id }, 201)
+})
+
+// ─── Phase 3: Kind 21117 — Data Escrow ───
+
+// POST /api/dvm/jobs/:id/escrow — Provider: 提交加密结果
+api.post('/dvm/jobs/:id/escrow', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'provider')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (!job[0].customerPubkey || !job[0].requestEventId) {
+    return c.json({ error: 'Job missing request data' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    content?: string
+    preview?: string
+  }
+
+  if (!body.content) return c.json({ error: 'content is required' }, 400)
+
+  // Compute SHA-256 hash of plaintext
+  const { decryptNostrPrivkey } = await import('../services/nostr')
+  const { nip04Encrypt } = await import('../services/nwc')
+
+  const encoder = new TextEncoder()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(body.content))
+  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+  // NIP-04 encrypt content
+  const privkeyHex = await decryptNostrPrivkey(user.nostrPrivEncrypted!, user.nostrPrivIv!, c.env.NOSTR_MASTER_KEY)
+  const encrypted = await nip04Encrypt(privkeyHex, job[0].customerPubkey, body.content)
+
+  const event = await buildEscrowResultEvent({
+    privEncrypted: user.nostrPrivEncrypted!,
+    iv: user.nostrPrivIv!,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    customerPubkey: job[0].customerPubkey,
+    jobEventId: job[0].requestEventId,
+    encryptedPayload: encrypted,
+    hash: hashHex,
+    preview: body.preview,
+  })
+
+  const now = new Date()
+
+  // Update provider job
+  await db.update(dvmJobs).set({
+    status: 'completed',
+    result: body.content,
+    resultEventId: event.id,
+    updatedAt: now,
+  }).where(eq(dvmJobs.id, jobId))
+
+  // Update customer job if same-site
+  if (job[0].requestEventId) {
+    const customerJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
+      .where(and(
+        or(
+          eq(dvmJobs.requestEventId, job[0].requestEventId),
+          eq(dvmJobs.eventId, job[0].requestEventId),
+        ),
+        eq(dvmJobs.role, 'customer'),
+      ))
+      .limit(1)
+
+    if (customerJob.length > 0) {
+      await db.update(dvmJobs).set({
+        status: 'result_available',
+        encryptedResult: encrypted,
+        resultHash: hashHex,
+        resultPreview: body.preview || null,
+        providerPubkey: user.nostrPubkey,
+        resultEventId: event.id,
+        updatedAt: now,
+      }).where(eq(dvmJobs.id, customerJob[0].id))
+    }
+  }
+
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  return c.json({ ok: true, event_id: event.id, hash: hashHex }, 201)
+})
+
+// POST /api/dvm/jobs/:id/decrypt — Customer: 付款后解密
+api.post('/dvm/jobs/:id/decrypt', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const jobId = c.req.param('id')
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const job = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (job.length === 0) return c.json({ error: 'Job not found' }, 404)
+  if (job[0].status !== 'completed') return c.json({ error: 'Job must be completed (paid) before decryption' }, 400)
+  if (!job[0].encryptedResult || !job[0].providerPubkey) {
+    return c.json({ error: 'No encrypted result available' }, 400)
+  }
+
+  const { decryptNostrPrivkey } = await import('../services/nostr')
+  const { nip04Decrypt } = await import('../services/nwc')
+
+  const privkeyHex = await decryptNostrPrivkey(user.nostrPrivEncrypted!, user.nostrPrivIv!, c.env.NOSTR_MASTER_KEY)
+  const plaintext = await nip04Decrypt(privkeyHex, job[0].providerPubkey, job[0].encryptedResult)
+
+  // Verify hash
+  const encoder = new TextEncoder()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(plaintext))
+  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+  if (job[0].resultHash && hashHex !== job[0].resultHash) {
+    return c.json({ error: 'Hash mismatch — data integrity check failed', expected: job[0].resultHash, got: hashHex }, 422)
+  }
+
+  // Store decrypted result
+  await db.update(dvmJobs).set({
+    result: plaintext,
+    updatedAt: new Date(),
+  }).where(eq(dvmJobs.id, jobId))
+
+  return c.json({ ok: true, result: plaintext, hash_verified: true })
+})
+
+// ─── Phase 4: Kind 5117 — Workflow Chain ───
+
+// POST /api/dvm/workflow — 创建工作流
+api.post('/dvm/workflow', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    description?: string
+    input?: string
+    input_type?: string
+    steps?: { kind: number; provider?: string; description?: string }[]
+    bid_sats?: number
+  }
+
+  if (!body.input) return c.json({ error: 'input is required' }, 400)
+  if (!body.steps || body.steps.length < 2) return c.json({ error: 'At least 2 steps required' }, 400)
+  if (body.steps.length > 10) return c.json({ error: 'Maximum 10 steps' }, 400)
+
+  const bidSats = body.bid_sats || 0
+  const inputType = body.input_type || 'text'
+
+  // Build workflow event
+  const event = await buildWorkflowEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    description: body.description || '',
+    input: body.input,
+    inputType,
+    steps: body.steps,
+    bidMsats: bidSats ? bidSats * 1000 : undefined,
+  })
+
+  const now = new Date()
+  const workflowId = generateId()
+
+  // Create workflow
+  await db.insert(dvmWorkflows).values({
+    id: workflowId,
+    userId: user.id,
+    status: 'running',
+    description: body.description || null,
+    totalBidSats: bidSats,
+    nostrEventId: event.id,
+    currentStep: 0,
+    totalSteps: body.steps.length,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Create steps
+  for (let i = 0; i < body.steps.length; i++) {
+    await db.insert(dvmWorkflowSteps).values({
+      id: generateId(),
+      workflowId,
+      stepIndex: i,
+      kind: body.steps[i].kind,
+      description: body.steps[i].description || null,
+      input: i === 0 ? body.input : null,
+      provider: body.steps[i].provider || null,
+      status: i === 0 ? 'running' : 'pending',
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+
+  // Create first DVM job (step 0)
+  const stepBidMsats = bidSats ? Math.floor((bidSats * 1000) / body.steps.length) : undefined
+  const firstJobEvent = await buildJobRequestEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    kind: body.steps[0].kind,
+    input: body.input,
+    inputType,
+    bidMsats: stepBidMsats,
+  })
+
+  const firstJobId = generateId()
+  await db.insert(dvmJobs).values({
+    id: firstJobId,
+    userId: user.id,
+    role: 'customer',
+    kind: body.steps[0].kind,
+    status: 'open',
+    input: body.input,
+    inputType,
+    bidMsats: stepBidMsats || null,
+    customerPubkey: user.nostrPubkey,
+    requestEventId: firstJobEvent.id,
+    eventId: firstJobEvent.id,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Link first step to job
+  await db.update(dvmWorkflowSteps).set({ jobId: firstJobId, updatedAt: now })
+    .where(and(eq(dvmWorkflowSteps.workflowId, workflowId), eq(dvmWorkflowSteps.stepIndex, 0)))
+
+  // Publish events
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, firstJobEvent] }))
+  }
+
+  return c.json({ ok: true, workflow_id: workflowId, first_job_id: firstJobId, event_id: event.id }, 201)
+})
+
+// GET /api/dvm/workflows — 我的工作流列表
+api.get('/dvm/workflows', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+
+  const [countResult, workflows] = await Promise.all([
+    db.select({ count: sql<number>`COUNT(*)` }).from(dvmWorkflows).where(eq(dvmWorkflows.userId, user.id)),
+    db.select().from(dvmWorkflows)
+      .where(eq(dvmWorkflows.userId, user.id))
+      .orderBy(desc(dvmWorkflows.createdAt))
+      .limit(limit)
+      .offset((page - 1) * limit),
+  ])
+
+  return c.json({
+    workflows: workflows.map(w => ({
+      id: w.id,
+      status: w.status,
+      description: w.description,
+      total_bid_sats: w.totalBidSats,
+      current_step: w.currentStep,
+      total_steps: w.totalSteps,
+      created_at: w.createdAt,
+      updated_at: w.updatedAt,
+    })),
+    meta: paginationMeta(countResult[0]?.count || 0, page, limit),
+  })
+})
+
+// GET /api/dvm/workflows/:id — 工作流详情
+api.get('/dvm/workflows/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const workflowId = c.req.param('id')
+
+  const workflow = await db.select().from(dvmWorkflows)
+    .where(and(eq(dvmWorkflows.id, workflowId), eq(dvmWorkflows.userId, user.id)))
+    .limit(1)
+
+  if (workflow.length === 0) return c.json({ error: 'Workflow not found' }, 404)
+
+  const steps = await db.select().from(dvmWorkflowSteps)
+    .where(eq(dvmWorkflowSteps.workflowId, workflowId))
+    .orderBy(asc(dvmWorkflowSteps.stepIndex))
+
+  return c.json({
+    id: workflow[0].id,
+    status: workflow[0].status,
+    description: workflow[0].description,
+    total_bid_sats: workflow[0].totalBidSats,
+    current_step: workflow[0].currentStep,
+    total_steps: workflow[0].totalSteps,
+    created_at: workflow[0].createdAt,
+    updated_at: workflow[0].updatedAt,
+    steps: steps.map(s => ({
+      step_index: s.stepIndex,
+      kind: s.kind,
+      description: s.description,
+      input: s.input,
+      output: s.output,
+      job_id: s.jobId,
+      provider: s.provider,
+      status: s.status,
+    })),
+  })
+})
+
+// ─── Phase 5: Kind 5118 — Agent Swarm ───
+
+// POST /api/dvm/swarm — 创建 swarm 任务
+api.post('/dvm/swarm', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+
+  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'Nostr keys not configured' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    kind?: number
+    input?: string
+    input_type?: string
+    content?: string
+    max_providers?: number
+    judge?: string
+    bid_sats?: number
+  }
+
+  if (!body.kind) return c.json({ error: 'kind is required' }, 400)
+  if (!body.input) return c.json({ error: 'input is required' }, 400)
+  if (!body.max_providers || body.max_providers < 2) return c.json({ error: 'max_providers must be >= 2' }, 400)
+  if (body.max_providers > 20) return c.json({ error: 'max_providers must be <= 20' }, 400)
+
+  const inputType = body.input_type || 'text'
+  const bidSats = body.bid_sats || 0
+
+  // Build swarm event (Kind 5118)
+  const swarmEvent = await buildSwarmEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    content: body.content || body.input,
+    input: body.input,
+    inputType,
+    maxProviders: body.max_providers,
+    judge: body.judge,
+    bidMsats: bidSats ? bidSats * 1000 : undefined,
+    kind: 5118,
+  })
+
+  // Also build standard Kind 5xxx job request
+  const jobEvent = await buildJobRequestEvent({
+    privEncrypted: user.nostrPrivEncrypted,
+    iv: user.nostrPrivIv,
+    masterKey: c.env.NOSTR_MASTER_KEY,
+    kind: body.kind,
+    input: body.input,
+    inputType,
+    bidMsats: bidSats ? bidSats * 1000 : undefined,
+  })
+
+  const now = new Date()
+  const jobId = generateId()
+  const swarmId = generateId()
+
+  // Create customer job
+  await db.insert(dvmJobs).values({
+    id: jobId,
+    userId: user.id,
+    role: 'customer',
+    kind: body.kind,
+    status: 'open',
+    input: body.input,
+    inputType,
+    bidMsats: bidSats ? bidSats * 1000 : null,
+    customerPubkey: user.nostrPubkey,
+    requestEventId: jobEvent.id,
+    eventId: jobEvent.id,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Create swarm
+  await db.insert(dvmSwarms).values({
+    id: swarmId,
+    userId: user.id,
+    jobId,
+    maxProviders: body.max_providers,
+    judge: body.judge || 'customer',
+    status: 'collecting',
+    nostrEventId: swarmEvent.id,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Publish both events
+  if (c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [swarmEvent, jobEvent] }))
+  }
+
+  return c.json({ ok: true, swarm_id: swarmId, job_id: jobId, event_id: swarmEvent.id }, 201)
+})
+
+// GET /api/dvm/swarm/:id — swarm 详情
+api.get('/dvm/swarm/:id', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const swarmId = c.req.param('id')
+
+  const swarm = await db.select().from(dvmSwarms)
+    .where(eq(dvmSwarms.id, swarmId))
+    .limit(1)
+
+  if (swarm.length === 0) return c.json({ error: 'Swarm not found' }, 404)
+
+  const submissions = await db.select({
+    id: dvmSwarmSubmissions.id,
+    providerPubkey: dvmSwarmSubmissions.providerPubkey,
+    providerUserId: dvmSwarmSubmissions.providerUserId,
+    result: dvmSwarmSubmissions.result,
+    status: dvmSwarmSubmissions.status,
+    createdAt: dvmSwarmSubmissions.createdAt,
+    username: users.username,
+    displayName: users.displayName,
+  })
+    .from(dvmSwarmSubmissions)
+    .leftJoin(users, eq(dvmSwarmSubmissions.providerUserId, users.id))
+    .where(eq(dvmSwarmSubmissions.swarmId, swarmId))
+    .orderBy(asc(dvmSwarmSubmissions.createdAt))
+
+  return c.json({
+    id: swarm[0].id,
+    job_id: swarm[0].jobId,
+    max_providers: swarm[0].maxProviders,
+    judge: swarm[0].judge,
+    status: swarm[0].status,
+    winner_id: swarm[0].winnerId,
+    created_at: swarm[0].createdAt,
+    submissions: submissions.map(s => ({
+      id: s.id,
+      provider_pubkey: s.providerPubkey,
+      provider_username: s.username,
+      provider_display_name: s.displayName,
+      result: s.result,
+      status: s.status,
+      created_at: s.createdAt,
+    })),
+  })
+})
+
+// POST /api/dvm/swarm/:id/submit — Provider: 提交结果
+api.post('/dvm/swarm/:id/submit', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const swarmId = c.req.param('id')
+
+  if (!user.nostrPubkey) return c.json({ error: 'Nostr key not configured' }, 400)
+
+  const swarm = await db.select().from(dvmSwarms)
+    .where(eq(dvmSwarms.id, swarmId))
+    .limit(1)
+
+  if (swarm.length === 0) return c.json({ error: 'Swarm not found' }, 404)
+  if (swarm[0].status !== 'collecting') return c.json({ error: 'Swarm is not accepting submissions' }, 400)
+  if (swarm[0].userId === user.id) return c.json({ error: 'Cannot submit to your own swarm' }, 400)
+
+  const body = await c.req.json().catch(() => ({})) as {
+    result?: string
+  }
+
+  if (!body.result) return c.json({ error: 'result is required' }, 400)
+
+  // Dedup check
+  const existing = await db.select({ id: dvmSwarmSubmissions.id }).from(dvmSwarmSubmissions)
+    .where(and(eq(dvmSwarmSubmissions.swarmId, swarmId), eq(dvmSwarmSubmissions.providerPubkey, user.nostrPubkey)))
+    .limit(1)
+
+  if (existing.length > 0) return c.json({ error: 'Already submitted to this swarm' }, 409)
+
+  const submissionId = generateId()
+  await db.insert(dvmSwarmSubmissions).values({
+    id: submissionId,
+    swarmId,
+    providerUserId: user.id,
+    providerPubkey: user.nostrPubkey,
+    result: body.result,
+    status: 'submitted',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  })
+
+  // Check if we've reached max_providers → move to judging
+  const subCount = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(dvmSwarmSubmissions)
+    .where(eq(dvmSwarmSubmissions.swarmId, swarmId))
+
+  if ((subCount[0]?.count || 0) >= swarm[0].maxProviders) {
+    await db.update(dvmSwarms).set({ status: 'judging', updatedAt: new Date() })
+      .where(eq(dvmSwarms.id, swarmId))
+  }
+
+  return c.json({ ok: true, submission_id: submissionId })
+})
+
+// POST /api/dvm/swarm/:id/select — Customer: 选最佳
+api.post('/dvm/swarm/:id/select', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const swarmId = c.req.param('id')
+
+  const swarm = await db.select().from(dvmSwarms)
+    .where(and(eq(dvmSwarms.id, swarmId), eq(dvmSwarms.userId, user.id)))
+    .limit(1)
+
+  if (swarm.length === 0) return c.json({ error: 'Swarm not found' }, 404)
+  if (swarm[0].status !== 'collecting' && swarm[0].status !== 'judging') {
+    return c.json({ error: 'Swarm is not in selection phase' }, 400)
+  }
+
+  const body = await c.req.json().catch(() => ({})) as {
+    submission_id?: string
+  }
+
+  if (!body.submission_id) return c.json({ error: 'submission_id is required' }, 400)
+
+  // Verify submission exists and belongs to this swarm
+  const submission = await db.select().from(dvmSwarmSubmissions)
+    .where(and(eq(dvmSwarmSubmissions.id, body.submission_id), eq(dvmSwarmSubmissions.swarmId, swarmId)))
+    .limit(1)
+
+  if (submission.length === 0) return c.json({ error: 'Submission not found' }, 404)
+
+  const now = new Date()
+
+  // Mark winner
+  await db.update(dvmSwarmSubmissions).set({ status: 'winner', updatedAt: now })
+    .where(eq(dvmSwarmSubmissions.id, body.submission_id))
+
+  // Mark others as rejected
+  await db.update(dvmSwarmSubmissions).set({ status: 'rejected', updatedAt: now })
+    .where(and(
+      eq(dvmSwarmSubmissions.swarmId, swarmId),
+      sql`${dvmSwarmSubmissions.id} != ${body.submission_id}`,
+    ))
+
+  // Update swarm status
+  await db.update(dvmSwarms).set({
+    status: 'completed',
+    winnerId: body.submission_id,
+    updatedAt: now,
+  }).where(eq(dvmSwarms.id, swarmId))
+
+  // Update the customer job with the winning result
+  await db.update(dvmJobs).set({
+    status: 'result_available',
+    result: submission[0].result,
+    providerPubkey: submission[0].providerPubkey,
+    updatedAt: now,
+  }).where(eq(dvmJobs.id, swarm[0].jobId))
+
+  return c.json({ ok: true, winner: body.submission_id })
 })
 
 export default api

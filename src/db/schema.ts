@@ -205,6 +205,9 @@ export const dvmJobs = sqliteTable('dvm_job', {
   params: text('params'),
   bolt11: text('bolt11'),
   paymentHash: text('payment_hash'),
+  encryptedResult: text('encrypted_result'),
+  resultHash: text('result_hash'),
+  resultPreview: text('result_preview'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
@@ -270,6 +273,91 @@ export const nostrReports = sqliteTable('nostr_report', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 
+// Agent 心跳表 (Kind 30333)
+export const agentHeartbeats = sqliteTable('agent_heartbeat', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id).unique(),
+  status: text('status').notNull().default('online'),
+  capacity: integer('capacity').default(0),
+  kinds: text('kinds'),          // JSON: "[5100,5302]"
+  pricing: text('pricing'),      // JSON: '{"5100":50,"5302":30}'
+  nostrEventId: text('nostr_event_id'),
+  lastSeenAt: integer('last_seen_at').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
+// DVM 任务评价表 (Kind 31117)
+export const dvmReviews = sqliteTable('dvm_review', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').notNull().references(() => dvmJobs.id),
+  reviewerUserId: text('reviewer_user_id').notNull().references(() => users.id),
+  targetPubkey: text('target_pubkey').notNull(),
+  rating: integer('rating').notNull(),    // 1-5
+  content: text('content'),
+  role: text('role').notNull(),            // 'customer' | 'provider'
+  jobKind: integer('job_kind').notNull(),
+  nostrEventId: text('nostr_event_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
+// DVM 工作流表 (Kind 5117)
+export const dvmWorkflows = sqliteTable('dvm_workflow', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  status: text('status').notNull(),   // pending|running|completed|failed|cancelled
+  description: text('description'),
+  totalBidSats: integer('total_bid_sats').default(0),
+  nostrEventId: text('nostr_event_id'),
+  currentStep: integer('current_step').default(0),
+  totalSteps: integer('total_steps').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
+// DVM 工作流步骤表
+export const dvmWorkflowSteps = sqliteTable('dvm_workflow_step', {
+  id: text('id').primaryKey(),
+  workflowId: text('workflow_id').notNull().references(() => dvmWorkflows.id),
+  stepIndex: integer('step_index').notNull(),
+  kind: integer('kind').notNull(),
+  description: text('description'),
+  input: text('input'),
+  output: text('output'),
+  jobId: text('job_id'),
+  provider: text('provider'),
+  status: text('status').notNull(),   // pending|running|completed|failed
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
+// DVM Swarm 表 (Kind 5118)
+export const dvmSwarms = sqliteTable('dvm_swarm', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  jobId: text('job_id').notNull().references(() => dvmJobs.id),
+  maxProviders: integer('max_providers').notNull(),
+  judge: text('judge').notNull().default('customer'),
+  status: text('status').notNull(),   // collecting|judging|completed|cancelled
+  winnerId: text('winner_id'),
+  nostrEventId: text('nostr_event_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
+// DVM Swarm 提交表
+export const dvmSwarmSubmissions = sqliteTable('dvm_swarm_submission', {
+  id: text('id').primaryKey(),
+  swarmId: text('swarm_id').notNull().references(() => dvmSwarms.id),
+  providerUserId: text('provider_user_id'),
+  providerPubkey: text('provider_pubkey').notNull(),
+  result: text('result'),
+  resultEventId: text('result_event_id'),
+  status: text('status').notNull(),   // accepted|submitted|winner|rejected
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
 // 类型导出
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
@@ -292,3 +380,9 @@ export type DvmService = typeof dvmServices.$inferSelect
 export type DvmTrust = typeof dvmTrust.$inferSelect
 export type NostrReport = typeof nostrReports.$inferSelect
 export type ExternalDvm = typeof externalDvms.$inferSelect
+export type AgentHeartbeat = typeof agentHeartbeats.$inferSelect
+export type DvmReview = typeof dvmReviews.$inferSelect
+export type DvmWorkflow = typeof dvmWorkflows.$inferSelect
+export type DvmWorkflowStep = typeof dvmWorkflowSteps.$inferSelect
+export type DvmSwarm = typeof dvmSwarms.$inferSelect
+export type DvmSwarmSubmission = typeof dvmSwarmSubmissions.$inferSelect

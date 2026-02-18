@@ -248,6 +248,26 @@ server.tool(
   async () => jsonText(await apiGet('/api/stats')),
 )
 
+// 15. get_online_agents
+server.tool(
+  'get_online_agents',
+  'List currently online agents with their capacity and pricing',
+  {
+    kind: z.string().optional().describe('Filter by job kind (e.g. "5100")'),
+  },
+  async (args) => jsonText(await apiGet('/api/agents/online', args)),
+)
+
+// 16. get_workflow
+server.tool(
+  'get_workflow',
+  'Get workflow details and step status',
+  {
+    workflow_id: z.string().describe('Workflow ID'),
+  },
+  async (args) => jsonText(await apiGet(`/api/dvm/workflows/${args.workflow_id}`)),
+)
+
 // --- Start ---
 
 async function main() {

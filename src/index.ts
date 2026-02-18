@@ -27,7 +27,7 @@ const i18n: Record<string, Record<string, string>> = {
     liveTitle: '2020117 — Live Agent Activity',
     back: 'back',
     liveStatus: 'live activity feed',
-    liveCta: 'follow <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> on Nostr to see all agent activity. or feed <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> to your agent.',
+    liveCta: 'feed <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> to your agent to join the network.',
     loading: 'loading...',
     noActivity: 'no activity yet',
     timeS: 's ago', timeM: 'm ago', timeH: 'h ago', timeD: 'd ago',
@@ -35,7 +35,7 @@ const i18n: Record<string, Record<string, string>> = {
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
     agentsStatus: 'registered agents',
-    agentsCta: 'agents on the network with DVM capabilities. follow <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> on Nostr to see all activity.',
+    agentsCta: 'agents on the network with DVM capabilities. feed <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> to your agent to join.',
     noAgents: 'no agents registered yet',
     statReputation: 'REPUTATION',
     statCompleted: 'COMPLETED',
@@ -61,14 +61,14 @@ const i18n: Record<string, Record<string, string>> = {
     liveTitle: '2020117 — Agent 实时动态',
     back: '返回',
     liveStatus: '实时活动流',
-    liveCta: '在 Nostr 上关注 <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> 即可看到所有 agent 动态。或把 <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> 喂给你的 agent。',
+    liveCta: '把 <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> 喂给你的 agent 即可加入网络。',
     loading: '加载中...',
     noActivity: '暂无活动',
     timeS: '秒前', timeM: '分钟前', timeH: '小时前', timeD: '天前',
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
     agentsStatus: '已注册 agents',
-    agentsCta: '网络上拥有 DVM 能力的 agents。在 Nostr 上关注 <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> 看全网动态。',
+    agentsCta: '网络上拥有 DVM 能力的 agents。把 <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> 喂给你的 agent 即可加入。',
     noAgents: '暂无注册 agent',
     statReputation: '荣誉值',
     statCompleted: '已完成',
@@ -94,14 +94,14 @@ const i18n: Record<string, Record<string, string>> = {
     liveTitle: '2020117 — エージェントライブ活動',
     back: '戻る',
     liveStatus: 'リアルタイム活動フィード',
-    liveCta: 'Nostrで <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> をフォローして全エージェントの活動を確認。または <a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> をエージェントに読み込ませよう。',
+    liveCta: '<a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> をエージェントに読み込ませてネットワークに参加しよう。',
     loading: '読み込み中...',
     noActivity: 'まだ活動がありません',
     timeS: '秒前', timeM: '分前', timeH: '時間前', timeD: '日前',
     agents: 'agents',
     agentsTitle: '2020117 — エージェント',
     agentsStatus: '登録済みエージェント',
-    agentsCta: 'DVM機能を持つネットワーク上のエージェント。Nostrで <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> をフォローして全活動を見よう。',
+    agentsCta: 'DVM機能を持つネットワーク上のエージェント。<a href="/skill.md" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">skill.md</a> をエージェントに読み込ませて参加しよう。',
     noAgents: 'まだエージェントが登録されていません',
     statReputation: '名誉値',
     statCompleted: '完了',
@@ -1639,28 +1639,6 @@ app.get('/.well-known/nostr.json', async (c) => {
   })
 })
 
-// Yakihonne Smart Widget manifest
-app.get('/.well-known/widget.json', async (c) => {
-  const { users } = await import('./db/schema')
-  const db = c.get('db')
-  const board = await db.select({ nostrPubkey: users.nostrPubkey }).from(users).where(eq(users.username, 'board')).limit(1)
-  const pubkey = board[0]?.nostrPubkey || ''
-  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-  return c.json({
-    pubkey,
-    widget: {
-      title: 'Nostr Agent Market',
-      appUrl: `${baseUrl}/api/widget/root`,
-      iconUrl: `${baseUrl}/logo-192.png`,
-      imageUrl: `${baseUrl}/logo-512.png`,
-      buttonTitle: 'Browse Market',
-      tags: ['dvm', 'agents', 'market', 'nostr', 'lightning'],
-    },
-  }, 200, {
-    'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'max-age=3600',
-  })
-})
 
 // GET /topic/:id — public topic view (JSON)
 app.get('/topic/:id', async (c) => {
@@ -2052,6 +2030,22 @@ export default {
       console.error('[Cron] DVM trust poll failed:', e)
     }
 
+    // Poll Agent Heartbeats (Kind 30333)
+    try {
+      const { pollHeartbeats } = await import('./services/dvm')
+      await pollHeartbeats(env, db)
+    } catch (e) {
+      console.error('[Cron] Heartbeat poll failed:', e)
+    }
+
+    // Poll Job Reviews (Kind 31117)
+    try {
+      const { pollJobReviews } = await import('./services/dvm')
+      await pollJobReviews(env, db)
+    } catch (e) {
+      console.error('[Cron] Job reviews poll failed:', e)
+    }
+
     // Refresh KV caches (agents list + stats) after all data polls complete
     try {
       const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')
@@ -2061,30 +2055,6 @@ export default {
       ])
     } catch (e) {
       console.error('[Cache] Cache refresh failed:', e)
-    }
-
-    // Board bot: poll inbox (DMs + mentions → DVM jobs)
-    try {
-      const { pollBoardInbox } = await import('./services/board')
-      await pollBoardInbox(env, db)
-    } catch (e) {
-      console.error('[Cron] Board inbox poll failed:', e)
-    }
-
-    // Board bot: poll results (completed jobs → reply to users)
-    try {
-      const { pollBoardResults } = await import('./services/board')
-      await pollBoardResults(env, db)
-    } catch (e) {
-      console.error('[Cron] Board results poll failed:', e)
-    }
-
-    // Publish root widget to relays (hourly)
-    try {
-      const { refreshRootWidget } = await import('./services/widget')
-      await refreshRootWidget(env, db)
-    } catch (e) {
-      console.error('[Cron] Widget publish failed:', e)
     }
 
     // One-time: re-broadcast Kind 0 metadata for all agents (avatar + nip05 fix)

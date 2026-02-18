@@ -1,5 +1,5 @@
 import { eq, and, sql, inArray } from 'drizzle-orm'
-import { users, dvmServices, dvmJobs, dvmTrust, externalDvms } from '../db/schema'
+import { users, dvmServices, dvmJobs, dvmTrust, externalDvms, agentHeartbeats, dvmReviews } from '../db/schema'
 import { pubkeyToNpub } from './nostr'
 import type { Database } from '../db'
 
@@ -10,9 +10,9 @@ const DVM_KIND_LABELS: Record<number, string> = {
 
 const REPORT_FLAG_THRESHOLD = 3
 
-// Composite reputation score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5
-function calcReputationScore(trustedBy: number, zapSats: number, completed: number): number {
-  return trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5
+// Composite reputation score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5 + avg_rating * 20
+function calcReputationScore(trustedBy: number, zapSats: number, completed: number, avgRating?: number): number {
+  return trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5 + Math.floor((avgRating || 0) * 20)
 }
 
 function buildReputationData(svc: {
@@ -22,18 +22,20 @@ function buildReputationData(svc: {
   totalZapReceived: number | null
   avgResponseMs: number | null
   lastJobAt: Date | null
-}, wotData?: { trusted_by: number; trusted_by_your_follows: number }) {
+}, wotData?: { trusted_by: number; trusted_by_your_follows: number }, reviewData?: { avg_rating: number; review_count: number }) {
   const completed = svc.jobsCompleted || 0
   const rejected = svc.jobsRejected || 0
   const total = completed + rejected
   const trustedBy = wotData?.trusted_by || 0
   const zapSats = svc.totalZapReceived || 0
+  const avgRating = reviewData?.avg_rating || 0
   return {
-    score: calcReputationScore(trustedBy, zapSats, completed),
+    score: calcReputationScore(trustedBy, zapSats, completed, avgRating),
     wot: wotData || { trusted_by: 0, trusted_by_your_follows: 0 },
     zaps: {
       total_received_sats: zapSats,
     },
+    reviews: reviewData || { avg_rating: 0, review_count: 0 },
     platform: {
       jobs_completed: completed,
       jobs_rejected: rejected,
@@ -72,6 +74,11 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     avgResponseMs: dvmServices.avgResponseMs,
     reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
     trustedBy: sql<number>`(SELECT COUNT(*) FROM dvm_trust WHERE dvm_trust.target_pubkey = "user".nostr_pubkey)`,
+    avgRating: sql<number>`(SELECT COALESCE(AVG(dvm_review.rating), 0) FROM dvm_review WHERE dvm_review.target_pubkey = "user".nostr_pubkey)`,
+    reviewCount: sql<number>`(SELECT COUNT(*) FROM dvm_review WHERE dvm_review.target_pubkey = "user".nostr_pubkey)`,
+    onlineStatus: sql<string>`(SELECT ah.status FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
+    heartbeatCapacity: sql<number>`(SELECT ah.capacity FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
+    heartbeatPricing: sql<string>`(SELECT ah.pricing FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
   })
     .from(dvmServices)
     .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -97,9 +104,15 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       direct_request_enabled: !!row.directRequestEnabled,
       report_count: row.reportCount || 0,
       flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
+      online_status: row.onlineStatus || 'unknown',
+      capacity: row.heartbeatCapacity || 0,
+      pricing: row.heartbeatPricing ? JSON.parse(row.heartbeatPricing) : null,
       reputation: buildReputationData(row, {
         trusted_by: row.trustedBy || 0,
         trusted_by_your_follows: 0,
+      }, {
+        avg_rating: row.avgRating ? Math.round(row.avgRating * 100) / 100 : 0,
+        review_count: row.reviewCount || 0,
       }),
       _sort_ts: row.lastSeenAt || 0,
     }

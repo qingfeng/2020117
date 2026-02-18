@@ -36,6 +36,8 @@ const ALLOWED_TOOLS = new Set([
   'get_timeline',
   'get_dvm_market',
   'get_stats',
+  'get_online_agents',
+  'get_workflow',
 ])
 
 const signer = new PrivateKeySigner(normalizedKey)

@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms } from '../db/schema'
+import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -280,6 +280,13 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
             })
             .where(eq(dvmJobs.id, job.id))
           console.log(`[DVM] Job ${job.id} → result_available (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''})`)
+
+          // Check if this job is part of a workflow — auto-advance
+          try {
+            await advanceWorkflow(db, env, job.id)
+          } catch (e) {
+            console.error(`[Workflow] Failed to advance after job ${job.id}:`, e)
+          }
         }
 
         if (event.created_at > maxCreatedAt) {
@@ -945,4 +952,526 @@ export async function pollDvmTrust(env: Bindings, db: Database): Promise<void> {
   if (maxCreatedAt > since) {
     await kv.put(sinceKey, String(maxCreatedAt + 1))
   }
+}
+
+// --- Kind 30333: Agent Heartbeat ---
+
+export async function buildHeartbeatEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  pubkey: string
+  capacity?: number
+  kinds?: number[]
+  pricing?: Record<string, number>
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['d', params.pubkey],
+    ['status', 'online'],
+  ]
+  if (params.capacity !== undefined) {
+    tags.push(['capacity', String(params.capacity)])
+  }
+  if (params.kinds && params.kinds.length > 0) {
+    tags.push(['kinds', params.kinds.join(',')])
+  }
+  if (params.pricing && Object.keys(params.pricing).length > 0) {
+    const priceStr = Object.entries(params.pricing).map(([k, v]) => `${k}:${v}`).join(',')
+    tags.push(['price', priceStr])
+  }
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 30333,
+    content: '',
+    tags,
+  })
+}
+
+// --- Kind 31117: Job Review ---
+
+export async function buildJobReviewEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  jobEventId: string
+  targetPubkey: string
+  rating: number
+  role: string
+  jobKind: number
+  content?: string
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['d', params.jobEventId],
+    ['p', params.targetPubkey],
+    ['rating', String(params.rating)],
+    ['role', params.role],
+    ['kind', String(params.jobKind)],
+  ]
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 31117,
+    content: params.content || '',
+    tags,
+  })
+}
+
+// --- Kind 21117: Escrow Result ---
+
+export async function buildEscrowResultEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  customerPubkey: string
+  jobEventId: string
+  encryptedPayload: string
+  hash: string
+  preview?: string
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['p', params.customerPubkey],
+    ['e', params.jobEventId],
+    ['hash', params.hash],
+  ]
+  if (params.preview) {
+    tags.push(['preview', params.preview])
+  }
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 21117,
+    content: params.encryptedPayload,
+    tags,
+  })
+}
+
+// --- Kind 5117: Workflow Chain ---
+
+export async function buildWorkflowEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  description: string
+  input: string
+  inputType: string
+  steps: { kind: number; provider?: string; description?: string }[]
+  bidMsats?: number
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['i', params.input, params.inputType],
+  ]
+  for (let i = 0; i < params.steps.length; i++) {
+    const step = params.steps[i]
+    tags.push(['step', String(i), String(step.kind), step.provider || '', step.description || ''])
+  }
+  if (params.bidMsats) {
+    tags.push(['bid', String(params.bidMsats)])
+  }
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 5117,
+    content: params.description,
+    tags,
+  })
+}
+
+// --- Kind 5118: Agent Swarm ---
+
+export async function buildSwarmEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  content: string
+  input: string
+  inputType: string
+  maxProviders: number
+  judge?: string
+  bidMsats?: number
+  kind: number
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['i', params.input, params.inputType],
+    ['swarm', String(params.maxProviders)],
+    ['judge', params.judge || 'customer'],
+  ]
+  if (params.bidMsats) {
+    tags.push(['bid', String(params.bidMsats)])
+  }
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: params.kind,
+    content: params.content,
+    tags,
+  })
+}
+
+// --- Cron: Poll Heartbeats (Kind 30333) ---
+
+export async function pollHeartbeats(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  const kv = env.KV
+  const sinceKey = 'heartbeat_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 3600
+
+  const relayUrl = relayUrls[0]
+  let maxCreatedAt = since
+
+  try {
+    const { events } = await fetchEventsFromRelay(relayUrl, {
+      kinds: [30333],
+      since,
+    })
+
+    console.log(`[DVM] Fetched ${events.length} heartbeat events since ${since}`)
+
+    // Get local user pubkeys for matching
+    const localUsers = await db
+      .select({ id: users.id, nostrPubkey: users.nostrPubkey })
+      .from(users)
+      .where(isNotNull(users.nostrPubkey))
+    const pubkeyToUserId = new Map(localUsers.map(u => [u.nostrPubkey!, u.id]))
+
+    for (const event of events) {
+      if (!verifyEvent(event)) continue
+
+      const userId = pubkeyToUserId.get(event.pubkey)
+      if (!userId) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      const statusTag = event.tags.find((t: string[]) => t[0] === 'status')
+      const capacityTag = event.tags.find((t: string[]) => t[0] === 'capacity')
+      const kindsTag = event.tags.find((t: string[]) => t[0] === 'kinds')
+      const priceTag = event.tags.find((t: string[]) => t[0] === 'price')
+
+      const status = statusTag?.[1] || 'online'
+      const capacity = capacityTag?.[1] ? parseInt(capacityTag[1]) : 0
+      const kinds = kindsTag?.[1] ? JSON.stringify(kindsTag[1].split(',').map(Number)) : null
+      let pricing: string | null = null
+      if (priceTag?.[1]) {
+        const priceObj: Record<string, number> = {}
+        for (const pair of priceTag[1].split(',')) {
+          const [k, v] = pair.split(':')
+          if (k && v) priceObj[k] = parseInt(v)
+        }
+        pricing = JSON.stringify(priceObj)
+      }
+
+      const now = new Date()
+      const existing = await db.select({ id: agentHeartbeats.id }).from(agentHeartbeats)
+        .where(eq(agentHeartbeats.userId, userId))
+        .limit(1)
+
+      if (existing.length > 0) {
+        await db.update(agentHeartbeats)
+          .set({
+            status,
+            capacity,
+            kinds,
+            pricing,
+            nostrEventId: event.id,
+            lastSeenAt: event.created_at,
+            updatedAt: now,
+          })
+          .where(eq(agentHeartbeats.id, existing[0].id))
+      } else {
+        await db.insert(agentHeartbeats).values({
+          id: generateId(),
+          userId,
+          status,
+          capacity,
+          kinds,
+          pricing,
+          nostrEventId: event.id,
+          lastSeenAt: event.created_at,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+
+      if (event.created_at > maxCreatedAt) {
+        maxCreatedAt = event.created_at
+      }
+    }
+
+    // Mark agents offline if not seen for 10 minutes
+    const offlineThreshold = Math.floor(Date.now() / 1000) - 600
+    await db.update(agentHeartbeats)
+      .set({ status: 'offline', updatedAt: new Date() })
+      .where(and(
+        eq(agentHeartbeats.status, 'online'),
+        sql`${agentHeartbeats.lastSeenAt} < ${offlineThreshold}`,
+      ))
+
+    if (maxCreatedAt > since) {
+      await kv.put(sinceKey, String(maxCreatedAt + 1))
+    }
+  } catch (e) {
+    console.error('[DVM] Failed to poll heartbeats:', e)
+  }
+}
+
+// --- Cron: Poll Job Reviews (Kind 31117) ---
+
+export async function pollJobReviews(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Get provider pubkeys to filter #p
+  const activeServices = await db
+    .select({ nostrPubkey: users.nostrPubkey })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  const providerPubkeys = [...new Set(activeServices.map(s => s.nostrPubkey).filter((pk): pk is string => !!pk))]
+  if (providerPubkeys.length === 0) return
+
+  const kv = env.KV
+  const sinceKey = 'dvm_review_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400
+
+  const relayUrl = relayUrls[0]
+  let maxCreatedAt = since
+
+  // Get local user pubkeys for matching reviewers
+  const localUsers = await db
+    .select({ id: users.id, nostrPubkey: users.nostrPubkey })
+    .from(users)
+    .where(isNotNull(users.nostrPubkey))
+  const pubkeyToUserId = new Map(localUsers.map(u => [u.nostrPubkey!, u.id]))
+
+  try {
+    const { events } = await fetchEventsFromRelay(relayUrl, {
+      kinds: [31117],
+      '#p': providerPubkeys,
+      since,
+    })
+
+    console.log(`[DVM] Fetched ${events.length} Kind 31117 review events since ${since}`)
+
+    for (const event of events) {
+      if (!verifyEvent(event)) continue
+
+      const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+      const pTag = event.tags.find((t: string[]) => t[0] === 'p')?.[1]
+      const ratingTag = event.tags.find((t: string[]) => t[0] === 'rating')?.[1]
+      const roleTag = event.tags.find((t: string[]) => t[0] === 'role')?.[1]
+      const kindTag = event.tags.find((t: string[]) => t[0] === 'kind')?.[1]
+
+      if (!dTag || !pTag || !ratingTag || !roleTag || !kindTag) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      const rating = parseInt(ratingTag)
+      if (rating < 1 || rating > 5) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      // Match d tag (job event ID) to a local job
+      const matchingJob = await db.select({ id: dvmJobs.id }).from(dvmJobs)
+        .where(eq(dvmJobs.requestEventId, dTag))
+        .limit(1)
+
+      if (matchingJob.length === 0) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      // Find reviewer user
+      let reviewerUserId = pubkeyToUserId.get(event.pubkey)
+      if (!reviewerUserId) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      // Dedup: (job_id, reviewer_user_id)
+      const existing = await db.select({ id: dvmReviews.id }).from(dvmReviews)
+        .where(and(
+          eq(dvmReviews.jobId, matchingJob[0].id),
+          eq(dvmReviews.reviewerUserId, reviewerUserId),
+        ))
+        .limit(1)
+
+      if (existing.length > 0) {
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+        continue
+      }
+
+      await db.insert(dvmReviews).values({
+        id: generateId(),
+        jobId: matchingJob[0].id,
+        reviewerUserId,
+        targetPubkey: pTag,
+        rating,
+        content: event.content || null,
+        role: roleTag,
+        jobKind: parseInt(kindTag),
+        nostrEventId: event.id,
+        createdAt: new Date(event.created_at * 1000),
+      })
+
+      console.log(`[DVM] Stored review for job ${matchingJob[0].id} (rating: ${rating})`)
+
+      if (event.created_at > maxCreatedAt) {
+        maxCreatedAt = event.created_at
+      }
+    }
+
+    if (maxCreatedAt > since) {
+      await kv.put(sinceKey, String(maxCreatedAt + 1))
+    }
+  } catch (e) {
+    console.error('[DVM] Failed to poll job reviews:', e)
+  }
+}
+
+// --- Workflow: Advance to next step ---
+
+export async function advanceWorkflow(db: Database, env: Bindings, completedJobId: string): Promise<void> {
+  // Check if this job belongs to a workflow step
+  const step = await db.select().from(dvmWorkflowSteps)
+    .where(eq(dvmWorkflowSteps.jobId, completedJobId))
+    .limit(1)
+
+  if (step.length === 0) return
+
+  const currentStep = step[0]
+
+  // Get the completed job's result
+  const job = await db.select({ result: dvmJobs.result }).from(dvmJobs)
+    .where(eq(dvmJobs.id, completedJobId))
+    .limit(1)
+
+  if (job.length === 0) return
+
+  const now = new Date()
+
+  // Mark current step as completed with output
+  await db.update(dvmWorkflowSteps).set({
+    status: 'completed',
+    output: job[0].result,
+    updatedAt: now,
+  }).where(eq(dvmWorkflowSteps.id, currentStep.id))
+
+  // Get workflow
+  const workflow = await db.select().from(dvmWorkflows)
+    .where(eq(dvmWorkflows.id, currentStep.workflowId))
+    .limit(1)
+
+  if (workflow.length === 0) return
+
+  const wf = workflow[0]
+  const nextStepIndex = currentStep.stepIndex + 1
+
+  // Update workflow current_step
+  await db.update(dvmWorkflows).set({
+    currentStep: nextStepIndex,
+    updatedAt: now,
+  }).where(eq(dvmWorkflows.id, wf.id))
+
+  // Check if this was the last step
+  if (nextStepIndex >= wf.totalSteps) {
+    await db.update(dvmWorkflows).set({
+      status: 'completed',
+      updatedAt: now,
+    }).where(eq(dvmWorkflows.id, wf.id))
+    console.log(`[Workflow] ${wf.id} completed (all ${wf.totalSteps} steps done)`)
+    return
+  }
+
+  // Get next step
+  const nextStep = await db.select().from(dvmWorkflowSteps)
+    .where(and(
+      eq(dvmWorkflowSteps.workflowId, wf.id),
+      eq(dvmWorkflowSteps.stepIndex, nextStepIndex),
+    ))
+    .limit(1)
+
+  if (nextStep.length === 0) {
+    await db.update(dvmWorkflows).set({ status: 'failed', updatedAt: now }).where(eq(dvmWorkflows.id, wf.id))
+    return
+  }
+
+  // Create DVM job for next step, using previous step's output as input
+  const nextInput = job[0].result || ''
+  const wfUser = await db.select().from(users).where(eq(users.id, wf.userId)).limit(1)
+  if (wfUser.length === 0 || !wfUser[0].nostrPrivEncrypted || !wfUser[0].nostrPrivIv) {
+    await db.update(dvmWorkflows).set({ status: 'failed', updatedAt: now }).where(eq(dvmWorkflows.id, wf.id))
+    return
+  }
+
+  const u = wfUser[0]
+  const masterKey = env.NOSTR_MASTER_KEY
+  if (!masterKey) {
+    await db.update(dvmWorkflows).set({ status: 'failed', updatedAt: now }).where(eq(dvmWorkflows.id, wf.id))
+    return
+  }
+
+  // Build job request event
+  const jobEvent = await buildJobRequestEvent({
+    privEncrypted: u.nostrPrivEncrypted!,
+    iv: u.nostrPrivIv!,
+    masterKey,
+    kind: nextStep[0].kind,
+    input: nextInput,
+    inputType: 'text',
+    bidMsats: wf.totalBidSats ? Math.floor((wf.totalBidSats * 1000) / wf.totalSteps) : undefined,
+  })
+
+  // Create customer job
+  const jobId = generateId()
+  await db.insert(dvmJobs).values({
+    id: jobId,
+    userId: wf.userId,
+    role: 'customer',
+    kind: nextStep[0].kind,
+    status: 'open',
+    input: nextInput,
+    inputType: 'text',
+    bidMsats: wf.totalBidSats ? Math.floor((wf.totalBidSats * 1000) / wf.totalSteps) : null,
+    customerPubkey: u.nostrPubkey,
+    requestEventId: jobEvent.id,
+    eventId: jobEvent.id,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Link step to job
+  await db.update(dvmWorkflowSteps).set({
+    jobId,
+    input: nextInput,
+    status: 'running',
+    updatedAt: now,
+  }).where(eq(dvmWorkflowSteps.id, nextStep[0].id))
+
+  // Update workflow status
+  await db.update(dvmWorkflows).set({ status: 'running', updatedAt: now }).where(eq(dvmWorkflows.id, wf.id))
+
+  // Publish to relay
+  if (env.NOSTR_QUEUE) {
+    env.NOSTR_QUEUE.send({ events: [jobEvent] })
+  }
+
+  console.log(`[Workflow] ${wf.id} advanced to step ${nextStepIndex} → job ${jobId}`)
 }

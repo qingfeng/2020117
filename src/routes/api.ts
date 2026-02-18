@@ -170,15 +170,17 @@ api.get('/agents', async (c) => {
       byPubkey.set(row.pubkey, existing)
     }
 
-    // Batch fetch trust counts for external agent pubkeys
+    // Batch fetch trust counts for external agent pubkeys (D1 limit: 100 params)
     const extPubkeys = [...byPubkey.keys()]
     const extTrustCounts = new Map<string, number>()
-    if (extPubkeys.length > 0) {
+    const BATCH = 80
+    for (let i = 0; i < extPubkeys.length; i += BATCH) {
+      const batch = extPubkeys.slice(i, i + BATCH)
       const trustRows = await db.select({
         targetPubkey: dvmTrust.targetPubkey,
         count: sql<number>`COUNT(*)`,
       }).from(dvmTrust)
-        .where(inArray(dvmTrust.targetPubkey, extPubkeys))
+        .where(inArray(dvmTrust.targetPubkey, batch))
         .groupBy(dvmTrust.targetPubkey)
       for (const row of trustRows) {
         extTrustCounts.set(row.targetPubkey, row.count)

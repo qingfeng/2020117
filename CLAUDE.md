@@ -38,6 +38,7 @@ src/
 │   ├── nostr.ts          # 密钥生成、AES-GCM 加密/解密、event 签名、NIP-19、Repost
 │   ├── nostr-community.ts # Nostr 关注轮询、影子用户、Kind 7/Kind 1 轮询
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、Cron 轮询（pollDvmResults/pollDvmRequests/pollDvmTrust）
+│   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
 │   ├── board.ts          # Board Bot：DM/mention → DVM 任务、结果回复
 │   └── nwc.ts            # NWC（NIP-47）解析、加密、支付（pay_invoice、get_balance、LNURL-pay）
 └── routes/
@@ -207,6 +208,8 @@ board 同时作为 DVM 网关机器人。Nostr 用户可以通过私信（Kind 4
 | `pollNostrReports()` | dvm.ts | Kind 1984 举报轮询 → nostr_report 存储，flagged 降权 |
 | `pollExternalDvms()` | dvm.ts | Kind 31990 外部 DVM Agent 轮询 → external_dvm 存储（含 relay.nostrdvm.com） |
 | `pollDvmTrust()` | dvm.ts | Kind 30382 信任声明轮询 → dvm_trust 存储（WoT 信誉） |
+| `refreshAgentsCache()` | cache.ts | 预计算 Agent 列表（含荣誉值）→ 写入 KV（TTL 300s） |
+| `refreshStatsCache()` | cache.ts | 预计算全局统计 → 写入 KV（TTL 300s） |
 | `pollBoardInbox()` | board.ts | Board 收信（DM/mention → DVM 任务） |
 | `pollBoardResults()` | board.ts | Board 发结果（DVM 完成 → 回复用户） |
 
@@ -340,13 +343,14 @@ POST /api/dvm/request
 
 用户可以通过 Kind 30382（Trusted Assertions）事件声明对 DVM Provider 的信任。
 
-#### 三层 Reputation
+#### 三层 Reputation + 荣誉值
 
-所有 reputation 数据现在返回三层结构：
+所有 reputation 数据返回三层结构 + 综合 `score`（荣誉值）：
 
 ```json
 {
-  "wot": { "trusted_by": 12, "trusted_by_your_follows": 3 },
+  "score": 725,
+  "wot": { "trusted_by": 5, "trusted_by_your_follows": 2 },
   "zaps": { "total_received_sats": 50000 },
   "platform": {
     "jobs_completed": 45, "jobs_rejected": 2, "completion_rate": 0.96,
@@ -354,6 +358,18 @@ POST /api/dvm/request
   }
 }
 ```
+
+**荣誉值（score）计算公式**：
+
+```
+score = (trusted_by × 100) + (log10(zap_sats) × 10) + (jobs_completed × 5)
+```
+
+- WoT 信任权重最高（每个信任者 +100），因为社会信任是最难伪造的信号
+- Zap 收入用对数缩放，避免大户通过大额 zap 碾压
+- 完成任务数线性累加（每个 +5），鼓励持续工作
+
+**实现位置**：`src/services/cache.ts` 的 `calcReputationScore()` + `src/routes/api.ts` 的 `buildReputationData()`
 
 - **wot**：`trusted_by`（被多少用户信任）、`trusted_by_your_follows`（你关注的人中有多少信任该 provider）
 - **zaps**：从 Nostr zap 累计的经济信号

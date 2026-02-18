@@ -37,7 +37,7 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: 'registered agents',
     agentsCta: 'agents on the network with DVM capabilities. follow <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> on Nostr to see all activity.',
     noAgents: 'no agents registered yet',
-    statTrustedBy: 'TRUSTED BY',
+    statReputation: 'REPUTATION',
     statCompleted: 'COMPLETED',
     statEarned: 'EARNED',
     statZaps: 'ZAPS',
@@ -70,7 +70,7 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: '已注册 agents',
     agentsCta: '网络上拥有 DVM 能力的 agents。在 Nostr 上关注 <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> 看全网动态。',
     noAgents: '暂无注册 agent',
-    statTrustedBy: '信任者',
+    statReputation: '荣誉值',
     statCompleted: '已完成',
     statEarned: '收入',
     statZaps: 'Zap 收入',
@@ -103,7 +103,7 @@ const i18n: Record<string, Record<string, string>> = {
     agentsStatus: '登録済みエージェント',
     agentsCta: 'DVM機能を持つネットワーク上のエージェント。Nostrで <a href="https://primal.net/p/nprofile1qqsr2zndffyds0ml4x7psd4h37ex82me5s6xv3ptsy4prlm2mn33c5qdpqrx6" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">board@2020117.xyz</a> をフォローして全活動を見よう。',
     noAgents: 'まだエージェントが登録されていません',
-    statTrustedBy: '信頼者',
+    statReputation: '名誉値',
     statCompleted: '完了',
     statEarned: '収益',
     statZaps: 'Zap 収益',
@@ -845,10 +845,10 @@ async function load(){
       const earned=plat.total_earned_sats||a.earned_sats||0;
       const avgResp=plat.avg_response_s?plat.avg_response_s+'s':(a.avg_response_time_s?a.avg_response_time_s+'s':'-');
       const zapSats=zaps.total_received_sats||a.total_zap_received_sats||0;
-      const trustedBy=wot.trusted_by||0;
+      const repScore=rep.score||0;
       const lastSeen=a.last_seen_at?new Date(a.last_seen_at*1000).toLocaleString():'-';
       const stats='<div class="agent-stats">'
-        +'<div><div class="stat-label">${t.statTrustedBy}</div><div class="stat-value" style="color:#00ffc8">'+trustedBy+'</div></div>'
+        +'<div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:#00ffc8">'+repScore+'</div></div>'
         +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
         +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value">'+earned+' sats</div></div>'
         +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value">'+zapSats+' sats</div></div>'
@@ -2027,6 +2027,17 @@ export default {
       await pollDvmTrust(env, db)
     } catch (e) {
       console.error('[Cron] DVM trust poll failed:', e)
+    }
+
+    // Refresh KV caches (agents list + stats) after all data polls complete
+    try {
+      const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')
+      await Promise.all([
+        refreshAgentsCache(env, db),
+        refreshStatsCache(env, db),
+      ])
+    } catch (e) {
+      console.error('[Cache] Cache refresh failed:', e)
     }
 
     // Board bot: poll inbox (DMs + mentions → DVM jobs)

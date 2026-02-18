@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, externalDvms } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
@@ -66,10 +66,15 @@ function buildReputationData(svc: {
   const completed = svc.jobsCompleted || 0
   const rejected = svc.jobsRejected || 0
   const total = completed + rejected
+  const trustedBy = wotData?.trusted_by || 0
+  const zapSats = svc.totalZapReceived || 0
+  // Composite score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5
+  const score = trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5
   return {
+    score,
     wot: wotData || { trusted_by: 0, trusted_by_your_follows: 0 },
     zaps: {
-      total_received_sats: svc.totalZapReceived || 0,
+      total_received_sats: zapSats,
     },
     platform: {
       jobs_completed: completed,
@@ -91,201 +96,51 @@ function paginationMeta(total: number, page: number, limit: number) {
   }
 }
 
-// ─── 公开端点：Agent 列表 ───
+// ─── 公开端点：Agent 列表（Cron 预计算，API 只读 KV） ───
 
 api.get('/agents', async (c) => {
-  const db = c.get('db')
   const page = parseInt(c.req.query('page') || '1')
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const source = c.req.query('source') // 'local' | 'nostr' | undefined (all)
 
-  // KV cache: full agent list per source filter, TTL 60s
   const cacheKey = `agents_cache_${source || 'all'}`
   const cached = await c.env.KV.get(cacheKey)
-  if (cached) {
-    const allAgents = JSON.parse(cached) as any[]
+
+  if (!cached) {
+    // Cache not yet populated (first deploy or KV expired) — trigger inline refresh
+    const { refreshAgentsCache } = await import('../services/cache')
+    await refreshAgentsCache(c.env, c.get('db'))
+    const fresh = await c.env.KV.get(cacheKey)
+    if (!fresh) return c.json({ agents: [], meta: paginationMeta(0, page, limit) })
+    const allAgents = JSON.parse(fresh) as any[]
     const total = allAgents.length
     const offset = (page - 1) * limit
-    const agents = allAgents.slice(offset, offset + limit)
-    return c.json({ agents, meta: paginationMeta(total, page, limit) })
+    return c.json({ agents: allAgents.slice(offset, offset + limit), meta: paginationMeta(total, page, limit) })
   }
 
-  // --- Local agents ---
-  let localAgents: any[] = []
-  if (source !== 'nostr') {
-    const rows = await db.select({
-      username: users.username,
-      displayName: users.displayName,
-      avatarUrl: users.avatarUrl,
-      bio: users.bio,
-      nostrPubkey: users.nostrPubkey,
-      userId: dvmServices.userId,
-      kinds: dvmServices.kinds,
-      description: dvmServices.description,
-      totalZapReceived: dvmServices.totalZapReceived,
-      directRequestEnabled: dvmServices.directRequestEnabled,
-      jobsCompleted: dvmServices.jobsCompleted,
-      jobsRejected: dvmServices.jobsRejected,
-      totalEarnedMsats: dvmServices.totalEarnedMsats,
-      lastJobAt: dvmServices.lastJobAt,
-      completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
-      earnedMsats: sql<number>`(SELECT COALESCE(SUM(dvm_job.bid_msats), 0) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
-      lastSeenAt: sql<number>`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
-      avgResponseMs: dvmServices.avgResponseMs,
-      reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
-      trustedBy: sql<number>`(SELECT COUNT(*) FROM dvm_trust WHERE dvm_trust.target_pubkey = "user".nostr_pubkey)`,
-    })
-      .from(dvmServices)
-      .innerJoin(users, eq(dvmServices.userId, users.id))
-      .where(eq(dvmServices.active, 1))
-
-    localAgents = rows.map(row => {
-      const kinds: number[] = JSON.parse(row.kinds)
-      const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
-      return {
-        source: 'local' as const,
-        username: row.username,
-        display_name: row.displayName,
-        avatar_url: row.avatarUrl,
-        bio: row.bio,
-        nostr_pubkey: row.nostrPubkey,
-        npub: row.nostrPubkey ? pubkeyToNpub(row.nostrPubkey) : null,
-        services: [{ kinds, kind_labels: kindLabels, description: row.description }],
-        completed_jobs_count: row.completedJobsCount || 0,
-        earned_sats: Math.floor((row.earnedMsats || 0) / 1000),
-        last_seen_at: row.lastSeenAt || null,
-        avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
-        total_zap_received_sats: row.totalZapReceived || 0,
-        direct_request_enabled: !!row.directRequestEnabled,
-        report_count: row.reportCount || 0,
-        flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
-        reputation: buildReputationData(row, {
-          trusted_by: row.trustedBy || 0,
-          trusted_by_your_follows: 0,
-        }),
-        _sort_ts: row.lastSeenAt || 0,
-      }
-    })
-  }
-
-  // --- External agents (from external_dvm table) ---
-  let externalAgents: any[] = []
-  if (source !== 'local') {
-    const extRows = await db.select().from(externalDvms)
-
-    // Group by pubkey to aggregate kinds
-    const byPubkey = new Map<string, typeof extRows>()
-    for (const row of extRows) {
-      const existing = byPubkey.get(row.pubkey) || []
-      existing.push(row)
-      byPubkey.set(row.pubkey, existing)
-    }
-
-    // Batch fetch trust counts for external agent pubkeys (D1 limit: 100 params)
-    const extPubkeys = [...byPubkey.keys()]
-    const extTrustCounts = new Map<string, number>()
-    const BATCH = 80
-    for (let i = 0; i < extPubkeys.length; i += BATCH) {
-      const batch = extPubkeys.slice(i, i + BATCH)
-      const trustRows = await db.select({
-        targetPubkey: dvmTrust.targetPubkey,
-        count: sql<number>`COUNT(*)`,
-      }).from(dvmTrust)
-        .where(inArray(dvmTrust.targetPubkey, batch))
-        .groupBy(dvmTrust.targetPubkey)
-      for (const row of trustRows) {
-        extTrustCounts.set(row.targetPubkey, row.count)
-      }
-    }
-
-    for (const [pubkey, rows] of byPubkey) {
-      const kinds = rows.map(r => r.kind)
-      const kindLabels = kinds.map(k => DVM_KIND_LABELS[k] || `kind ${k}`)
-      // Use the most recent row for metadata
-      const latest = rows.reduce((a, b) => a.eventCreatedAt > b.eventCreatedAt ? a : b)
-      externalAgents.push({
-        source: 'nostr' as const,
-        username: null,
-        display_name: latest.name || `${pubkey.slice(0, 12)}...`,
-        avatar_url: latest.picture || null,
-        bio: latest.about || null,
-        nostr_pubkey: pubkey,
-        npub: pubkeyToNpub(pubkey),
-        services: [{ kinds, kind_labels: kindLabels, description: latest.about }],
-        completed_jobs_count: 0,
-        earned_sats: 0,
-        last_seen_at: latest.eventCreatedAt,
-        avg_response_time_s: null,
-        total_zap_received_sats: 0,
-        direct_request_enabled: false,
-        report_count: 0,
-        flagged: false,
-        reputation: buildReputationData({
-          jobsCompleted: 0, jobsRejected: 0, totalEarnedMsats: 0,
-          totalZapReceived: 0, avgResponseMs: null, lastJobAt: null,
-        }, { trusted_by: extTrustCounts.get(pubkey) || 0, trusted_by_your_follows: 0 }),
-        _sort_ts: latest.eventCreatedAt,
-      })
-    }
-  }
-
-  // Local first, then external; each group sorted by last_seen_at descending
-  localAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
-  externalAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
-  const allAgents = [...localAgents, ...externalAgents]
-
-  // Strip internal sort field and cache full list
-  const cleanAgents = allAgents.map(({ _sort_ts, ...rest }) => rest)
-  c.executionCtx.waitUntil(c.env.KV.put(cacheKey, JSON.stringify(cleanAgents), { expirationTtl: 60 }))
-
-  const total = cleanAgents.length
+  const allAgents = JSON.parse(cached) as any[]
+  const total = allAgents.length
   const offset = (page - 1) * limit
-  const agents = cleanAgents.slice(offset, offset + limit)
-
-  return c.json({
-    agents,
-    meta: paginationMeta(total, page, limit),
-  })
+  const agents = allAgents.slice(offset, offset + limit)
+  return c.json({ agents, meta: paginationMeta(total, page, limit) })
 })
 
 // ─── 公开端点：全局统计 ───
 
 // GET /api/stats — 全局统计（无需认证）
 api.get('/stats', async (c) => {
-  const db = c.get('db')
+  const cached = await c.env.KV.get('stats_cache')
 
-  // KV cache: TTL 60s
-  const cacheKey = 'stats_cache'
-  const cached = await c.env.KV.get(cacheKey)
-  if (cached) return c.json(JSON.parse(cached))
-
-  const [volumeResult, completedResult, zapResult, activeResult] = await Promise.all([
-    // 累计成交额（completed customer jobs 的 bid_msats 总和）
-    db.select({ total: sql<number>`COALESCE(SUM(bid_msats), 0)` })
-      .from(dvmJobs)
-      .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'completed'))),
-    // 累计完成任务数
-    db.select({ count: sql<number>`COUNT(*)` })
-      .from(dvmJobs)
-      .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'completed'))),
-    // 累计 Zap 总额（所有 provider 收到的 zap）
-    db.select({ total: sql<number>`COALESCE(SUM(total_zap_received), 0)` })
-      .from(dvmServices),
-    // 过去 24 小时活跃用户数（发帖/评论/DVM 操作）
-    db.select({ count: sql<number>`COUNT(DISTINCT user_id)` })
-      .from(dvmJobs)
-      .where(sql`${dvmJobs.updatedAt} > ${Math.floor(Date.now() / 1000) - 86400}`),
-  ])
-
-  const result = {
-    total_volume_sats: Math.floor((volumeResult[0]?.total || 0) / 1000),
-    total_jobs_completed: completedResult[0]?.count || 0,
-    total_zaps_sats: zapResult[0]?.total || 0,
-    active_users_24h: activeResult[0]?.count || 0,
+  if (!cached) {
+    // Cache not yet populated — trigger inline refresh
+    const { refreshStatsCache } = await import('../services/cache')
+    await refreshStatsCache(c.env, c.get('db'))
+    const fresh = await c.env.KV.get('stats_cache')
+    if (!fresh) return c.json({ total_volume_sats: 0, total_jobs_completed: 0, total_zaps_sats: 0, active_users_24h: 0 })
+    return c.json(JSON.parse(fresh))
   }
-  c.executionCtx.waitUntil(c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 60 }))
 
-  return c.json(result)
+  return c.json(JSON.parse(cached))
 })
 
 // ─── 公开端点：用户主页 ───

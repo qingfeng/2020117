@@ -44,38 +44,6 @@ async function apiGet(path: string, params?: Record<string, string | undefined>)
   return resp.json()
 }
 
-async function apiPost(path: string, body?: unknown): Promise<unknown> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
-  const resp = await fetch(new URL(path, BASE_URL).toString(), {
-    method: 'POST',
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  return resp.json()
-}
-
-async function apiPut(path: string, body?: unknown): Promise<unknown> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
-  const resp = await fetch(new URL(path, BASE_URL).toString(), {
-    method: 'PUT',
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  return resp.json()
-}
-
-async function apiDelete(path: string): Promise<unknown> {
-  const headers: Record<string, string> = { 'Accept': 'application/json' }
-  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
-  const resp = await fetch(new URL(path, BASE_URL).toString(), {
-    method: 'DELETE',
-    headers,
-  })
-  return resp.json()
-}
-
 function jsonText(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
 }
@@ -95,20 +63,7 @@ server.tool(
   async () => jsonText(await apiGet('/api/me')),
 )
 
-// 2. update_profile
-server.tool(
-  'update_profile',
-  'Update agent profile (display_name, bio, avatar_url, lightning_address)',
-  {
-    display_name: z.string().optional().describe('Display name'),
-    bio: z.string().optional().describe('Bio / about text'),
-    avatar_url: z.string().optional().describe('Avatar image URL'),
-    lightning_address: z.string().optional().describe('Lightning address for receiving payments'),
-  },
-  async (args) => jsonText(await apiPut('/api/me', args)),
-)
-
-// 3. list_agents
+// 2. list_agents
 server.tool(
   'list_agents',
   'List DVM agents in the network (local and external Nostr agents)',
@@ -120,7 +75,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/agents', args)),
 )
 
-// 4. get_timeline
+// 3. get_timeline
 server.tool(
   'get_timeline',
   'Browse global timeline of posts and activities',
@@ -132,17 +87,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/timeline', args)),
 )
 
-// 5. create_post
-server.tool(
-  'create_post',
-  'Publish a post (Kind 1 note) to the network',
-  {
-    content: z.string().describe('Post content text'),
-  },
-  async (args) => jsonText(await apiPost('/api/posts', args)),
-)
-
-// 6. get_dvm_market
+// 4. get_dvm_market
 server.tool(
   'get_dvm_market',
   'Browse open DVM jobs available in the marketplace',
@@ -155,22 +100,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/dvm/market', args)),
 )
 
-// 7. create_dvm_request
-server.tool(
-  'create_dvm_request',
-  'Publish a DVM job request to the network',
-  {
-    kind: z.number().describe('Job kind (5100=text, 5200=image, 5302=translate, 5303=summarize)'),
-    input: z.string().describe('Input data for the job'),
-    input_type: z.string().optional().describe('Input type (default: "text")'),
-    bid_sats: z.number().optional().describe('Bid amount in sats (0 for free)'),
-    provider: z.string().optional().describe('Target provider (username, pubkey, or npub) for direct request'),
-    output: z.string().optional().describe('Desired output format'),
-  },
-  async (args) => jsonText(await apiPost('/api/dvm/request', args)),
-)
-
-// 8. get_dvm_jobs
+// 5. get_dvm_jobs
 server.tool(
   'get_dvm_jobs',
   'List my DVM jobs (as customer or provider)',
@@ -182,7 +112,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/dvm/jobs', args)),
 )
 
-// 9. get_dvm_inbox
+// 6. get_dvm_inbox
 server.tool(
   'get_dvm_inbox',
   'View incoming job requests (as a DVM provider)',
@@ -193,54 +123,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/dvm/inbox', args)),
 )
 
-// 10. accept_dvm_job
-server.tool(
-  'accept_dvm_job',
-  'Accept an incoming DVM job request',
-  {
-    job_id: z.string().describe('Job ID to accept'),
-  },
-  async (args) => jsonText(await apiPost(`/api/dvm/jobs/${args.job_id}/accept`)),
-)
-
-// 11. submit_dvm_result
-server.tool(
-  'submit_dvm_result',
-  'Submit result for a DVM job you accepted',
-  {
-    job_id: z.string().describe('Job ID'),
-    content: z.string().describe('Result content'),
-    amount_sats: z.number().optional().describe('Price in sats (optional)'),
-  },
-  async (args) => jsonText(await apiPost(`/api/dvm/jobs/${args.job_id}/result`, {
-    content: args.content,
-    ...(args.amount_sats ? { amount_sats: args.amount_sats } : {}),
-  })),
-)
-
-// 12. complete_dvm_job
-server.tool(
-  'complete_dvm_job',
-  'Confirm job completion and trigger Lightning payment to provider',
-  {
-    job_id: z.string().describe('Job ID to complete'),
-  },
-  async (args) => jsonText(await apiPost(`/api/dvm/jobs/${args.job_id}/complete`)),
-)
-
-// 13. trust_dvm_provider
-server.tool(
-  'trust_dvm_provider',
-  'Declare trust in a DVM provider (WoT Kind 30382)',
-  {
-    target_pubkey: z.string().optional().describe('Target provider hex pubkey'),
-    target_npub: z.string().optional().describe('Target provider npub'),
-    target_username: z.string().optional().describe('Target provider username'),
-  },
-  async (args) => jsonText(await apiPost('/api/dvm/trust', args)),
-)
-
-// 14. get_stats
+// 7. get_stats
 server.tool(
   'get_stats',
   'Get global network statistics (volume, jobs, zaps, active users)',
@@ -248,7 +131,7 @@ server.tool(
   async () => jsonText(await apiGet('/api/stats')),
 )
 
-// 15. get_online_agents
+// 8. get_online_agents
 server.tool(
   'get_online_agents',
   'List currently online agents with their capacity and pricing',
@@ -258,7 +141,7 @@ server.tool(
   async (args) => jsonText(await apiGet('/api/agents/online', args)),
 )
 
-// 16. get_workflow
+// 9. get_workflow
 server.tool(
   'get_workflow',
   'Get workflow details and step status',

@@ -2056,6 +2056,14 @@ export default {
       console.error('[Cron] Board results poll failed:', e)
     }
 
+    // Publish root widget to relays (hourly)
+    try {
+      const { refreshRootWidget } = await import('./services/widget')
+      await refreshRootWidget(env, db)
+    } catch (e) {
+      console.error('[Cron] Widget publish failed:', e)
+    }
+
     // One-time: re-broadcast Kind 0 metadata for all agents (avatar + nip05 fix)
     const MIGRATION_KEY = 'migration_kind0_rebroad_v1'
     if (env.NOSTR_MASTER_KEY && env.NOSTR_QUEUE && !(await env.KV.get(MIGRATION_KEY))) {

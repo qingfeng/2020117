@@ -3373,4 +3373,88 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 })
 
 
+// --- Smart Widget (Kind 30033) ---
+
+const widgetCorsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+api.options('/widget/*', (c) => {
+  return new Response(null, { status: 204, headers: widgetCorsHeaders })
+})
+
+api.get('/widget/root', async (c) => {
+  const db = c.get('db')
+  const cached = await c.env.KV.get('widget_root_event')
+  if (cached) {
+    return c.json({ event: JSON.parse(cached) }, 200, widgetCorsHeaders)
+  }
+  // Inline build if no cache
+  if (!c.env.NOSTR_MASTER_KEY) return c.json({ error: 'not configured' }, 503, widgetCorsHeaders)
+  const { getBoardKeys, buildStatsWidget } = await import('../services/widget')
+  const keys = await getBoardKeys(db)
+  if (!keys) return c.json({ error: 'board user not found' }, 503, widgetCorsHeaders)
+  const statsRaw = await c.env.KV.get('stats_cache')
+  const stats = statsRaw ? JSON.parse(statsRaw) : { total_jobs_completed: 0, total_volume_sats: 0, active_users_24h: 0, total_zaps_sats: 0 }
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const event = await buildStatsWidget({ keys, masterKey: c.env.NOSTR_MASTER_KEY, stats, baseUrl })
+  return c.json({ event }, 200, widgetCorsHeaders)
+})
+
+api.post('/widget/stats', async (c) => {
+  const db = c.get('db')
+  if (!c.env.NOSTR_MASTER_KEY) return c.json({ error: 'not configured' }, 503, widgetCorsHeaders)
+  const { getBoardKeys, buildStatsWidget } = await import('../services/widget')
+  const keys = await getBoardKeys(db)
+  if (!keys) return c.json({ error: 'board user not found' }, 503, widgetCorsHeaders)
+  const statsRaw = await c.env.KV.get('stats_cache')
+  const stats = statsRaw ? JSON.parse(statsRaw) : { total_jobs_completed: 0, total_volume_sats: 0, active_users_24h: 0, total_zaps_sats: 0 }
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const event = await buildStatsWidget({ keys, masterKey: c.env.NOSTR_MASTER_KEY, stats, baseUrl })
+  return c.json({ event }, 200, widgetCorsHeaders)
+})
+
+api.post('/widget/market', async (c) => {
+  const db = c.get('db')
+  if (!c.env.NOSTR_MASTER_KEY) return c.json({ error: 'not configured' }, 503, widgetCorsHeaders)
+  const { getBoardKeys, buildMarketWidget } = await import('../services/widget')
+  const keys = await getBoardKeys(db)
+  if (!keys) return c.json({ error: 'board user not found' }, 503, widgetCorsHeaders)
+  const openJobs = await db.select({
+    kind: dvmJobs.kind,
+    input: dvmJobs.input,
+    bidMsats: dvmJobs.bidMsats,
+  }).from(dvmJobs)
+    .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'pending')))
+    .orderBy(desc(dvmJobs.bidMsats))
+    .limit(5)
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(dvmJobs)
+    .where(and(eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'pending')))
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const event = await buildMarketWidget({
+    keys, masterKey: c.env.NOSTR_MASTER_KEY,
+    jobs: openJobs, totalOpen: countResult?.count || 0, baseUrl,
+  })
+  return c.json({ event }, 200, widgetCorsHeaders)
+})
+
+api.post('/widget/agents', async (c) => {
+  const db = c.get('db')
+  if (!c.env.NOSTR_MASTER_KEY) return c.json({ error: 'not configured' }, 503, widgetCorsHeaders)
+  const { getBoardKeys, buildAgentsWidget } = await import('../services/widget')
+  const keys = await getBoardKeys(db)
+  if (!keys) return c.json({ error: 'board user not found' }, 503, widgetCorsHeaders)
+  const cached = await c.env.KV.get('agents_cache_local')
+  const agents: any[] = cached ? JSON.parse(cached) : []
+  // Sort by reputation score desc, take top 5
+  agents.sort((a: any, b: any) => (b.reputation?.score || 0) - (a.reputation?.score || 0))
+  const top5 = agents.slice(0, 5)
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const event = await buildAgentsWidget({ keys, masterKey: c.env.NOSTR_MASTER_KEY, agents: top5, baseUrl })
+  return c.json({ event }, 200, widgetCorsHeaders)
+})
+
 export default api

@@ -1639,6 +1639,29 @@ app.get('/.well-known/nostr.json', async (c) => {
   })
 })
 
+// Yakihonne Smart Widget manifest
+app.get('/.well-known/widget.json', async (c) => {
+  const { users } = await import('./db/schema')
+  const db = c.get('db')
+  const board = await db.select({ nostrPubkey: users.nostrPubkey }).from(users).where(eq(users.username, 'board')).limit(1)
+  const pubkey = board[0]?.nostrPubkey || ''
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  return c.json({
+    pubkey,
+    widget: {
+      title: 'Nostr Agent Market',
+      appUrl: `${baseUrl}/api/widget/root`,
+      iconUrl: `${baseUrl}/logo-192.png`,
+      imageUrl: `${baseUrl}/logo-512.png`,
+      buttonTitle: 'Browse Market',
+      tags: ['dvm', 'agents', 'market', 'nostr', 'lightning'],
+    },
+  }, 200, {
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'max-age=3600',
+  })
+})
+
 // GET /topic/:id — public topic view (JSON)
 app.get('/topic/:id', async (c) => {
   const db = c.get('db')

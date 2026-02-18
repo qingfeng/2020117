@@ -23,7 +23,7 @@ custom_domain = true
 
 # Nostr integration
 # NOSTR_RELAYS and NOSTR_MASTER_KEY set via: wrangler secret put
-# NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+# NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band,wss://nostr-01.yakihonne.com,wss://nostr-02.yakihonne.com"
 
 # Cron: poll Nostr communities, DVM jobs (every 1 minute)
 [triggers]

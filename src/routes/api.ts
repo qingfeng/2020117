@@ -1,12 +1,12 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, nostrReports, externalDvms } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, externalDvms } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents } from '../services/dvm'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 
 const api = new Hono<AppContext>()
@@ -36,7 +36,25 @@ async function buildBoardRepost(db: import('../db').Database, noteEvent: NostrEv
   } catch { return null }
 }
 
-// Helper: build reputation object from dvmService fields
+// Helper: get WoT data for a target pubkey
+async function getWotData(db: import('../db').Database, targetPubkey: string, viewerUserId?: string) {
+  const trustedByResult = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(dvmTrust).where(eq(dvmTrust.targetPubkey, targetPubkey))
+  const trustedBy = trustedByResult[0]?.count || 0
+
+  let trustedByYourFollows = 0
+  if (viewerUserId) {
+    const followTrustResult = await db.select({ count: sql<number>`COUNT(*)` })
+      .from(dvmTrust)
+      .innerJoin(userFollows, eq(dvmTrust.userId, userFollows.followeeId))
+      .where(and(eq(dvmTrust.targetPubkey, targetPubkey), eq(userFollows.followerId, viewerUserId)))
+    trustedByYourFollows = followTrustResult[0]?.count || 0
+  }
+
+  return { trusted_by: trustedBy, trusted_by_your_follows: trustedByYourFollows }
+}
+
+// Helper: build three-layer reputation object from dvmService fields
 function buildReputationData(svc: {
   jobsCompleted: number | null
   jobsRejected: number | null
@@ -44,18 +62,23 @@ function buildReputationData(svc: {
   totalZapReceived: number | null
   avgResponseMs: number | null
   lastJobAt: Date | null
-}) {
+}, wotData?: { trusted_by: number; trusted_by_your_follows: number }) {
   const completed = svc.jobsCompleted || 0
   const rejected = svc.jobsRejected || 0
   const total = completed + rejected
   return {
-    jobs_completed: completed,
-    jobs_rejected: rejected,
-    completion_rate: total > 0 ? Math.round((completed / total) * 100) / 100 : 0,
-    avg_response_s: svc.avgResponseMs ? Math.round(svc.avgResponseMs / 1000) : null,
-    total_earned_sats: svc.totalEarnedMsats ? Math.floor(svc.totalEarnedMsats / 1000) : 0,
-    total_zap_received_sats: svc.totalZapReceived || 0,
-    last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
+    wot: wotData || { trusted_by: 0, trusted_by_your_follows: 0 },
+    zaps: {
+      total_received_sats: svc.totalZapReceived || 0,
+    },
+    platform: {
+      jobs_completed: completed,
+      jobs_rejected: rejected,
+      completion_rate: total > 0 ? Math.round((completed / total) * 100) / 100 : 0,
+      avg_response_s: svc.avgResponseMs ? Math.round(svc.avgResponseMs / 1000) : null,
+      total_earned_sats: svc.totalEarnedMsats ? Math.floor(svc.totalEarnedMsats / 1000) : 0,
+      last_job_at: svc.lastJobAt ? Math.floor(svc.lastJobAt.getTime() / 1000) : null,
+    },
   }
 }
 
@@ -90,11 +113,16 @@ api.get('/agents', async (c) => {
       description: dvmServices.description,
       totalZapReceived: dvmServices.totalZapReceived,
       directRequestEnabled: dvmServices.directRequestEnabled,
+      jobsCompleted: dvmServices.jobsCompleted,
+      jobsRejected: dvmServices.jobsRejected,
+      totalEarnedMsats: dvmServices.totalEarnedMsats,
+      lastJobAt: dvmServices.lastJobAt,
       completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
       earnedMsats: sql<number>`(SELECT COALESCE(SUM(dvm_job.bid_msats), 0) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
       lastSeenAt: sql<number>`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
       avgResponseMs: dvmServices.avgResponseMs,
       reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
+      trustedBy: sql<number>`(SELECT COUNT(*) FROM dvm_trust WHERE dvm_trust.target_pubkey = "user".nostr_pubkey)`,
     })
       .from(dvmServices)
       .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -120,6 +148,10 @@ api.get('/agents', async (c) => {
         direct_request_enabled: !!row.directRequestEnabled,
         report_count: row.reportCount || 0,
         flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
+        reputation: buildReputationData(row, {
+          trusted_by: row.trustedBy || 0,
+          trusted_by_your_follows: 0,
+        }),
         _sort_ts: row.lastSeenAt || 0,
       }
     })
@@ -136,6 +168,21 @@ api.get('/agents', async (c) => {
       const existing = byPubkey.get(row.pubkey) || []
       existing.push(row)
       byPubkey.set(row.pubkey, existing)
+    }
+
+    // Batch fetch trust counts for external agent pubkeys
+    const extPubkeys = [...byPubkey.keys()]
+    const extTrustCounts = new Map<string, number>()
+    if (extPubkeys.length > 0) {
+      const trustRows = await db.select({
+        targetPubkey: dvmTrust.targetPubkey,
+        count: sql<number>`COUNT(*)`,
+      }).from(dvmTrust)
+        .where(inArray(dvmTrust.targetPubkey, extPubkeys))
+        .groupBy(dvmTrust.targetPubkey)
+      for (const row of trustRows) {
+        extTrustCounts.set(row.targetPubkey, row.count)
+      }
     }
 
     for (const [pubkey, rows] of byPubkey) {
@@ -160,6 +207,10 @@ api.get('/agents', async (c) => {
         direct_request_enabled: false,
         report_count: 0,
         flagged: false,
+        reputation: buildReputationData({
+          jobsCompleted: 0, jobsRejected: 0, totalEarnedMsats: 0,
+          totalZapReceived: 0, avgResponseMs: null, lastJobAt: null,
+        }, { trusted_by: extTrustCounts.get(pubkey) || 0, trusted_by_your_follows: 0 }),
         _sort_ts: latest.eventCreatedAt,
       })
     }
@@ -263,7 +314,11 @@ api.get('/users/:identifier', async (c) => {
     kinds: dvmServices.kinds,
     description: dvmServices.description,
     jobsCompleted: dvmServices.jobsCompleted,
+    jobsRejected: dvmServices.jobsRejected,
+    totalEarnedMsats: dvmServices.totalEarnedMsats,
     totalZapReceived: dvmServices.totalZapReceived,
+    avgResponseMs: dvmServices.avgResponseMs,
+    lastJobAt: dvmServices.lastJobAt,
     directRequestEnabled: dvmServices.directRequestEnabled,
   }).from(dvmServices).where(and(eq(dvmServices.userId, u.id), eq(dvmServices.active, 1))).limit(1)
 
@@ -273,6 +328,13 @@ api.get('/users/:identifier', async (c) => {
     const rc = await db.select({ count: sql<number>`COUNT(DISTINCT reporter_pubkey)` })
       .from(nostrReports).where(eq(nostrReports.targetPubkey, u.nostrPubkey))
     reportCount = rc[0]?.count || 0
+  }
+
+  // WoT data for agent
+  let agentReputation: ReturnType<typeof buildReputationData> | undefined
+  if (agentSvc.length > 0) {
+    const wot = u.nostrPubkey ? await getWotData(db, u.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
+    agentReputation = buildReputationData(agentSvc[0], wot)
   }
 
   return c.json({
@@ -297,9 +359,8 @@ api.get('/users/:identifier', async (c) => {
         kinds: JSON.parse(agentSvc[0].kinds),
         kind_labels: (JSON.parse(agentSvc[0].kinds) as number[]).map(k => DVM_KIND_LABELS[k] || `kind ${k}`),
         description: agentSvc[0].description,
-        jobs_completed: agentSvc[0].jobsCompleted || 0,
-        total_zap_received_sats: agentSvc[0].totalZapReceived || 0,
         direct_request_enabled: !!agentSvc[0].directRequestEnabled,
+        reputation: agentReputation,
         report_count: reportCount,
         flagged: reportCount >= REPORT_FLAG_THRESHOLD,
       },
@@ -2809,7 +2870,11 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
     .limit(1)
 
-  const reputation = existing.length > 0 ? buildReputationData(existing[0]) : undefined
+  let reputation: ReturnType<typeof buildReputationData> | undefined
+  if (existing.length > 0) {
+    const wot = user.nostrPubkey ? await getWotData(db, user.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
+    reputation = buildReputationData(existing[0], wot)
+  }
 
   // Build NIP-89 Handler Info (Kind 31990) — one event per kind
   const handlerEvents = await buildHandlerInfoEvents({
@@ -2892,6 +2957,9 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
     reportCount = rc[0]?.count || 0
   }
 
+  // WoT data for current user
+  const wotData = user.nostrPubkey ? await getWotData(db, user.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
+
   return c.json({
     services: services.map(s => ({
       id: s.id,
@@ -2902,7 +2970,7 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       active: !!s.active,
       direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
-      reputation: buildReputationData(s),
+      reputation: buildReputationData(s, wotData),
       report_count: reportCount,
       flagged: reportCount >= REPORT_FLAG_THRESHOLD,
       created_at: s.createdAt,
@@ -2925,6 +2993,99 @@ api.delete('/dvm/services/:id', requireApiAuth, async (c) => {
   await db.update(dvmServices)
     .set({ active: 0, updatedAt: new Date() })
     .where(eq(dvmServices.id, serviceId))
+
+  return c.json({ ok: true })
+})
+
+// POST /api/dvm/trust — 声明信任某个 DVM Provider
+api.post('/dvm/trust', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const body = await c.req.json<{ target_pubkey?: string; target_npub?: string; target_username?: string }>()
+
+  // Resolve target to hex pubkey
+  let targetPubkey: string | null = null
+  if (body.target_pubkey) {
+    targetPubkey = body.target_pubkey
+  } else if (body.target_npub) {
+    targetPubkey = npubToPubkey(body.target_npub)
+  } else if (body.target_username) {
+    const target = await db.select({ nostrPubkey: users.nostrPubkey }).from(users)
+      .where(eq(users.username, body.target_username)).limit(1)
+    if (target.length > 0 && target[0].nostrPubkey) targetPubkey = target[0].nostrPubkey
+  }
+
+  if (!targetPubkey) return c.json({ error: 'Could not resolve target pubkey' }, 400)
+  if (targetPubkey === user.nostrPubkey) return c.json({ error: 'Cannot trust yourself' }, 400)
+
+  // Check for existing trust
+  const existing = await db.select({ id: dvmTrust.id }).from(dvmTrust)
+    .where(and(eq(dvmTrust.userId, user.id), eq(dvmTrust.targetPubkey, targetPubkey)))
+    .limit(1)
+  if (existing.length > 0) return c.json({ error: 'Already trusted' }, 409)
+
+  const trustId = generateId()
+  let nostrEventId: string | null = null
+
+  // Build Kind 30382 event and send to relay
+  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    try {
+      const event = await buildDvmTrustEvent({
+        privEncrypted: user.nostrPrivEncrypted,
+        iv: user.nostrPrivIv,
+        masterKey: c.env.NOSTR_MASTER_KEY,
+        targetPubkey,
+      })
+      nostrEventId = event.id
+      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+    } catch (e) {
+      console.error('[API] Failed to build trust event:', e)
+    }
+  }
+
+  await db.insert(dvmTrust).values({
+    id: trustId,
+    userId: user.id,
+    targetPubkey,
+    nostrEventId,
+    createdAt: new Date(),
+  })
+
+  return c.json({ ok: true, trust_id: trustId })
+})
+
+// DELETE /api/dvm/trust/:pubkey — 撤销信任
+api.delete('/dvm/trust/:pubkey', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const targetPubkey = c.req.param('pubkey')
+
+  const existing = await db.select({ id: dvmTrust.id, nostrEventId: dvmTrust.nostrEventId }).from(dvmTrust)
+    .where(and(eq(dvmTrust.userId, user.id), eq(dvmTrust.targetPubkey, targetPubkey)))
+    .limit(1)
+
+  if (existing.length === 0) return c.json({ error: 'Trust not found' }, 404)
+
+  await db.delete(dvmTrust).where(eq(dvmTrust.id, existing[0].id))
+
+  // Send Kind 5 deletion event if we have the original event ID
+  if (existing[0].nostrEventId && user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const event = await buildSignedEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY!,
+          kind: 5,
+          content: '',
+          tags: [['e', existing[0].nostrEventId!]],
+        })
+        await c.env.NOSTR_QUEUE!.send({ events: [event] })
+      } catch (e) {
+        console.error('[API] Failed to send trust deletion event:', e)
+      }
+    })())
+  }
 
   return c.json({ ok: true })
 })
@@ -3185,7 +3346,10 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
           pricingMin: updatedSvc[0].pricingMin || undefined,
           pricingMax: updatedSvc[0].pricingMax || undefined,
           userId: user.id,
-          reputation: buildReputationData(updatedSvc[0]),
+          reputation: buildReputationData(updatedSvc[0],
+            user.nostrPubkey
+              ? await getWotData(db, user.nostrPubkey)
+              : { trusted_by: 0, trusted_by_your_follows: 0 }),
         })
         eventsToSend.push(...handlerEvts)
       }

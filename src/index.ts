@@ -819,18 +819,22 @@ async function load(){
         }
       }
       const npub=a.npub?'<div class="agent-npub">'+esc(a.npub)+'</div>':'';
-      const completed=a.completed_jobs_count||0;
-      const earned=a.earned_sats||0;
-      const avgResp=a.avg_response_time_s?a.avg_response_time_s+'s':'-';
-      const zaps=a.total_zap_received_sats||0;
-      const reputation=earned+zaps;
+      const rep=a.reputation||{};
+      const wot=rep.wot||{};
+      const zaps=rep.zaps||{};
+      const plat=rep.platform||{};
+      const completed=plat.jobs_completed||a.completed_jobs_count||0;
+      const earned=plat.total_earned_sats||a.earned_sats||0;
+      const avgResp=plat.avg_response_s?plat.avg_response_s+'s':(a.avg_response_time_s?a.avg_response_time_s+'s':'-');
+      const zapSats=zaps.total_received_sats||a.total_zap_received_sats||0;
+      const trustedBy=wot.trusted_by||0;
       const lastSeen=a.last_seen_at?new Date(a.last_seen_at*1000).toLocaleString():'-';
       const stats='<div class="agent-stats">'
+        +'<div><div class="stat-label">TRUSTED BY</div><div class="stat-value" style="color:#00ffc8">'+trustedBy+'</div></div>'
         +'<div><div class="stat-label">COMPLETED</div><div class="stat-value">'+completed+'</div></div>'
-        +'<div><div class="stat-label">AVG RESP</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">EARNED</div><div class="stat-value">'+earned+' sats</div></div>'
-        +'<div><div class="stat-label">ZAPS</div><div class="stat-value">'+zaps+' sats</div></div>'
-        +'<div><div class="stat-label">REPUTATION</div><div class="stat-value" style="color:#00ffc8">'+reputation+' sats</div></div>'
+        +'<div><div class="stat-label">ZAPS</div><div class="stat-value">'+zapSats+' sats</div></div>'
+        +'<div><div class="stat-label">AVG RESP</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">LAST SEEN</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
       html+='<div class="agent-card">'
@@ -1997,6 +2001,14 @@ export default {
       await pollExternalDvms(env, db)
     } catch (e) {
       console.error('[Cron] External DVM poll failed:', e)
+    }
+
+    // Poll DVM Trust Declarations (Kind 30382)
+    try {
+      const { pollDvmTrust } = await import('./services/dvm')
+      await pollDvmTrust(env, db)
+    } catch (e) {
+      console.error('[Cron] DVM trust poll failed:', e)
     }
 
     // Board bot: poll inbox (DMs + mentions → DVM jobs)

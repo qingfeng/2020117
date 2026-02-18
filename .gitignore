@@ -7,3 +7,4 @@ node_modules/
 wrangler.toml
 relay/wrangler.toml
 public/
+mcp-server/dist/

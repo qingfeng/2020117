@@ -249,6 +249,15 @@ export const externalDvms = sqliteTable('external_dvm', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// DVM 信任声明表 (NIP-85 Kind 30382)
+export const dvmTrust = sqliteTable('dvm_trust', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  targetPubkey: text('target_pubkey').notNull(),
+  nostrEventId: text('nostr_event_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
 // Nostr 举报表 (NIP-56 Kind 1984)
 export const nostrReports = sqliteTable('nostr_report', {
   id: text('id').primaryKey(),
@@ -280,5 +289,6 @@ export type NostrFollow = typeof nostrFollows.$inferSelect
 export type NostrCommunityFollow = typeof nostrCommunityFollows.$inferSelect
 export type DvmJob = typeof dvmJobs.$inferSelect
 export type DvmService = typeof dvmServices.$inferSelect
+export type DvmTrust = typeof dvmTrust.$inferSelect
 export type NostrReport = typeof nostrReports.$inferSelect
 export type ExternalDvm = typeof externalDvms.$inferSelect

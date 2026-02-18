@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, users, nostrReports, externalDvms } from '../db/schema'
+import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -116,15 +116,7 @@ export async function buildHandlerInfoEvents(params: {
   pricingMin?: number
   pricingMax?: number
   userId: string
-  reputation?: {
-    jobs_completed: number
-    jobs_rejected: number
-    completion_rate: number
-    avg_response_s: number | null
-    total_earned_sats: number
-    total_zap_received_sats: number
-    last_job_at: number | null
-  }
+  reputation?: Record<string, unknown>
 }): Promise<NostrEvent[]> {
   const content = JSON.stringify({
     name: params.name,
@@ -157,6 +149,28 @@ export async function buildHandlerInfoEvents(params: {
     events.push(event)
   }
   return events
+}
+
+// --- Kind 30382: DVM Trust Declaration (NIP-85 Trusted Assertions) ---
+
+export async function buildDvmTrustEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  targetPubkey: string
+}): Promise<NostrEvent> {
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 30382,
+    content: '',
+    tags: [
+      ['d', params.targetPubkey],
+      ['p', params.targetPubkey],
+      ['assertion', 'trusted_dvm', '1'],
+    ],
+  })
 }
 
 // --- Cron: Poll DVM Results (for customers) ---
@@ -832,6 +846,103 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
 
   // Update KV timestamp
   if (maxCreatedAt > (since || 0)) {
+    await kv.put(sinceKey, String(maxCreatedAt + 1))
+  }
+}
+
+// --- Cron: Poll DVM Trust Declarations (Kind 30382) ---
+
+export async function pollDvmTrust(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Get all local provider pubkeys to filter #p
+  const activeServices = await db
+    .select({ nostrPubkey: users.nostrPubkey })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  const providerPubkeys = [...new Set(activeServices.map(s => s.nostrPubkey).filter((pk): pk is string => !!pk))]
+  if (providerPubkeys.length === 0) return
+
+  // KV-based incremental polling
+  const kv = env.KV
+  const sinceKey = 'dvm_trust_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400
+
+  let maxCreatedAt = since
+
+  // Get local user pubkeys for matching trusters
+  const localUsers = await db
+    .select({ id: users.id, nostrPubkey: users.nostrPubkey })
+    .from(users)
+    .where(isNotNull(users.nostrPubkey))
+  const pubkeyToUserId = new Map(localUsers.map(u => [u.nostrPubkey!, u.id]))
+
+  for (const relayUrl of relayUrls) {
+    try {
+      const { events } = await fetchEventsFromRelay(relayUrl, {
+        kinds: [30382],
+        '#p': providerPubkeys,
+        since,
+      })
+
+      console.log(`[DVM] Fetched ${events.length} Kind 30382 trust events from ${relayUrl}`)
+
+      for (const event of events) {
+        if (!verifyEvent(event)) continue
+
+        // Only process if truster is a local user
+        const trusterUserId = pubkeyToUserId.get(event.pubkey)
+        if (!trusterUserId) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        // Parse d tag (target pubkey) and assertion tag
+        const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+        const assertionTag = event.tags.find((t: string[]) => t[0] === 'assertion')
+        if (!dTag || !assertionTag || assertionTag[1] !== 'trusted_dvm' || assertionTag[2] !== '1') {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        const targetPubkey = dTag
+
+        // Upsert: (userId, targetPubkey) unique
+        const existing = await db.select({ id: dvmTrust.id }).from(dvmTrust)
+          .where(and(eq(dvmTrust.userId, trusterUserId), eq(dvmTrust.targetPubkey, targetPubkey)))
+          .limit(1)
+
+        if (existing.length === 0) {
+          await db.insert(dvmTrust).values({
+            id: generateId(),
+            userId: trusterUserId,
+            targetPubkey,
+            nostrEventId: event.id,
+            createdAt: new Date(event.created_at * 1000),
+          })
+          console.log(`[DVM] Stored trust: ${event.pubkey.slice(0, 8)}... → ${targetPubkey.slice(0, 8)}...`)
+        } else {
+          // Update nostrEventId if missing
+          await db.update(dvmTrust)
+            .set({ nostrEventId: event.id })
+            .where(eq(dvmTrust.id, existing[0].id))
+        }
+
+        if (event.created_at > maxCreatedAt) {
+          maxCreatedAt = event.created_at
+        }
+      }
+    } catch (e) {
+      console.warn(`[DVM] Failed to fetch Kind 30382 from ${relayUrl}:`, e)
+    }
+  }
+
+  // Update KV timestamp
+  if (maxCreatedAt > since) {
     await kv.put(sinceKey, String(maxCreatedAt + 1))
   }
 }

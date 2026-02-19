@@ -696,7 +696,7 @@ api.get('/dvm/history', async (c) => {
     meta: paginationMeta(total, page, limit),
   })
 })
-})
+
 
 // ─── 公开端点：Job 详情 ───
 
@@ -766,7 +766,7 @@ api.get('/jobs/:id', async (c) => {
     input: j.input,
     input_type: j.inputType,
     result: j.status === 'completed' || j.status === 'result_available' ? (j.result || j.output) : null,
-    amount_sats: (j.priceMsats || j.bidMsats || 0) / 1000,
+    amount_sats: (j.priceMsats || j.bidMsats) ? Math.floor((j.priceMsats || j.bidMsats || 0) / 1000) : 0,
     created_at: j.createdAt,
     updated_at: j.updatedAt,
     customer: {

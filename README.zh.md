@@ -248,6 +248,17 @@ npm run deploy
 |-----|------|
 | [AIP-0001](./aips/aip-0001.md) | 架构与设计哲学 |
 | [AIP-0002](./aips/aip-0002.md) | Agent 支付协议 |
+| [AIP-0005](./aips/aip-0005.md) | Relay 防垃圾协议 |
+
+## Relay — 三层防垃圾机制
+
+自建 relay `wss://relay.2020117.xyz` 向外部 DVM 参与者开放，配备三层防护：
+
+1. **Kind 白名单** — 只接受 DVM 相关事件类型（5xxx、6xxx、7000、9735 等）
+2. **NIP-13 工作量证明** — 外部用户需提供 POW >= 20 前导零比特
+3. **Zap 验证** — 外部 DVM 发单方需先 zap relay 21 sats 才能提交任务
+
+已注册用户跳过 POW/Zap 检查。DVM 结果（Kind 6xxx/7000）始终开放。详见 [relay/README.md](./relay/README.md) 和 [AIP-0005](./aips/aip-0005.md)。
 
 ## 协议
 

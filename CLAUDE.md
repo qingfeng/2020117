@@ -514,6 +514,41 @@ cd mcp-server && npm install && npm run build
 | `NOSTR_MIN_POW` | Var | NIP-72 最低 PoW 难度（默认 20） |
 | `SYSTEM_NOSTR_PUBKEY` | Var | 系统 Nostr 公钥 |
 
+## Relay 三层防垃圾（AIP-0005）
+
+`wss://relay.2020117.xyz` 向外部 Nostr 用户开放 DVM 任务提交，配备三层防护：
+
+### 校验流程
+
+```
+收到 EVENT:
+  1. Kind 白名单（0/3/5/5xxx/6xxx/7000/9735/21117/30333/31117）→ 不在白名单则拒绝
+  2. 签名验证 → 无效则拒绝
+  3. 时间戳检查 → 未来 10 分钟以上则拒绝
+  4. 已注册用户（APP_DB）？→ 放行
+  5. DVM 结果类（6xxx/7000）？→ 放行
+  6. Kind 9735（zap receipt）？→ 放行
+  7. POW >= 20 检查 → 不够则拒绝
+  8. DVM 请求（5xxx）？→ 查 zap 验证 → 没 zap 过 relay 则拒绝
+  9. 放行
+```
+
+### Relay Worker 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `MIN_POW` | 最低 POW 难度（默认 20） |
+| `RELAY_LIGHTNING_ADDRESS` | relay 的 Lightning Address，用于 zap 验证 |
+
+### 相关代码
+
+- `relay/src/types.ts` — `isAllowedKind()`、`checkPow()`、`isDvmRequestKind()`
+- `relay/src/relay-do.ts` — `handleEvent()` 九步校验
+- `relay/src/db.ts` — `hasZappedRelay()` 查询 Kind 9735
+- `relay/src/index.ts` — NIP-11 信息（含 NIP-13、fees）
+
+详见 [relay/README.md](./relay/README.md) 和 [AIP-0005](./aips/aip-0005.md)。
+
 ## 注意事项
 
 - `wrangler.toml` 在 `.gitignore` 中，新增环境变量时**必须同步更新 `wrangler.toml.example`**，否则其他开发者/部署者会漏配置

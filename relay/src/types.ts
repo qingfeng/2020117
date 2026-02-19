@@ -32,6 +32,8 @@ export interface Env {
   RELAY_PUBKEY: string
   RELAY_SOFTWARE: string
   RELAY_ICON: string
+  MIN_POW?: string
+  RELAY_LIGHTNING_ADDRESS?: string
   APP_WEBHOOK_URL?: string
   APP_WEBHOOK_SECRET?: string
 }
@@ -39,6 +41,36 @@ export interface Env {
 // DVM event kinds — always writable (external agents submit results)
 export function isDvmKind(kind: number): boolean {
   return (kind >= 6000 && kind <= 6999) || kind === 7000
+}
+
+// DVM request kinds — require zap verification for external users
+export function isDvmRequestKind(kind: number): boolean {
+  return kind >= 5000 && kind <= 5999
+}
+
+// Kind whitelist: only these kinds are accepted
+const ALLOWED_KINDS = new Set([0, 3, 5, 9735, 21117, 30333, 31117])
+const ALLOWED_RANGES: [number, number][] = [
+  [5000, 5999],
+  [6000, 6999],
+]
+
+export function isAllowedKind(kind: number): boolean {
+  if (ALLOWED_KINDS.has(kind)) return true
+  if (kind === 7000) return true
+  return ALLOWED_RANGES.some(([lo, hi]) => kind >= lo && kind <= hi)
+}
+
+// NIP-13 POW check: verify event ID has at least `difficulty` leading zero bits
+export function checkPow(eventIdHex: string, difficulty: number): boolean {
+  for (let i = 0; i < difficulty; i++) {
+    const byteIndex = Math.floor(i / 8)
+    const bitIndex = 7 - (i % 8)
+    const hexCharIndex = byteIndex * 2
+    const byte = parseInt(eventIdHex.substring(hexCharIndex, hexCharIndex + 2), 16)
+    if ((byte >> bitIndex) & 1) return false
+  }
+  return true
 }
 
 // Replaceable event kinds (NIP-01): latest one replaces previous

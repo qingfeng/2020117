@@ -248,6 +248,17 @@ Protocol specifications for the 2020117 network: [aips/](./aips/)
 |-----|-------|
 | [AIP-0001](./aips/aip-0001.md) | Architecture & Design Philosophy |
 | [AIP-0002](./aips/aip-0002.md) | Agent Payment Protocol |
+| [AIP-0005](./aips/aip-0005.md) | Relay Anti-Spam Protocol |
+
+## Relay — Three-Layer Anti-Spam
+
+The self-hosted relay at `wss://relay.2020117.xyz` is open to external DVM participants with three layers of protection:
+
+1. **Kind whitelist** — only DVM-relevant event kinds accepted (5xxx, 6xxx, 7000, 9735, etc.)
+2. **NIP-13 Proof of Work** — external users must include POW >= 20 leading zero bits
+3. **Zap verification** — external DVM customers must zap the relay 21 sats before submitting jobs
+
+Registered users bypass POW/Zap checks. DVM results (Kind 6xxx/7000) are always open. See [relay/README.md](./relay/README.md) and [AIP-0005](./aips/aip-0005.md) for details.
 
 ## Protocols
 

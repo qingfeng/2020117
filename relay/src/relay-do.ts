@@ -1,7 +1,7 @@
 import type { NostrEvent, NostrFilter, Env } from './types'
-import { isEphemeral, isDvmKind } from './types'
+import { isEphemeral, isDvmKind, isDvmRequestKind, isAllowedKind, checkPow } from './types'
 import { verifyEvent } from './crypto'
-import { saveEvent, queryEvents, isAllowedPubkey } from './db'
+import { saveEvent, queryEvents, isAllowedPubkey, hasZappedRelay } from './db'
 
 interface Session {
   subscriptions: Map<string, NostrFilter[]>
@@ -79,32 +79,62 @@ export class RelayDO implements DurableObject {
 
   private async handleEvent(ws: WebSocket, event: NostrEvent): Promise<void> {
     // Validate structure
-    if (!event.id || !event.pubkey || !event.sig || !event.kind === undefined) {
+    if (!event.id || !event.pubkey || !event.sig || event.kind === undefined) {
       this.sendOk(ws, event.id || '', false, 'invalid: missing required fields')
       return
     }
 
-    // Verify signature
+    // 1. Kind whitelist
+    if (!isAllowedKind(event.kind)) {
+      this.sendOk(ws, event.id, false, `blocked: kind ${event.kind} not allowed`)
+      return
+    }
+
+    // 2. Verify signature
     if (!verifyEvent(event)) {
       this.sendOk(ws, event.id, false, 'invalid: bad signature')
       return
     }
 
-    // Check write permission: DVM result/feedback kinds are open, others require registered pubkey
-    if (!isDvmKind(event.kind)) {
-      const allowed = await isAllowedPubkey(this.env.APP_DB, event.pubkey)
-      if (!allowed) {
-        this.sendOk(ws, event.id, false, 'restricted: pubkey not allowed')
-        return
-      }
-    }
-
-    // Reject events too far in the future (10 min)
+    // 3. Reject events too far in the future (10 min)
     const now = Math.floor(Date.now() / 1000)
     if (event.created_at > now + 600) {
       this.sendOk(ws, event.id, false, 'invalid: created_at too far in future')
       return
     }
+
+    // 4. Registered users bypass POW/Zap checks
+    const isRegistered = await isAllowedPubkey(this.env.APP_DB, event.pubkey)
+    if (!isRegistered) {
+      // 5. DVM result/feedback kinds (6xxx/7000) — open to external providers
+      const isDvmResult = isDvmKind(event.kind)
+      // 6. Zap receipt (9735) — must be writable for zap verification to work
+      const isZapReceipt = event.kind === 9735
+
+      if (!isDvmResult && !isZapReceipt) {
+        // 7. POW check for external users
+        const minPow = parseInt(this.env.MIN_POW || '20', 10)
+        if (!checkPow(event.id, minPow)) {
+          this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
+          return
+        }
+
+        // 8. DVM request kinds (5xxx) require zap verification
+        if (isDvmRequestKind(event.kind)) {
+          const relayPubkey = this.env.RELAY_PUBKEY
+          if (relayPubkey) {
+            const zapped = await hasZappedRelay(this.env.DB, event.pubkey, relayPubkey)
+            if (!zapped) {
+              const addr = this.env.RELAY_LIGHTNING_ADDRESS || ''
+              this.sendOk(ws, event.id, false, `blocked: zap ${addr} (21 sats) before submitting DVM requests`)
+              return
+            }
+          }
+        }
+      }
+    }
+
+    // 9. Passed all checks — store and broadcast
 
     // Ephemeral events: broadcast but don't store
     if (isEphemeral(event.kind)) {

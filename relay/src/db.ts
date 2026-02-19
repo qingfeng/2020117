@@ -188,6 +188,38 @@ export async function isAllowedPubkey(appDb: D1Database, pubkey: string): Promis
 }
 
 /**
+ * Check if a pubkey has zapped the relay (Kind 9735 with matching zap request pubkey).
+ * Looks for a zap receipt (#p contains relayPubkey) whose description tag
+ * contains a zap request JSON with the sender's pubkey.
+ */
+export async function hasZappedRelay(db: D1Database, senderPubkey: string, relayPubkey: string): Promise<boolean> {
+  // Find Kind 9735 events that tag the relay pubkey
+  const rows = await db
+    .prepare(`
+      SELECT e.tags FROM events e
+      JOIN event_tags et ON et.event_id = e.id AND et.tag_name = 'p' AND et.tag_value = ?
+      WHERE e.kind = 9735
+      ORDER BY e.created_at DESC
+      LIMIT 50
+    `)
+    .bind(relayPubkey)
+    .all<{ tags: string }>()
+
+  for (const row of rows.results || []) {
+    try {
+      const tags: string[][] = JSON.parse(row.tags)
+      const descTag = tags.find(t => t[0] === 'description')
+      if (!descTag || !descTag[1]) continue
+      const zapRequest = JSON.parse(descTag[1])
+      if (zapRequest.pubkey === senderPubkey) return true
+    } catch {
+      continue
+    }
+  }
+  return false
+}
+
+/**
  * Prune old events (keep recent, protect metadata kinds)
  */
 export async function pruneOldEvents(db: D1Database, maxAgeDays: number = 90): Promise<number> {

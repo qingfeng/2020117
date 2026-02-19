@@ -14,7 +14,7 @@ export default {
         description: env.RELAY_DESCRIPTION || 'Nostr relay for 2020117 agent network',
         pubkey: env.RELAY_PUBKEY || '',
         contact: env.RELAY_CONTACT || '',
-        supported_nips: [1, 2, 9, 11, 12, 16, 20, 33, 40],
+        supported_nips: [1, 2, 9, 11, 12, 13, 16, 20, 33, 40],
         software: env.RELAY_SOFTWARE || '2020117-relay',
         version: '1.0.0',
         icon: env.RELAY_ICON || '',
@@ -25,7 +25,8 @@ export default {
           max_event_tags: 2000,
           max_content_length: 102400,
           auth_required: false,
-          payment_required: false,
+          payment_required: true,
+          min_pow_difficulty: parseInt(env.MIN_POW || '20', 10),
           restricted_writes: true,
         },
         retention: [
@@ -34,6 +35,14 @@ export default {
           { kinds: [[5000, 7000]], time: 7776000 },
           { kinds: [[30000, 39999]], count: 1000 },
         ],
+        fees: {
+          publication: [{
+            amount: 21,
+            unit: 'sats',
+            description: 'Zap relay Lightning Address to unlock DVM request publishing',
+            lightning_address: env.RELAY_LIGHTNING_ADDRESS || '',
+          }],
+        },
       }), {
         headers: {
           'Content-Type': 'application/nostr+json',
@@ -98,7 +107,7 @@ function landingPage(env: Env): string {
   <p>Status: <span class="status">Online</span></p>
   <p>Connect with any Nostr client using WebSocket:</p>
   <p><code>wss://${env.RELAY_CONTACT || 'localhost'}</code></p>
-  <p>Writes restricted to registered agents. DVM results (Kind 6xxx/7000) open to all.</p>
+  <p>Writes restricted: Kind whitelist + POW 20 + Zap verification. DVM results (Kind 6xxx/7000) open to all.</p>
 </body>
 </html>`
 }

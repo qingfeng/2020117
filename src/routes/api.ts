@@ -658,6 +658,8 @@ api.get('/dvm/history', async (c) => {
         updatedAt: dvmJobs.updatedAt,
         customerUsername: users.username,
         customerDisplayName: users.displayName,
+        customerAvatarUrl: users.avatarUrl,
+        customerNostrPubkey: users.nostrPubkey,
       })
       .from(dvmJobs)
       .leftJoin(users, eq(dvmJobs.userId, users.id))
@@ -679,11 +681,98 @@ api.get('/dvm/history', async (c) => {
       input_type: j.inputType,
       result: j.status === 'completed' || j.status === 'result_available' ? j.result : null,
       bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
-      customer: j.customerDisplayName || j.customerUsername || 'unknown',
+      customer: {
+        username: j.customerUsername,
+        display_name: j.customerDisplayName,
+        avatar_url: j.customerAvatarUrl,
+        nostr_pubkey: j.customerNostrPubkey,
+      },
       created_at: j.createdAt,
       updated_at: j.updatedAt,
     })),
     meta: paginationMeta(total, page, limit),
+  })
+})
+
+
+// ─── 公开端点：Job 详情 ───
+
+api.get('/jobs/:id', async (c) => {
+  const db = c.get('db')
+  const id = c.req.param('id')
+
+  const jobResult = await db
+    .select({
+      id: dvmJobs.id,
+      kind: dvmJobs.kind,
+      status: dvmJobs.status,
+      input: dvmJobs.input,
+      inputType: dvmJobs.inputType,
+      result: dvmJobs.result,
+      output: dvmJobs.output,
+      bidMsats: dvmJobs.bidMsats,
+      priceMsats: dvmJobs.priceMsats,
+      createdAt: dvmJobs.createdAt,
+      updatedAt: dvmJobs.updatedAt,
+      // Customer
+      customerUsername: users.username,
+      customerDisplayName: users.displayName,
+      customerAvatarUrl: users.avatarUrl,
+      customerNostrPubkey: users.nostrPubkey,
+      // Provider
+      providerPubkey: dvmJobs.providerPubkey,
+    })
+    .from(dvmJobs)
+    .leftJoin(users, eq(dvmJobs.userId, users.id)) // Join for Customer
+    .where(eq(dvmJobs.id, id))
+    .limit(1)
+
+  if (jobResult.length === 0) {
+    return c.json({ error: 'Job not found' }, 404)
+  }
+
+  const j = jobResult[0]
+
+  // Fetch Provider Info if available
+  let provider = null
+  if (j.providerPubkey) {
+    const p = await db.select({
+      username: users.username,
+      displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
+      nostrPubkey: users.nostrPubkey,
+    }).from(users).where(eq(users.nostrPubkey, j.providerPubkey)).limit(1)
+
+    if (p.length > 0) {
+      provider = {
+        username: p[0].username,
+        display_name: p[0].displayName,
+        avatar_url: p[0].avatarUrl,
+        nostr_pubkey: p[0].nostrPubkey,
+      }
+    } else {
+      provider = { nostr_pubkey: j.providerPubkey }
+    }
+  }
+
+  return c.json({
+    id: j.id,
+    kind: j.kind,
+    kind_label: DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`,
+    status: j.status,
+    input: j.input,
+    input_type: j.inputType,
+    result: j.status === 'completed' || j.status === 'result_available' ? (j.result || j.output) : null,
+    amount_sats: (j.priceMsats || j.bidMsats) ? Math.floor((j.priceMsats || j.bidMsats || 0) / 1000) : 0,
+    created_at: j.createdAt,
+    updated_at: j.updatedAt,
+    customer: {
+      username: j.customerUsername,
+      display_name: j.customerDisplayName,
+      avatar_url: j.customerAvatarUrl,
+      nostr_pubkey: j.customerNostrPubkey,
+    },
+    provider: provider,
   })
 })
 
@@ -806,7 +895,7 @@ api.get('/me', requireApiAuth, async (c) => {
       const uri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
       const parsed = parseNwcUri(uri)
       nwcRelayUrl = parsed.relayUrl
-    } catch {}
+    } catch { }
   }
 
   return c.json({
@@ -1821,7 +1910,7 @@ api.post('/zap', requireApiAuth, async (c) => {
               break
             }
           }
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -2236,7 +2325,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
               updatedAt: now,
             })
             console.log(`[DVM] Local delivery: job ${event.id} → provider ${svc.userId}`)
-          } catch {}
+          } catch { }
         }
       }
     } catch (e) {
@@ -2482,7 +2571,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
           return c.json({ error: `This job requires at least ${minZap} sats in zap history (you have ${zapTotal})` }, 403)
         }
       }
-    } catch {}
+    } catch { }
   }
 
   // error 状态允许重新接单，重置为 open
@@ -2666,7 +2755,7 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
             updatedAt: new Date(),
           })
           console.log(`[DVM] Re-delivery after reject: job ${cj.requestEventId} → provider ${svc.userId}`)
-        } catch {}
+        } catch { }
       }
     } catch (e) {
       console.error('[DVM] Re-delivery after reject failed:', e)

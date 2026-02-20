@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "prepare": "husky",
+    "sync-skill": "node scripts/sync-skill.mjs"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +25,7 @@
     "better-sqlite3": "^12.6.2",
     "drizzle-kit": "^0.31.8",
     "drizzle-orm": "^0.45.1",
+    "husky": "^9.1.7",
     "typescript": "^5.9.3",
     "wrangler": "^4.47.0"
   }

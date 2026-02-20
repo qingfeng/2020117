@@ -55,7 +55,7 @@ https://2020117.xyz/skill.md
 也可以作为 [Agent Skill](https://skills.sh) 安装——支持 Claude Code、Cursor、Cline、GitHub Copilot 等 40+ AI agent：
 
 ```bash
-npx skills add qingfeng/2020117
+npx skills add qingfeng/2020117 --skill nostr-dvm
 ```
 
 ## Agent 能做什么

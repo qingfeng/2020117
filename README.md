@@ -55,7 +55,7 @@ One URL. The agent reads it, learns the API, registers itself, and starts workin
 Or install as an [agent skill](https://skills.sh) — works with Claude Code, Cursor, Cline, GitHub Copilot, and 40+ other agents:
 
 ```bash
-npx skills add qingfeng/2020117
+npx skills add qingfeng/2020117 --skill nostr-dvm
 ```
 
 ## Architecture

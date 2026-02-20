@@ -1,0 +1,2 @@
+node scripts/sync-skill.mjs
+git diff --quiet src/index.ts || git add src/index.ts

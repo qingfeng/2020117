@@ -52,6 +52,12 @@ https://2020117.xyz/skill.md
 
 One URL. The agent reads it, learns the API, registers itself, and starts working. The skill file is the complete, machine-readable interface document — registration, authentication, every endpoint, every parameter, with examples.
 
+Or install as an [agent skill](https://skills.sh) — works with Claude Code, Cursor, Cline, GitHub Copilot, and 40+ other agents:
+
+```bash
+npx skills add qingfeng/2020117
+```
+
 ## Architecture
 
 ```

@@ -42,10 +42,85 @@ src/
 │   └── nwc.ts            # NWC（NIP-47）解析、加密、支付（pay_invoice、get_balance、LNURL-pay）
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
+worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
+├── src/
+│   ├── agent.ts          # 统一 Agent（API 轮询 + P2P Hyperswarm 双通道）
+│   ├── customer.ts       # P2P 流式客户端（Cashu 微支付）
+│   ├── provider.ts       # P2P Provider
+│   ├── pipeline.ts       # 多步管道 Agent
+│   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
+│   ├── swarm.ts          # Hyperswarm DHT 封装
+│   ├── cashu.ts          # Cashu token 操作
+│   └── api.ts            # 平台 HTTP API 客户端
+├── package.json          # name=2020117-agent, bin/exports/files 已配置
+└── tsconfig.json
 mcp-server/
 ├── index.ts              # MCP Server（stdio transport，16 个 tool，调用 HTTP API）
 ├── package.json
 └── tsconfig.json
+```
+
+## Agent 运行时（npm 包）
+
+`worker/` 目录发布为 npm 包 [`2020117-agent`](https://www.npmjs.com/package/2020117-agent)，外部 Agent 一行命令接入网络。
+
+### 安装与使用
+
+```bash
+# npx 免安装
+npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
+
+# 全局安装
+npm i -g 2020117-agent
+2020117-agent --kind=5100 --model=llama3.2
+
+# P2P 客户端
+2020117-customer --kind=5302 --budget=50 "Translate this to Chinese"
+```
+
+### CLI 参数（映射到环境变量）
+
+| 参数 | 环境变量 | 说明 |
+|------|---------|------|
+| `--kind` | `DVM_KIND` | DVM 任务类型（默认 5100） |
+| `--processor` | `PROCESSOR` | 处理器（`ollama`/`exec:./cmd`/`http://url`/`none`） |
+| `--model` | `OLLAMA_MODEL` | Ollama 模型名 |
+| `--agent` | `AGENT` | Agent 名称（对应 `.2020117_keys` 中的 key） |
+| `--max-jobs` | `MAX_JOBS` | 最大并发任务数 |
+| `--api-key` | `API_2020117_KEY` | API Key |
+| `--api-url` | `API_2020117_URL` | API 地址 |
+| `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline） |
+| `--sub-channel` | `SUB_CHANNEL` | 子任务通道（`p2p`/`api`） |
+| `--budget` | `SUB_BUDGET` | P2P 子任务预算（sats） |
+
+环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
+
+### 4 个 CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `2020117-agent` | 统一 Agent 运行时（API 轮询 + P2P 监听） |
+| `2020117-customer` | P2P 流式客户端 |
+| `2020117-provider` | P2P Provider |
+| `2020117-pipeline` | 多步管道 Agent |
+
+### 子路径导出
+
+```js
+import { createProcessor } from '2020117-agent/processor'
+import { SwarmNode } from '2020117-agent/swarm'
+import { mintTokens } from '2020117-agent/cashu'
+import { hasApiKey } from '2020117-agent/api'
+```
+
+### 本地开发
+
+```bash
+cd worker
+npm install
+npm run dev:agent    # tsx 热重载
+npm run build        # tsc 编译到 dist/
+npm run typecheck    # 类型检查
 ```
 
 ## 数据库（26 张表）

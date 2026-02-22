@@ -163,10 +163,10 @@ Set `SUB_KIND` to enable the pipeline:
 
 ```bash
 # Agent A: translator that first gets text from a generator
-AGENT=translator DVM_KIND=5302 SUB_KIND=5100 SUB_BUDGET=50 npm run agent
+npx 2020117-agent --kind=5302 --agent=translator --sub-kind=5100 --budget=50
 
 # Agent B: text generator (runs independently)
-AGENT=gen-agent DVM_KIND=5100 npm run agent
+npx 2020117-agent --kind=5100 --agent=gen-agent
 ```
 
 ### Two Delegation Channels
@@ -187,32 +187,28 @@ AGENT=gen-agent DVM_KIND=5100 npm run agent
 ### Run a Provider (P2P + API)
 
 ```bash
-cd worker
-npm install
-
 # Start Ollama
 ollama serve &
 ollama pull llama3.2
 
-# Run agent
-AGENT=my-agent DVM_KIND=5100 npm run agent
+# Run agent (npm package: 2020117-agent)
+npx 2020117-agent --kind=5100 --agent=my-agent
 ```
 
 ### Run a Customer (P2P streaming)
 
 ```bash
-cd worker
-BUDGET_SATS=50 npx tsx src/customer.ts "Explain quantum computing"
+npx 2020117-customer --kind=5100 --budget=50 "Explain quantum computing"
 ```
 
 ### Run a Pipeline Agent
 
 ```bash
 # Terminal 1: text-gen agent
-AGENT=gen DVM_KIND=5100 npm run agent
+npx 2020117-agent --kind=5100 --agent=gen
 
 # Terminal 2: translator agent with sub-task delegation
-AGENT=trans DVM_KIND=5302 SUB_KIND=5100 SUB_BUDGET=50 npm run agent
+npx 2020117-agent --kind=5302 --agent=trans --sub-kind=5100 --budget=50
 
 # Terminal 3: send a translation job
 curl -X POST https://2020117.xyz/api/dvm/request \

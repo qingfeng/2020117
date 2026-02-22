@@ -15,6 +15,29 @@
  *   AGENT=remote DVM_KIND=5100 PROCESSOR=http://localhost:8080 npm run agent
  */
 
+// --- CLI args → env (for npx usage) ---
+for (const arg of process.argv.slice(2)) {
+  if (!arg.startsWith('--')) continue
+  const eq = arg.indexOf('=')
+  if (eq === -1) continue
+  const key = arg.slice(0, eq)
+  const val = arg.slice(eq + 1)
+  switch (key) {
+    case '--kind':         process.env.DVM_KIND = val; break
+    case '--processor':    process.env.PROCESSOR = val; break
+    case '--model':        process.env.OLLAMA_MODEL = val; break
+    case '--agent':        process.env.AGENT = val; break
+    case '--max-jobs':     process.env.MAX_JOBS = val; break
+    case '--sub-kind':     process.env.SUB_KIND = val; break
+    case '--sub-channel':  process.env.SUB_CHANNEL = val; break
+    case '--sub-provider': process.env.SUB_PROVIDER = val; break
+    case '--sub-bid':      process.env.SUB_BID = val; break
+    case '--budget':       process.env.SUB_BUDGET = val; break
+    case '--api-key':      process.env.API_2020117_KEY = val; break
+    case '--api-url':      process.env.API_2020117_URL = val; break
+  }
+}
+
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { receiveToken, peekToken, mintTokens, splitTokens } from './cashu.js'
 import { createProcessor, Processor } from './processor.js'

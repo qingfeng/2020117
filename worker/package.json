@@ -1,15 +1,33 @@
 {
-  "name": "2020117-worker",
+  "name": "@2020117/agent",
   "version": "0.1.0",
-  "description": "Local daemon for 2020117 DVM — Hyperswarm P2P + Cashu payments + local model adapters",
+  "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
   "type": "module",
+  "bin": {
+    "2020117-agent": "./dist/agent.js",
+    "2020117-customer": "./dist/customer.js",
+    "2020117-provider": "./dist/provider.js",
+    "2020117-pipeline": "./dist/pipeline.js"
+  },
+  "files": ["dist"],
+  "exports": {
+    "./processor": "./dist/processor.js",
+    "./swarm": "./dist/swarm.js",
+    "./cashu": "./dist/cashu.js",
+    "./api": "./dist/api.js"
+  },
   "scripts": {
-    "agent": "npx tsx src/agent.ts",
-    "provider": "npx tsx src/provider.ts",
-    "customer": "npx tsx src/customer.ts",
-    "pipeline": "npx tsx src/pipeline.ts",
+    "agent": "node dist/agent.js",
+    "customer": "node dist/customer.js",
+    "provider": "node dist/provider.js",
+    "pipeline": "node dist/pipeline.js",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "prepublishOnly": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev:agent": "npx tsx src/agent.ts",
+    "dev:customer": "npx tsx src/customer.ts",
+    "dev:provider": "npx tsx src/provider.ts",
+    "dev:pipeline": "npx tsx src/pipeline.ts"
   },
   "dependencies": {
     "@cashu/cashu-ts": "^3.5.0",

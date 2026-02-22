@@ -16,6 +16,20 @@
  *   8. On result → done
  */
 
+// --- CLI args → env (for npx usage) ---
+for (const arg of process.argv.slice(2)) {
+  if (!arg.startsWith('--')) continue
+  const eq = arg.indexOf('=')
+  if (eq === -1) continue
+  const key = arg.slice(0, eq)
+  const val = arg.slice(eq + 1)
+  switch (key) {
+    case '--kind':      process.env.DVM_KIND = val; break
+    case '--budget':    process.env.BUDGET_SATS = val; break
+    case '--max-price': process.env.MAX_SATS_PER_CHUNK = val; break
+  }
+}
+
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { mintTokens, splitTokens } from './cashu.js'
 import { randomBytes } from 'crypto'
@@ -25,7 +39,7 @@ const BUDGET_SATS = Number(process.env.BUDGET_SATS) || 100
 const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
 
 async function main() {
-  const prompt = process.argv.slice(2).join(' ')
+  const prompt = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ')
   if (!prompt) {
     console.error('Usage: BUDGET_SATS=50 npx tsx src/customer.ts "your prompt here"')
     process.exit(1)

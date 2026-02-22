@@ -116,19 +116,17 @@ export class SwarmNode extends EventEmitter {
   }
 
   /** Join a topic as server (provider) */
-  async listen(topic: Buffer) {
+  async listen(topic: Buffer): Promise<void> {
     const discovery = this.swarm.join(topic, { server: true, client: false })
     await discovery.flushed()
     console.log(`[swarm] Listening on topic: ${topic.toString('hex').slice(0, 16)}...`)
-    return discovery
   }
 
   /** Join a topic as client (customer) */
-  async connect(topic: Buffer) {
+  async connect(topic: Buffer): Promise<void> {
     const discovery = this.swarm.join(topic, { server: false, client: true })
     await discovery.flushed()
     console.log(`[swarm] Looking for peers on topic: ${topic.toString('hex').slice(0, 16)}...`)
-    return discovery
   }
 
   /** Wait for the first peer connection (with timeout) */

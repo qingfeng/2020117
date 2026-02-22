@@ -64,6 +64,7 @@ const SUB_CHANNEL = process.env.SUB_CHANNEL || 'p2p'
 const SUB_PROVIDER = process.env.SUB_PROVIDER || undefined
 const SUB_BID = Number(process.env.SUB_BID) || 100
 const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
+const MIN_BID_SATS = Number(process.env.MIN_BID_SATS) || SATS_PER_CHUNK * CHUNKS_PER_PAYMENT  // default = pricing per job
 const SUB_BATCH_SIZE = Number(process.env.SUB_BATCH_SIZE) || 500 // chars to accumulate before local processing
 
 // --- State ---
@@ -175,6 +176,14 @@ function startInboxPoller(label: string) {
       for (const job of jobs) {
         if (state.shuttingDown) break
         if (!acquireSlot()) break
+
+        // Check bid meets minimum pricing
+        const bidSats = job.bid_sats ?? 0
+        if (MIN_BID_SATS > 0 && bidSats < MIN_BID_SATS) {
+          console.log(`[${label}] Skipping job ${job.id}: bid ${bidSats} < min ${MIN_BID_SATS} sats`)
+          releaseSlot()
+          continue
+        }
 
         // Process in background — don't await
         processAsyncJob(label, job.id, job.input).catch((err) => {

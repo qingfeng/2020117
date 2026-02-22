@@ -1,5 +1,5 @@
 {
-  "name": "@2020117/agent",
+  "name": "2020117-agent",
   "version": "0.1.0",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
   "type": "module",

@@ -4,6 +4,7 @@
   "description": "Local daemon for 2020117 DVM — Hyperswarm P2P + Cashu payments + local model adapters",
   "type": "module",
   "scripts": {
+    "agent": "npx tsx src/agent.ts",
     "provider": "npx tsx src/provider.ts",
     "customer": "npx tsx src/customer.ts",
     "pipeline": "npx tsx src/pipeline.ts",

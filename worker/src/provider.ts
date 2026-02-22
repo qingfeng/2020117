@@ -18,6 +18,7 @@
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { receiveToken, peekToken } from './cashu.js'
 import { generateStream, listModels } from './adapters/ollama.js'
+import { hasApiKey, registerService, startHeartbeatLoop } from './api.js'
 
 const KIND = Number(process.env.DVM_KIND) || 5100
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
@@ -51,6 +52,17 @@ async function main() {
     console.error(`[provider] Ollama not reachable: ${e.message}`)
     console.error(`[provider] Make sure Ollama is running: ollama serve`)
     process.exit(1)
+  }
+
+  // --- Platform registration ---
+  let stopHeartbeat: (() => void) | null = null
+
+  if (hasApiKey()) {
+    console.log('[provider] Registering on platform...')
+    await registerService({ kind: KIND, satsPerChunk: SATS_PER_CHUNK, chunksPerPayment: CHUNKS_PER_PAYMENT, model: MODEL })
+    stopHeartbeat = startHeartbeatLoop()
+  } else {
+    console.log('[provider] No API key — P2P-only mode')
   }
 
   const satsPerPayment = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
@@ -150,6 +162,7 @@ async function main() {
   // Graceful shutdown
   process.on('SIGINT', async () => {
     console.log('\n[provider] Shutting down...')
+    if (stopHeartbeat) stopHeartbeat()
     await node.destroy()
     process.exit(0)
   })

@@ -17,12 +17,31 @@
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { mintTokens, splitTokens } from './cashu.js'
 import { randomBytes } from 'crypto'
+import { getOnlineProviders } from './api.js'
 
 const BUDGET_SATS = Number(process.env.BUDGET_SATS) || 100
 const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
 const GEN_KIND = Number(process.env.GEN_KIND) || 5100
 const TRANS_KIND = Number(process.env.TRANS_KIND) || 5302
 const TARGET_LANG = process.env.TARGET_LANG || 'Chinese'
+
+async function showAvailableProviders(kind: number, label: string) {
+  try {
+    const agents = await getOnlineProviders(kind)
+    if (agents.length === 0) {
+      console.log(`[${label}] No providers online on platform for kind ${kind}`)
+    } else {
+      console.log(`[${label}] ${agents.length} provider(s) online on platform for kind ${kind}:`)
+      for (const a of agents) {
+        const cap = a.capacity !== undefined ? `, capacity: ${a.capacity}` : ''
+        const price = a.pricing ? `, pricing: ${JSON.stringify(a.pricing)}` : ''
+        console.log(`[${label}]   - ${a.username || a.user_id} (${a.status}${cap}${price})`)
+      }
+    }
+  } catch {
+    console.log(`[${label}] Could not query platform`)
+  }
+}
 
 /**
  * Run a single pipeline step: mint → connect → offer → split → pay → collect output → destroy
@@ -203,6 +222,8 @@ async function main() {
   console.log(`Phase 1: Text Generation (budget: ${genBudget} sats)`)
   console.log('─'.repeat(60))
 
+  await showAvailableProviders(GEN_KIND, 'gen')
+
   const generated = await runStep({
     kind: GEN_KIND,
     prompt,
@@ -220,6 +241,8 @@ async function main() {
   console.log(`\n${'─'.repeat(60)}`)
   console.log(`Phase 2: Translation to ${TARGET_LANG} (budget: ${transBudget} sats)`)
   console.log('─'.repeat(60))
+
+  await showAvailableProviders(TRANS_KIND, 'trans')
 
   const translated = await runStep({
     kind: TRANS_KIND,

@@ -8,3 +8,4 @@ wrangler.toml
 relay/wrangler.toml
 public/
 mcp-server/dist/
+worker/dist/

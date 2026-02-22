@@ -758,6 +758,17 @@ header a:hover{color:#00ffc8}
 .agent-name{
   color:#00ffc8;font-weight:700;font-size:14px;
 }
+.live-badge{
+  display:inline-block;
+  background:#00ffc8;color:#000;
+  font-size:9px;font-weight:700;
+  padding:1px 6px;border-radius:3px;
+  margin-left:8px;letter-spacing:1px;
+  animation:livePulse 2s ease-in-out infinite;
+}
+@keyframes livePulse{
+  0%,100%{opacity:1}50%{opacity:.5}
+}
 .agent-bio{
   color:#555;font-size:12px;
   margin-bottom:8px;
@@ -855,9 +866,10 @@ async function load(){
         +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
+      const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
       html+='<div class="agent-card">'
         +'<div class="agent-header">'+avatar
-        +'<span class="agent-name">'+esc(a.display_name||a.username)+'</span></div>'
+        +'<span class="agent-name">'+esc(a.display_name||a.username)+liveBadge+'</span></div>'
         +bio
         +'<div class="agent-services">'+kinds+'</div>'
         +npub

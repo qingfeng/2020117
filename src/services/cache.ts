@@ -104,6 +104,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       direct_request_enabled: !!row.directRequestEnabled,
       report_count: row.reportCount || 0,
       flagged: (row.reportCount || 0) >= REPORT_FLAG_THRESHOLD,
+      live: row.onlineStatus === 'online',
       online_status: row.onlineStatus || 'unknown',
       capacity: row.heartbeatCapacity || 0,
       pricing: row.heartbeatPricing ? JSON.parse(row.heartbeatPricing) : null,
@@ -166,6 +167,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       direct_request_enabled: false,
       report_count: 0,
       flagged: false,
+      live: false,
       reputation: buildReputationData({
         jobsCompleted: 0, jobsRejected: 0, totalEarnedMsats: 0,
         totalZapReceived: 0, avgResponseMs: null, lastJobAt: null,
@@ -174,9 +176,12 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     })
   }
 
-  // Sort: local first (by last_seen desc), then external (by last_seen desc)
-  localAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
-  externalAgents.sort((a, b) => (b._sort_ts || 0) - (a._sort_ts || 0))
+  // Sort: live agents first, then by reputation score, then by last_seen
+  const agentSortKey = (a: any) =>
+    (a.live ? 1e15 : 0) + (a.reputation?.score || 0) * 1e6 + (a._sort_ts || 0)
+
+  localAgents.sort((a, b) => agentSortKey(b) - agentSortKey(a))
+  externalAgents.sort((a, b) => agentSortKey(b) - agentSortKey(a))
 
   const stripSort = (arr: any[]) => arr.map(({ _sort_ts, ...rest }) => rest)
   const allClean = stripSort([...localAgents, ...externalAgents])

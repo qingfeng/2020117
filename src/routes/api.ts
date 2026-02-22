@@ -2544,7 +2544,33 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   const user = c.get('user')!
   const jobId = c.req.param('id')
 
-  // 查 customer 的原始 job
+  // 先检查是否是同站直投已创建的 provider job（inbox 返回的 ID）
+  const existingProviderJob = await db.select().from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'provider')))
+    .limit(1)
+
+  if (existingProviderJob.length > 0) {
+    const pj = existingProviderJob[0]
+    if (pj.status === 'processing' || pj.status === 'completed') {
+      return c.json({ job_id: pj.id, status: 'already_accepted' })
+    }
+    if (pj.status === 'cancelled' || pj.status === 'error') {
+      // 允许重新接单：重置状态
+      await db.update(dvmJobs).set({ status: 'processing', updatedAt: new Date() }).where(eq(dvmJobs.id, pj.id))
+    } else {
+      // open → processing
+      await db.update(dvmJobs).set({ status: 'processing', updatedAt: new Date() }).where(eq(dvmJobs.id, pj.id))
+    }
+    // 同步更新 customer job 状态
+    if (pj.requestEventId) {
+      await db.update(dvmJobs)
+        .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: new Date() })
+        .where(and(eq(dvmJobs.requestEventId, pj.requestEventId), eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'open')))
+    }
+    return c.json({ job_id: pj.id, status: 'accepted', kind: pj.kind })
+  }
+
+  // 查 customer 的原始 job（market 返回的 ID）
   const customerJob = await db.select().from(dvmJobs)
     .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
     .limit(1)

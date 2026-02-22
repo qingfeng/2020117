@@ -10,11 +10,14 @@
  *   AGENT=translator DVM_KIND=5302 OLLAMA_MODEL=qwen2.5:0.5b npm run agent
  *   AGENT=my-agent DVM_KIND=5100 MAX_JOBS=5 npm run agent
  *   DVM_KIND=5100 npm run agent          # no API key → P2P-only mode
+ *   AGENT=broker DVM_KIND=5302 PROCESSOR=none SUB_KIND=5100 npm run agent
+ *   AGENT=custom DVM_KIND=5100 PROCESSOR=exec:./my-model.sh npm run agent
+ *   AGENT=remote DVM_KIND=5100 PROCESSOR=http://localhost:8080 npm run agent
  */
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { receiveToken, peekToken, mintTokens, splitTokens } from './cashu.js'
-import { generate, generateStream, listModels } from './adapters/ollama.js'
+import { createProcessor, Processor } from './processor.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
   getInbox, acceptJob, sendFeedback, submitResult,
@@ -25,7 +28,6 @@ import { randomBytes } from 'crypto'
 // --- Config from env ---
 
 const KIND = Number(process.env.DVM_KIND) || 5100
-const MODEL = process.env.OLLAMA_MODEL || 'llama3.2'
 const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
 const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
@@ -50,6 +52,7 @@ interface AgentState {
   stopHeartbeat: (() => void) | null
   pollTimer: ReturnType<typeof setTimeout> | null
   swarmNode: SwarmNode | null
+  processor: Processor | null
 }
 
 const state: AgentState = {
@@ -59,6 +62,7 @@ const state: AgentState = {
   stopHeartbeat: null,
   pollTimer: null,
   swarmNode: null,
+  processor: null,
 }
 
 // --- Capacity management ---
@@ -83,13 +87,17 @@ function getAvailableCapacity(): number {
 async function main() {
   const label = state.agentName || 'agent'
   console.log(`[${label}] Starting unified agent runtime`)
-  console.log(`[${label}] kind=${KIND} model=${MODEL} maxJobs=${MAX_CONCURRENT}`)
+
+  // 1. Create and verify processor
+  state.processor = await createProcessor()
+  console.log(`[${label}] kind=${KIND} processor=${state.processor.name} maxJobs=${MAX_CONCURRENT}`)
   if (SUB_KIND) {
     console.log(`[${label}] Pipeline: sub-task kind=${SUB_KIND} via ${SUB_CHANNEL}${SUB_CHANNEL === 'api' ? ` (bid=${SUB_BID}${SUB_PROVIDER ? `, provider=${SUB_PROVIDER}` : ''})` : ` (budget=${SUB_BUDGET} sats)`}`)
+  } else if (state.processor.name === 'none') {
+    console.warn(`[${label}] WARNING: processor=none without SUB_KIND — generate() will pass through input as-is`)
   }
-
-  // 1. Verify Ollama
-  await verifyOllama(label)
+  await state.processor.verify()
+  console.log(`[${label}] Processor "${state.processor.name}" verified`)
 
   // 2. Platform registration + heartbeat
   await setupPlatform(label)
@@ -106,25 +114,6 @@ async function main() {
   console.log(`[${label}] Agent ready — async + P2P channels active\n`)
 }
 
-// --- 1. Verify Ollama ---
-
-async function verifyOllama(label: string) {
-  console.log(`[${label}] Checking Ollama (model: ${MODEL})...`)
-  try {
-    const models = await listModels()
-    if (!models.some(m => m.startsWith(MODEL))) {
-      console.error(`[${label}] Model "${MODEL}" not found. Available: ${models.join(', ')}`)
-      console.error(`[${label}] Run: ollama pull ${MODEL}`)
-      process.exit(1)
-    }
-    console.log(`[${label}] Ollama OK — model "${MODEL}" available`)
-  } catch (e: any) {
-    console.error(`[${label}] Ollama not reachable: ${e.message}`)
-    console.error(`[${label}] Make sure Ollama is running: ollama serve`)
-    process.exit(1)
-  }
-}
-
 // --- 2. Platform registration ---
 
 async function setupPlatform(label: string) {
@@ -137,7 +126,7 @@ async function setupPlatform(label: string) {
     kind: KIND,
     satsPerChunk: SATS_PER_CHUNK,
     chunksPerPayment: CHUNKS_PER_PAYMENT,
-    model: MODEL,
+    model: state.processor?.name || 'unknown',
   })
   state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity())
 }
@@ -209,7 +198,7 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
           // API delegation is non-streaming — collect full result, then process
           const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
           console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
-          result = await generate({ model: MODEL, prompt: subResult })
+          result = await state.processor!.generate(subResult)
         } else {
           // P2P delegation — stream-collect from sub-provider, batch-translate
           result = ''
@@ -219,11 +208,11 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
         }
       } catch (e: any) {
         console.error(`[${label}] Job ${providerJobId}: sub-task failed: ${e.message}, using original input`)
-        result = await generate({ model: MODEL, prompt: input })
+        result = await state.processor!.generate(input)
       }
     } else {
       // No pipeline — direct local processing
-      result = await generate({ model: MODEL, prompt: input })
+      result = await state.processor!.generate(input)
     }
 
     console.log(`[${label}] Job ${providerJobId}: generated ${result.length} chars`)
@@ -418,7 +407,7 @@ async function* pipelineStream(kind: number, input: string, budgetSats: number):
   let batch = ''
 
   async function* translateBatch(text: string): AsyncGenerator<string> {
-    for await (const token of generateStream({ model: MODEL, prompt: text })) {
+    for await (const token of state.processor!.generateStream(text)) {
       yield token
     }
   }
@@ -630,7 +619,7 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
   // Pick the source: pipeline (delegate + local) or direct local generation
   const source = SUB_KIND
     ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
-    : generateStream({ model: MODEL, prompt: msg.input || '' })
+    : state.processor!.generateStream(msg.input || '')
 
   try {
     for await (const chunk of source) {

@@ -13,12 +13,14 @@
  */
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
-import { receiveToken, peekToken } from './cashu.js'
+import { receiveToken, peekToken, mintTokens, splitTokens } from './cashu.js'
 import { generate, generateStream, listModels } from './adapters/ollama.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
   getInbox, acceptJob, sendFeedback, submitResult,
+  createJob, getJob,
 } from './api.js'
+import { randomBytes } from 'crypto'
 
 // --- Config from env ---
 
@@ -29,6 +31,15 @@ const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 const PAYMENT_TIMEOUT = Number(process.env.PAYMENT_TIMEOUT) || 30_000
+
+// --- Sub-task delegation config ---
+const SUB_KIND = process.env.SUB_KIND ? Number(process.env.SUB_KIND) : null
+const SUB_BUDGET = Number(process.env.SUB_BUDGET) || 50
+const SUB_CHANNEL = process.env.SUB_CHANNEL || 'p2p'
+const SUB_PROVIDER = process.env.SUB_PROVIDER || undefined
+const SUB_BID = Number(process.env.SUB_BID) || 100
+const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
+const SUB_BATCH_SIZE = Number(process.env.SUB_BATCH_SIZE) || 500 // chars to accumulate before local processing
 
 // --- State ---
 
@@ -73,6 +84,9 @@ async function main() {
   const label = state.agentName || 'agent'
   console.log(`[${label}] Starting unified agent runtime`)
   console.log(`[${label}] kind=${KIND} model=${MODEL} maxJobs=${MAX_CONCURRENT}`)
+  if (SUB_KIND) {
+    console.log(`[${label}] Pipeline: sub-task kind=${SUB_KIND} via ${SUB_CHANNEL}${SUB_CHANNEL === 'api' ? ` (bid=${SUB_BID}${SUB_PROVIDER ? `, provider=${SUB_PROVIDER}` : ''})` : ` (budget=${SUB_BUDGET} sats)`}`)
+  }
 
   // 1. Verify Ollama
   await verifyOllama(label)
@@ -185,8 +199,33 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
 
     await sendFeedback(providerJobId, 'processing')
 
-    // Non-streaming generate for platform (result must be submitted at once)
-    const result = await generate({ model: MODEL, prompt: input })
+    let result: string
+
+    // Pipeline: delegate sub-task then process locally
+    if (SUB_KIND) {
+      console.log(`[${label}] Job ${providerJobId}: delegating to kind ${SUB_KIND} via ${SUB_CHANNEL}...`)
+      try {
+        if (SUB_CHANNEL === 'api') {
+          // API delegation is non-streaming — collect full result, then process
+          const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
+          console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
+          result = await generate({ model: MODEL, prompt: subResult })
+        } else {
+          // P2P delegation — stream-collect from sub-provider, batch-translate
+          result = ''
+          for await (const chunk of pipelineStream(SUB_KIND, input, SUB_BUDGET)) {
+            result += chunk
+          }
+        }
+      } catch (e: any) {
+        console.error(`[${label}] Job ${providerJobId}: sub-task failed: ${e.message}, using original input`)
+        result = await generate({ model: MODEL, prompt: input })
+      }
+    } else {
+      // No pipeline — direct local processing
+      result = await generate({ model: MODEL, prompt: input })
+    }
+
     console.log(`[${label}] Job ${providerJobId}: generated ${result.length} chars`)
 
     const ok = await submitResult(providerJobId, result)
@@ -198,6 +237,244 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
   } finally {
     releaseSlot()
   }
+}
+
+// --- Sub-task delegation ---
+
+/**
+ * Delegate a sub-task via Hyperswarm P2P with Cashu streaming payments.
+ * Returns an AsyncGenerator that yields chunks as they arrive from the
+ * remote provider — no buffering, true streaming.
+ *
+ * Creates a temporary SwarmNode (independent from the server listener).
+ * The node is destroyed when the generator returns or throws.
+ */
+async function* delegateP2PStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
+  const jobId = randomBytes(8).toString('hex')
+  const tag = `sub-p2p-${jobId.slice(0, 8)}`
+
+  console.log(`[${tag}] Minting ${budgetSats} sats...`)
+  const { token: bigToken } = await mintTokens(budgetSats)
+
+  const node = new SwarmNode()
+  const topic = topicFromKind(kind)
+
+  try {
+    console.log(`[${tag}] Looking for kind ${kind} provider...`)
+    await node.connect(topic)
+
+    const peer = await node.waitForPeer(30_000)
+    console.log(`[${tag}] Connected to provider: ${peer.peerId.slice(0, 12)}...`)
+
+    // Channel: message handler pushes chunks, generator consumes them
+    const chunks: string[] = []
+    let finished = false
+    let error: Error | null = null
+    let notify: (() => void) | null = null
+
+    function wake() {
+      if (notify) { notify(); notify = null }
+    }
+
+    function waitForChunk(): Promise<void> {
+      if (chunks.length > 0 || finished || error) return Promise.resolve()
+      return new Promise<void>(r => { notify = r })
+    }
+
+    let microTokens: string[] = []
+    let tokenIndex = 0
+
+    function sendNextPayment() {
+      if (tokenIndex >= microTokens.length) return false
+      const token = microTokens[tokenIndex++]
+      console.log(`[${tag}] Payment ${tokenIndex}/${microTokens.length}`)
+      node.send(peer.socket, { type: 'payment', id: jobId, token })
+      return true
+    }
+
+    // Timeout
+    const timeout = setTimeout(() => {
+      error = new Error(`P2P delegation timed out after 120s`)
+      wake()
+    }, 120_000)
+
+    node.on('message', async (msg: SwarmMessage) => {
+      if (msg.id !== jobId) return
+
+      switch (msg.type) {
+        case 'offer': {
+          const spc = msg.sats_per_chunk ?? 0
+          const cpp = msg.chunks_per_payment ?? 0
+          const satsPerPayment = spc * cpp
+
+          if (spc > MAX_SATS_PER_CHUNK) {
+            node.send(peer.socket, { type: 'stop', id: jobId })
+            error = new Error(`Price too high: ${spc} sat/chunk > max ${MAX_SATS_PER_CHUNK}`)
+            wake()
+            return
+          }
+
+          if (satsPerPayment <= 0) {
+            error = new Error(`Invalid offer: sats_per_payment = 0`)
+            wake()
+            return
+          }
+
+          console.log(`[${tag}] Offer: ${spc} sat/chunk, ${cpp} chunks/payment`)
+          try {
+            microTokens = await splitTokens(bigToken, satsPerPayment)
+            console.log(`[${tag}] Split into ${microTokens.length} micro-tokens`)
+          } catch (e: any) {
+            error = new Error(`Token split failed: ${e.message}`)
+            wake()
+            return
+          }
+
+          if (microTokens.length === 0) {
+            error = new Error(`Budget too small for payment cycle`)
+            wake()
+            return
+          }
+
+          sendNextPayment()
+          break
+        }
+
+        case 'payment_ack':
+          break
+
+        case 'accepted':
+          console.log(`[${tag}] Accepted, streaming...`)
+          break
+
+        case 'chunk':
+          if (msg.data) {
+            chunks.push(msg.data)
+            wake()
+          }
+          break
+
+        case 'pay_required':
+          if (!sendNextPayment()) {
+            console.log(`[${tag}] Budget exhausted, sending stop`)
+            node.send(peer.socket, { type: 'stop', id: jobId })
+          }
+          break
+
+        case 'result':
+          console.log(`[${tag}] Result: ${(msg.output || '').length} chars, ${msg.total_sats ?? '?'} sats`)
+          finished = true
+          wake()
+          break
+
+        case 'error':
+          error = new Error(`Provider error: ${msg.message}`)
+          wake()
+          break
+      }
+    })
+
+    // Send request
+    node.send(peer.socket, {
+      type: 'request',
+      id: jobId,
+      kind,
+      input,
+      budget: budgetSats,
+    })
+
+    // Yield chunks as they arrive
+    while (true) {
+      await waitForChunk()
+
+      if (error) {
+        clearTimeout(timeout)
+        throw error
+      }
+
+      // Drain all available chunks
+      while (chunks.length > 0) {
+        yield chunks.shift()!
+      }
+
+      if (finished) {
+        clearTimeout(timeout)
+        return
+      }
+    }
+  } finally {
+    await node.destroy()
+  }
+}
+
+/**
+ * Streaming pipeline: delegates to a sub-provider via P2P, accumulates
+ * chunks into batches, translates each batch locally via streaming Ollama,
+ * and yields the translated tokens.
+ *
+ * Flow: sub-provider streams → batch → Ollama stream-translate → yield tokens
+ */
+async function* pipelineStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
+  let batch = ''
+
+  async function* translateBatch(text: string): AsyncGenerator<string> {
+    for await (const token of generateStream({ model: MODEL, prompt: text })) {
+      yield token
+    }
+  }
+
+  for await (const chunk of delegateP2PStream(kind, input, budgetSats)) {
+    batch += chunk
+
+    // When batch is big enough, translate and stream out
+    if (batch.length >= SUB_BATCH_SIZE) {
+      yield* translateBatch(batch)
+      batch = ''
+    }
+  }
+
+  // Translate remaining text
+  if (batch.length > 0) {
+    yield* translateBatch(batch)
+  }
+}
+
+/**
+ * Delegate a sub-task via platform API. Creates a job, then polls until
+ * the result is available (max 120s).
+ */
+async function delegateAPI(kind: number, input: string, bidSats: number, provider?: string): Promise<string> {
+  const tag = `sub-api`
+
+  const created = await createJob({ kind, input, bid_sats: bidSats, provider })
+  if (!created) {
+    throw new Error('Failed to create sub-task via API')
+  }
+
+  const jobId = created.job_id
+  console.log(`[${tag}] Created job ${jobId} (kind ${kind}, bid ${bidSats})`)
+
+  // Poll for result
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 5_000))
+
+    const job = await getJob(jobId)
+    if (!job) continue
+
+    if (job.status === 'completed' || job.status === 'result_available') {
+      if (job.result) {
+        console.log(`[${tag}] Job ${jobId}: got result (${job.result.length} chars)`)
+        return job.result
+      }
+    }
+
+    if (job.status === 'cancelled' || job.status === 'rejected') {
+      throw new Error(`Sub-task ${jobId} was ${job.status}`)
+    }
+  }
+
+  throw new Error(`Sub-task ${jobId} timed out after 120s`)
 }
 
 // --- 4. P2P Swarm Listener ---
@@ -350,8 +627,13 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
   const jobId = msg.id
   let fullOutput = ''
 
+  // Pick the source: pipeline (delegate + local) or direct local generation
+  const source = SUB_KIND
+    ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
+    : generateStream({ model: MODEL, prompt: msg.input || '' })
+
   try {
-    for await (const chunk of generateStream({ model: MODEL, prompt: msg.input || '' })) {
+    for await (const chunk of source) {
       if (job.stopped) {
         console.log(`[${label}] P2P job ${jobId}: stopped by customer`)
         break

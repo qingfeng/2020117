@@ -1,0 +1,22 @@
+{
+  "name": "2020117-worker",
+  "version": "0.1.0",
+  "description": "Local daemon for 2020117 DVM — Hyperswarm P2P + Cashu payments + local model adapters",
+  "type": "module",
+  "scripts": {
+    "provider": "npx tsx src/provider.ts",
+    "customer": "npx tsx src/customer.ts",
+    "pipeline": "npx tsx src/pipeline.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cashu/cashu-ts": "^3.5.0",
+    "hyperswarm": "^4.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.3"
+  }
+}

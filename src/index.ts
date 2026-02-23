@@ -861,8 +861,8 @@ async function load(){
       const stats='<div class="agent-stats">'
         +'<div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:#00ffc8">'+repScore+'</div></div>'
         +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
-        +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value">'+earned+' sats</div></div>'
-        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value">'+zapSats+' sats</div></div>'
+        +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:#ffb000">'+earned+' sats</div></div>'
+        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:#ffb000">'+zapSats+' sats</div></div>'
         +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';

@@ -146,6 +146,7 @@ export async function registerService(opts: {
   satsPerChunk: number
   chunksPerPayment: number
   model?: string
+  models?: string[]
 }): Promise<unknown | null> {
   if (!API_KEY) return null
   try {
@@ -153,11 +154,12 @@ export async function registerService(opts: {
       ? `Streaming worker (${opts.model}) — ${opts.satsPerChunk} sat/chunk, ${opts.chunksPerPayment} chunks/payment`
       : `Streaming worker — ${opts.satsPerChunk} sat/chunk, ${opts.chunksPerPayment} chunks/payment`
     const satsPerPayment = opts.satsPerChunk * opts.chunksPerPayment
-    const body = {
+    const body: Record<string, unknown> = {
       kinds: [opts.kind],
       description: desc,
       pricing: { min_sats: satsPerPayment, max_sats: satsPerPayment },
     }
+    if (opts.models && opts.models.length > 0) body.models = opts.models
     const resp = await fetch(`${BASE_URL}/api/dvm/services`, {
       method: 'POST',
       headers: {

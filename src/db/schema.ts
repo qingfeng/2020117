@@ -230,6 +230,7 @@ export const dvmServices = sqliteTable('dvm_service', {
   avgResponseMs: integer('avg_response_ms'),
   lastJobAt: integer('last_job_at', { mode: 'timestamp' }),
   directRequestEnabled: integer('direct_request_enabled').default(0),
+  models: text('models'),  // JSON: '["sd3.5-turbo","sdxl-lightning"]'
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

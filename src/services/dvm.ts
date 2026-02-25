@@ -117,6 +117,7 @@ export async function buildHandlerInfoEvents(params: {
   pricingMax?: number
   userId: string
   reputation?: Record<string, unknown>
+  models?: string[]
 }): Promise<NostrEvent[]> {
   const content = JSON.stringify({
     name: params.name,
@@ -130,6 +131,7 @@ export async function buildHandlerInfoEvents(params: {
       },
     } : {}),
     ...(params.reputation ? { reputation: params.reputation } : {}),
+    ...(params.models && params.models.length > 0 ? { models: params.models } : {}),
   })
 
   // One event per kind (matches NIP-89 convention used by other DVMs)
@@ -964,6 +966,7 @@ export async function buildHeartbeatEvent(params: {
   capacity?: number
   kinds?: number[]
   pricing?: Record<string, number>
+  models?: string[]
 }): Promise<NostrEvent> {
   const tags: string[][] = [
     ['d', params.pubkey],
@@ -978,6 +981,9 @@ export async function buildHeartbeatEvent(params: {
   if (params.pricing && Object.keys(params.pricing).length > 0) {
     const priceStr = Object.entries(params.pricing).map(([k, v]) => `${k}:${v}`).join(',')
     tags.push(['price', priceStr])
+  }
+  if (params.models && params.models.length > 0) {
+    tags.push(['models', params.models.join(',')])
   }
 
   return buildSignedEvent({

@@ -2846,6 +2846,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     description?: string
     pricing?: { min_sats?: number; max_sats?: number }
     direct_request_enabled?: boolean
+    models?: string[]
   }
 
   if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
@@ -2891,6 +2892,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     pricingMax: pricingMax || undefined,
     userId: user.id,
     reputation,
+    models: body.models,
   })
   const handlerEvent = handlerEvents[0] // use first event ID for DB
 
@@ -2911,6 +2913,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       updatedAt: now,
     }
     if (directRequestEnabled !== undefined) updateSet.directRequestEnabled = directRequestEnabled
+    if (body.models) updateSet.models = JSON.stringify(body.models)
     await db.update(dvmServices).set(updateSet).where(eq(dvmServices.id, serviceId))
   } else {
     serviceId = generateId()
@@ -2924,6 +2927,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       eventId: handlerEvent.id,
       active: 1,
       directRequestEnabled: directRequestEnabled || 0,
+      models: body.models ? JSON.stringify(body.models) : null,
       createdAt: now,
       updatedAt: now,
     })
@@ -3520,18 +3524,20 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
   }
 
   // Auto-read kinds/pricing from dvmServices
-  const svc = await db.select({ kinds: dvmServices.kinds, pricingMin: dvmServices.pricingMin, pricingMax: dvmServices.pricingMax })
+  const svc = await db.select({ kinds: dvmServices.kinds, pricingMin: dvmServices.pricingMin, pricingMax: dvmServices.pricingMax, models: dvmServices.models })
     .from(dvmServices)
     .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
     .limit(1)
 
   let kinds: number[] = []
   let pricing: Record<string, number> = {}
+  let models: string[] = []
   if (svc.length > 0) {
     kinds = JSON.parse(svc[0].kinds)
     if (svc[0].pricingMin) {
       for (const k of kinds) pricing[String(k)] = Math.floor(svc[0].pricingMin / 1000)
     }
+    if (svc[0].models) models = JSON.parse(svc[0].models)
   }
 
   const event = await buildHeartbeatEvent({
@@ -3542,6 +3548,7 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
     capacity: body.capacity,
     kinds,
     pricing,
+    models,
   })
 
   // Upsert heartbeat locally
@@ -3597,9 +3604,11 @@ api.get('/agents/online', async (c) => {
     kinds: agentHeartbeats.kinds,
     pricing: agentHeartbeats.pricing,
     lastSeenAt: agentHeartbeats.lastSeenAt,
+    models: dvmServices.models,
   })
     .from(agentHeartbeats)
     .innerJoin(users, eq(agentHeartbeats.userId, users.id))
+    .leftJoin(dvmServices, and(eq(dvmServices.userId, agentHeartbeats.userId), eq(dvmServices.active, 1)))
     .where(eq(agentHeartbeats.status, 'online'))
 
   const rows = await query
@@ -3614,6 +3623,7 @@ api.get('/agents/online', async (c) => {
     capacity: r.capacity || 0,
     kinds: r.kinds ? JSON.parse(r.kinds) : [],
     pricing: r.pricing ? JSON.parse(r.pricing) : null,
+    models: r.models ? JSON.parse(r.models) : [],
     last_seen_at: r.lastSeenAt,
   }))
 

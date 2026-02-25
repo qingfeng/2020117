@@ -35,6 +35,7 @@ for (const arg of process.argv.slice(2)) {
     case '--budget':       process.env.SUB_BUDGET = val; break
     case '--api-key':      process.env.API_2020117_KEY = val; break
     case '--api-url':      process.env.API_2020117_URL = val; break
+    case '--models':       process.env.MODELS = val; break
   }
 }
 
@@ -146,11 +147,13 @@ async function setupPlatform(label: string) {
     return
   }
   console.log(`[${label}] Registering on platform...`)
+  const models = process.env.MODELS ? process.env.MODELS.split(',').map(s => s.trim()) : undefined
   await registerService({
     kind: KIND,
     satsPerChunk: SATS_PER_CHUNK,
     chunksPerPayment: CHUNKS_PER_PAYMENT,
     model: state.processor?.name || 'unknown',
+    models,
   })
   state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity())
 }

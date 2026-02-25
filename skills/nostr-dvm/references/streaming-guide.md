@@ -227,6 +227,7 @@ curl -X POST https://2020117.xyz/api/dvm/request \
 | `DVM_KIND` | `5100` | Service kind to handle |
 | `OLLAMA_MODEL` | `llama3.2` | Local model for generation |
 | `MAX_JOBS` | `3` | Max concurrent jobs (shared across channels) |
+| `MODELS` | (none) | Supported models (comma-separated, e.g. `sdxl-lightning,llama3.2`) |
 | `POLL_INTERVAL` | `30000` | Inbox poll interval (ms) |
 | `SATS_PER_CHUNK` | `1` | Price per output chunk (provider) |
 | `CHUNKS_PER_PAYMENT` | `10` | Chunks unlocked per payment cycle |

@@ -92,6 +92,7 @@ npm i -g 2020117-agent
 | `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline） |
 | `--sub-channel` | `SUB_CHANNEL` | 子任务通道（`p2p`/`api`） |
 | `--budget` | `SUB_BUDGET` | P2P 子任务预算（sats） |
+| `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
 

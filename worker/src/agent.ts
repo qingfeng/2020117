@@ -760,6 +760,38 @@ async function startSwarmListener(label: string) {
       if (job) handleStop(job, msg.id, label)
     }
   })
+
+  // Handle customer disconnect — claim any earned tokens immediately
+  node.on('peer-leave', (peerId: string) => {
+    const tag = peerId.slice(0, 8)
+
+    // Find and end all sessions for this peer
+    for (const [sessionId, session] of activeSessions) {
+      if (session.peerId === peerId) {
+        console.log(`[${label}] Peer ${tag} disconnected — ending session ${sessionId} (${session.totalEarned} sats earned)`)
+        endSession(node, session, label)
+      }
+    }
+
+    // Clean up any P2P streaming jobs for this peer
+    for (const [jobId, job] of p2pJobs) {
+      if (job.socket?.remotePublicKey?.toString('hex') === peerId) {
+        console.log(`[${label}] Peer ${tag} disconnected — claiming P2P job ${jobId} tokens`)
+        job.stopped = true
+        batchClaim(job.tokens, jobId, label)
+        p2pJobs.delete(jobId)
+        releaseSlot()
+      }
+    }
+
+    // Clean up backend WebSockets for this peer
+    for (const [wsId, entry] of backendWebSockets) {
+      if (entry.peerId === peerId) {
+        try { entry.ws.close(1001, 'Peer disconnected') } catch {}
+        backendWebSockets.delete(wsId)
+      }
+    }
+  })
 }
 
 async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMessage, label: string) {
@@ -808,13 +840,17 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
     }
   }
 
-  node.send(session.socket, {
-    type: 'session_end',
-    id: session.sessionId,
-    session_id: session.sessionId,
-    total_sats: session.totalEarned,
-    duration_s: durationS,
-  })
+  try {
+    node.send(session.socket, {
+      type: 'session_end',
+      id: session.sessionId,
+      session_id: session.sessionId,
+      total_sats: session.totalEarned,
+      duration_s: durationS,
+    })
+  } catch {
+    // Socket may already be closed (peer disconnect)
+  }
 
   console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
 

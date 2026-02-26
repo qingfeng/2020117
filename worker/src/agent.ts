@@ -41,14 +41,14 @@ for (const arg of process.argv.slice(2)) {
 }
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
-import { receiveToken, peekToken, mintTokens, splitTokens } from './cashu.js'
+import { P2PJobState, waitForPayment, handlePayment, handleStop, streamToCustomer, batchClaim } from './p2p-provider.js'
+import { streamFromProvider } from './p2p-customer.js'
 import { createProcessor, Processor } from './processor.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
   getInbox, acceptJob, sendFeedback, submitResult,
   createJob, getJob,
 } from './api.js'
-import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
 
 // --- Config from env ---
@@ -295,168 +295,16 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string,
 
 /**
  * Delegate a sub-task via Hyperswarm P2P with Cashu streaming payments.
- * Returns an AsyncGenerator that yields chunks as they arrive from the
- * remote provider — no buffering, true streaming.
- *
- * Creates a temporary SwarmNode (independent from the server listener).
- * The node is destroyed when the generator returns or throws.
+ * Thin wrapper around the shared streamFromProvider() module.
  */
 async function* delegateP2PStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
-  const jobId = randomBytes(8).toString('hex')
-  const tag = `sub-p2p-${jobId.slice(0, 8)}`
-
-  console.log(`[${tag}] Minting ${budgetSats} sats...`)
-  const { token: bigToken } = await mintTokens(budgetSats)
-
-  const node = new SwarmNode()
-  const topic = topicFromKind(kind)
-
-  try {
-    console.log(`[${tag}] Looking for kind ${kind} provider...`)
-    await node.connect(topic)
-
-    const peer = await node.waitForPeer(30_000)
-    console.log(`[${tag}] Connected to provider: ${peer.peerId.slice(0, 12)}...`)
-
-    // Channel: message handler pushes chunks, generator consumes them
-    const chunks: string[] = []
-    let finished = false
-    let error: Error | null = null
-    let notify: (() => void) | null = null
-
-    function wake() {
-      if (notify) { notify(); notify = null }
-    }
-
-    function waitForChunk(): Promise<void> {
-      if (chunks.length > 0 || finished || error) return Promise.resolve()
-      return new Promise<void>(r => { notify = r })
-    }
-
-    let microTokens: string[] = []
-    let tokenIndex = 0
-
-    function sendNextPayment() {
-      if (tokenIndex >= microTokens.length) return false
-      const token = microTokens[tokenIndex++]
-      console.log(`[${tag}] Payment ${tokenIndex}/${microTokens.length}`)
-      node.send(peer.socket, { type: 'payment', id: jobId, token })
-      return true
-    }
-
-    // Timeout
-    const timeout = setTimeout(() => {
-      error = new Error(`P2P delegation timed out after 120s`)
-      wake()
-    }, 120_000)
-
-    node.on('message', async (msg: SwarmMessage) => {
-      if (msg.id !== jobId) return
-
-      switch (msg.type) {
-        case 'offer': {
-          const spc = msg.sats_per_chunk ?? 0
-          const cpp = msg.chunks_per_payment ?? 0
-          const satsPerPayment = spc * cpp
-
-          if (spc > MAX_SATS_PER_CHUNK) {
-            node.send(peer.socket, { type: 'stop', id: jobId })
-            error = new Error(`Price too high: ${spc} sat/chunk > max ${MAX_SATS_PER_CHUNK}`)
-            wake()
-            return
-          }
-
-          if (satsPerPayment <= 0) {
-            error = new Error(`Invalid offer: sats_per_payment = 0`)
-            wake()
-            return
-          }
-
-          console.log(`[${tag}] Offer: ${spc} sat/chunk, ${cpp} chunks/payment`)
-          try {
-            microTokens = await splitTokens(bigToken, satsPerPayment)
-            console.log(`[${tag}] Split into ${microTokens.length} micro-tokens`)
-          } catch (e: any) {
-            error = new Error(`Token split failed: ${e.message}`)
-            wake()
-            return
-          }
-
-          if (microTokens.length === 0) {
-            error = new Error(`Budget too small for payment cycle`)
-            wake()
-            return
-          }
-
-          sendNextPayment()
-          break
-        }
-
-        case 'payment_ack':
-          break
-
-        case 'accepted':
-          console.log(`[${tag}] Accepted, streaming...`)
-          break
-
-        case 'chunk':
-          if (msg.data) {
-            chunks.push(msg.data)
-            wake()
-          }
-          break
-
-        case 'pay_required':
-          if (!sendNextPayment()) {
-            console.log(`[${tag}] Budget exhausted, sending stop`)
-            node.send(peer.socket, { type: 'stop', id: jobId })
-          }
-          break
-
-        case 'result':
-          console.log(`[${tag}] Result: ${(msg.output || '').length} chars, ${msg.total_sats ?? '?'} sats`)
-          finished = true
-          wake()
-          break
-
-        case 'error':
-          error = new Error(`Provider error: ${msg.message}`)
-          wake()
-          break
-      }
-    })
-
-    // Send request
-    node.send(peer.socket, {
-      type: 'request',
-      id: jobId,
-      kind,
-      input,
-      budget: budgetSats,
-    })
-
-    // Yield chunks as they arrive
-    while (true) {
-      await waitForChunk()
-
-      if (error) {
-        clearTimeout(timeout)
-        throw error
-      }
-
-      // Drain all available chunks
-      while (chunks.length > 0) {
-        yield chunks.shift()!
-      }
-
-      if (finished) {
-        clearTimeout(timeout)
-        return
-      }
-    }
-  } finally {
-    await node.destroy()
-  }
+  yield* streamFromProvider({
+    kind,
+    input,
+    budgetSats,
+    maxSatsPerChunk: MAX_SATS_PER_CHUNK,
+    label: 'sub-p2p',
+  })
 }
 
 /**
@@ -531,16 +379,6 @@ async function delegateAPI(kind: number, input: string, bidSats: number, provide
 
 // --- 4. P2P Swarm Listener ---
 
-// Per-connection job state for P2P streaming
-interface P2PJobState {
-  socket: any
-  credit: number
-  tokens: string[]
-  totalEarned: number
-  stopped: boolean
-  paymentResolve: (() => void) | null
-}
-
 const p2pJobs = new Map<string, P2PJobState>()
 
 async function startSwarmListener(label: string) {
@@ -599,7 +437,7 @@ async function startSwarmListener(label: string) {
       })
 
       // Wait for first payment
-      const paid = await waitForPayment(job, msg.id, node, label)
+      const paid = await waitForPayment(job, msg.id, node, label, PAYMENT_TIMEOUT)
       if (!paid) {
         console.log(`[${label}] P2P job ${msg.id}: no initial payment, aborting`)
         p2pJobs.delete(msg.id)
@@ -614,145 +452,35 @@ async function startSwarmListener(label: string) {
 
     if (msg.type === 'payment') {
       const job = p2pJobs.get(msg.id)
-      if (!job) return
-
-      if (!msg.token) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Payment missing token' })
-        return
-      }
-
-      try {
-        const peek = peekToken(msg.token)
-        const chunksUnlocked = Math.floor(peek.amount / SATS_PER_CHUNK)
-        job.credit += chunksUnlocked
-        job.totalEarned += peek.amount
-        job.tokens.push(msg.token)
-
-        console.log(`[${label}] Payment for ${msg.id}: ${peek.amount} sats → +${chunksUnlocked} chunks (credit: ${job.credit}, total: ${job.totalEarned} sats)`)
-        node.send(socket, { type: 'payment_ack', id: msg.id, amount: peek.amount })
-
-        if (job.paymentResolve) {
-          job.paymentResolve()
-          job.paymentResolve = null
-        }
-      } catch (e: any) {
-        node.send(socket, { type: 'error', id: msg.id, message: `Payment failed: ${e.message}` })
-      }
+      if (job) handlePayment(node, socket, msg, job, SATS_PER_CHUNK, label)
     }
 
     if (msg.type === 'stop') {
       const job = p2pJobs.get(msg.id)
-      if (!job) return
-
-      console.log(`[${label}] P2P job ${msg.id}: customer requested stop`)
-      job.stopped = true
-      if (job.paymentResolve) {
-        job.paymentResolve()
-        job.paymentResolve = null
-      }
-    }
-  })
-}
-
-function waitForPayment(job: P2PJobState, jobId: string, node: SwarmNode, label: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      job.paymentResolve = null
-      console.log(`[${label}] P2P job ${jobId}: payment timeout (${PAYMENT_TIMEOUT}ms)`)
-      node.send(job.socket, {
-        type: 'error',
-        id: jobId,
-        message: `Payment timeout after ${PAYMENT_TIMEOUT}ms`,
-      })
-      resolve(false)
-    }, PAYMENT_TIMEOUT)
-
-    job.paymentResolve = () => {
-      clearTimeout(timer)
-      resolve(true)
-    }
-
-    if (job.credit > 0) {
-      clearTimeout(timer)
-      job.paymentResolve = null
-      resolve(true)
+      if (job) handleStop(job, msg.id, label)
     }
   })
 }
 
 async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMessage, label: string) {
-  const jobId = msg.id
-  let fullOutput = ''
-
-  // Pick the source: pipeline (delegate + local) or direct local generation
   const source = SUB_KIND
     ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
     : state.processor!.generateStream({ input: msg.input || '', params: msg.params })
 
-  try {
-    for await (const chunk of source) {
-      if (job.stopped) {
-        console.log(`[${label}] P2P job ${jobId}: stopped by customer`)
-        break
-      }
-
-      if (job.credit <= 0) {
-        const nextAmount = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
-        node.send(job.socket, {
-          type: 'pay_required',
-          id: jobId,
-          earned: job.totalEarned,
-          next: nextAmount,
-        })
-        console.log(`[${label}] P2P job ${jobId}: pay_required (earned: ${job.totalEarned}, next: ${nextAmount})`)
-
-        const paid = await waitForPayment(job, jobId, node, label)
-        if (!paid || job.stopped) {
-          console.log(`[${label}] P2P job ${jobId}: ending (paid=${paid}, stopped=${job.stopped})`)
-          break
-        }
-      }
-
-      fullOutput += chunk
-      node.send(job.socket, { type: 'chunk', id: jobId, data: chunk })
-      job.credit--
-    }
-  } catch (e: any) {
-    console.error(`[${label}] P2P job ${jobId} generation error: ${e.message}`)
-    node.send(job.socket, { type: 'error', id: jobId, message: e.message })
-  }
-
-  // Send result
-  node.send(job.socket, {
-    type: 'result',
-    id: jobId,
-    output: fullOutput,
-    total_sats: job.totalEarned,
+  await streamToCustomer({
+    node,
+    job,
+    jobId: msg.id,
+    source,
+    satsPerChunk: SATS_PER_CHUNK,
+    chunksPerPayment: CHUNKS_PER_PAYMENT,
+    timeoutMs: PAYMENT_TIMEOUT,
+    label,
   })
-  console.log(`[${label}] P2P job ${jobId} completed (${fullOutput.length} chars, ${job.totalEarned} sats earned)`)
 
-  // Batch claim all tokens
-  await batchClaim(job.tokens, jobId, label)
-  p2pJobs.delete(jobId)
+  await batchClaim(job.tokens, msg.id, label)
+  p2pJobs.delete(msg.id)
   releaseSlot()
-}
-
-async function batchClaim(tokens: string[], jobId: string, label: string) {
-  if (tokens.length === 0) return
-
-  console.log(`[${label}] P2P job ${jobId}: claiming ${tokens.length} tokens...`)
-  let totalClaimed = 0
-
-  for (let i = 0; i < tokens.length; i++) {
-    try {
-      const received = await receiveToken(tokens[i])
-      totalClaimed += received.amount
-    } catch (e: any) {
-      console.warn(`[${label}] P2P job ${jobId}: claim ${i + 1}/${tokens.length} failed: ${e.message}`)
-    }
-  }
-
-  console.log(`[${label}] P2P job ${jobId}: claimed ${totalClaimed} sats total`)
 }
 
 // --- 5. Graceful shutdown ---

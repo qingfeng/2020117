@@ -58,6 +58,7 @@ export interface SwarmMessage {
   path?: string               // http_request: URL path
   headers?: Record<string, string> // http_request/response: HTTP headers
   body?: string               // http_request/response: HTTP body
+  body_encoding?: 'base64'    // http_response: body is base64-encoded binary
   status?: number             // http_response: HTTP status code
   // Chunked response fields
   chunk_index?: number        // http_response: 0-based chunk index

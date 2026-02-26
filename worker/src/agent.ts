@@ -545,9 +545,23 @@ async function startSwarmListener(label: string) {
           body: msg.method !== 'GET' && msg.method !== 'HEAD' ? msg.body : undefined,
         })
 
-        const resBody = await res.text()
         const resHeaders: Record<string, string> = {}
         res.headers.forEach((v, k) => { resHeaders[k] = v })
+
+        // Detect binary content — read as ArrayBuffer to avoid text() mangling
+        const ct = (res.headers.get('content-type') || '').toLowerCase()
+        const isText = ct.startsWith('text/') || ct.includes('json') || ct.includes('javascript')
+          || ct.includes('xml') || ct.includes('svg') || ct.includes('css')
+          || ct.includes('html') || ct === ''
+        const bodyEncoding: 'base64' | undefined = isText ? undefined : 'base64'
+
+        let resBody: string
+        if (isText) {
+          resBody = await res.text()
+        } else {
+          const buf = Buffer.from(await res.arrayBuffer())
+          resBody = buf.toString('base64')
+        }
 
         // Chunk large responses to avoid swarm transport truncation
         const CHUNK_SIZE = 48_000 // ~48KB per chunk (safe margin under 64KB NOISE frame)
@@ -563,6 +577,7 @@ async function startSwarmListener(label: string) {
               status: i === 0 ? res.status : undefined,
               headers: i === 0 ? resHeaders : undefined,
               body: chunks[i],
+              body_encoding: i === 0 ? bodyEncoding : undefined,
               chunk_index: i,
               chunk_total: chunks.length,
             })
@@ -574,6 +589,7 @@ async function startSwarmListener(label: string) {
             status: res.status,
             headers: resHeaders,
             body: resBody,
+            body_encoding: bodyEncoding,
           })
         }
       } catch (e: any) {

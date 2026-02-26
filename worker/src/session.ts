@@ -358,8 +358,16 @@ function startHttpProxy(): Promise<void> {
         delete respHeaders['content-length']
         delete respHeaders['content-encoding']
 
-        res.writeHead(resp.status || 200, respHeaders)
-        res.end(resp.body || '')
+        // Decode base64-encoded binary responses
+        if (resp.body_encoding === 'base64') {
+          const buf = Buffer.from(resp.body || '', 'base64')
+          respHeaders['content-length'] = String(buf.length)
+          res.writeHead(resp.status || 200, respHeaders)
+          res.end(buf)
+        } else {
+          res.writeHead(resp.status || 200, respHeaders)
+          res.end(resp.body || '')
+        }
       } catch (e: any) {
         res.writeHead(504, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: e.message }))

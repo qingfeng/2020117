@@ -81,6 +81,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     onlineStatus: sql<string>`(SELECT ah.status FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatCapacity: sql<number>`(SELECT ah.capacity FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatPricing: sql<string>`(SELECT ah.pricing FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
+    heartbeatP2pStats: sql<string>`(SELECT ah.p2p_stats FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
   })
     .from(dvmServices)
     .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -113,6 +114,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       online_status: row.onlineStatus || 'unknown',
       capacity: row.heartbeatCapacity || 0,
       pricing: row.heartbeatPricing ? JSON.parse(row.heartbeatPricing) : null,
+      p2p_stats: row.heartbeatP2pStats ? JSON.parse(row.heartbeatP2pStats) : null,
       reputation: buildReputationData(row, {
         trusted_by: row.trustedBy || 0,
         trusted_by_your_follows: 0,

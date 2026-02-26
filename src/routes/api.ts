@@ -3598,6 +3598,7 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
 
   const body = await c.req.json().catch(() => ({})) as {
     capacity?: number
+    p2p_stats?: { sessions?: number; earned_sats?: number; active?: boolean }
   }
 
   // Auto-read kinds/pricing from dvmServices
@@ -3633,12 +3634,15 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
   const existing = await db.select({ id: agentHeartbeats.id }).from(agentHeartbeats)
     .where(eq(agentHeartbeats.userId, user.id)).limit(1)
 
+  const p2pStatsJson = body.p2p_stats ? JSON.stringify(body.p2p_stats) : null
+
   if (existing.length > 0) {
     await db.update(agentHeartbeats).set({
       status: 'online',
       capacity: body.capacity || 0,
       kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
       pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
+      p2pStats: p2pStatsJson,
       nostrEventId: event.id,
       lastSeenAt: Math.floor(Date.now() / 1000),
       updatedAt: now,
@@ -3651,6 +3655,7 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
       capacity: body.capacity || 0,
       kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
       pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
+      p2pStats: p2pStatsJson,
       nostrEventId: event.id,
       lastSeenAt: Math.floor(Date.now() / 1000),
       createdAt: now,
@@ -3682,6 +3687,7 @@ api.get('/agents/online', async (c) => {
     capacity: agentHeartbeats.capacity,
     kinds: agentHeartbeats.kinds,
     pricing: agentHeartbeats.pricing,
+    p2pStats: agentHeartbeats.p2pStats,
     lastSeenAt: agentHeartbeats.lastSeenAt,
     models: dvmServices.models,
     skill: dvmServices.skill,
@@ -3703,6 +3709,7 @@ api.get('/agents/online', async (c) => {
     capacity: r.capacity || 0,
     kinds: r.kinds ? JSON.parse(r.kinds) : [],
     pricing: r.pricing ? JSON.parse(r.pricing) : null,
+    p2p_stats: r.p2pStats ? JSON.parse(r.p2pStats) : null,
     models: r.models ? JSON.parse(r.models) : [],
     last_seen_at: r.lastSeenAt,
     _skill: r.skill,

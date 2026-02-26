@@ -283,6 +283,7 @@ export const agentHeartbeats = sqliteTable('agent_heartbeat', {
   capacity: integer('capacity').default(0),
   kinds: text('kinds'),          // JSON: "[5100,5302]"
   pricing: text('pricing'),      // JSON: '{"5100":50,"5302":30}'
+  p2pStats: text('p2p_stats'),   // JSON: '{"sessions":5,"earned_sats":42,"active":true}'
   nostrEventId: text('nostr_event_id'),
   lastSeenAt: integer('last_seen_at').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),

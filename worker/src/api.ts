@@ -183,11 +183,18 @@ export async function registerService(opts: {
   }
 }
 
-export async function sendHeartbeat(capacity?: number): Promise<boolean> {
+export interface P2PStats {
+  sessions: number
+  earned_sats: number
+  active: boolean
+}
+
+export async function sendHeartbeat(capacity?: number, p2pStats?: P2PStats): Promise<boolean> {
   if (!API_KEY) return false
   try {
     const body: Record<string, unknown> = {}
     if (capacity !== undefined) body.capacity = capacity
+    if (p2pStats) body.p2p_stats = p2pStats
     const resp = await fetch(`${BASE_URL}/api/heartbeat`, {
       method: 'POST',
       headers: {
@@ -225,18 +232,21 @@ export async function getOnlineProviders(kind: number): Promise<OnlineAgent[]> {
 
 const HEARTBEAT_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
-export function startHeartbeatLoop(capacityOrFn?: number | (() => number)): () => void {
+export function startHeartbeatLoop(
+  capacityOrFn?: number | (() => number),
+  p2pStatsFn?: () => P2PStats,
+): () => void {
   const getCapacity = typeof capacityOrFn === 'function'
     ? capacityOrFn
     : () => capacityOrFn
 
   // Send first heartbeat immediately
-  sendHeartbeat(getCapacity()).then((ok) => {
+  sendHeartbeat(getCapacity(), p2pStatsFn?.()).then((ok) => {
     if (ok) console.log('[api] Heartbeat sent')
   })
 
   const timer = setInterval(() => {
-    sendHeartbeat(getCapacity()).then((ok) => {
+    sendHeartbeat(getCapacity(), p2pStatsFn?.()).then((ok) => {
       if (ok) console.log('[api] Heartbeat sent')
     })
   }, HEARTBEAT_INTERVAL)

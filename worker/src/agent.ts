@@ -103,6 +103,9 @@ interface AgentState {
   swarmNode: SwarmNode | null
   processor: Processor | null
   skill: Record<string, unknown> | null
+  // P2P session lifetime counters (in-memory, resets on restart)
+  p2pSessionsCompleted: number
+  p2pTotalEarnedSats: number
 }
 
 const state: AgentState = {
@@ -114,6 +117,8 @@ const state: AgentState = {
   swarmNode: null,
   processor: null,
   skill: loadSkill(),
+  p2pSessionsCompleted: 0,
+  p2pTotalEarnedSats: 0,
 }
 
 // --- Capacity management ---
@@ -186,7 +191,11 @@ async function setupPlatform(label: string) {
     models,
     skill: state.skill,
   })
-  state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity())
+  state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity(), () => ({
+    sessions: state.p2pSessionsCompleted,
+    earned_sats: state.p2pTotalEarnedSats,
+    active: activeSessions.size > 0,
+  }))
 }
 
 // --- 3. Async Inbox Poller ---
@@ -853,6 +862,10 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   }
 
   console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
+
+  // Update P2P lifetime counters
+  state.p2pSessionsCompleted++
+  state.p2pTotalEarnedSats += session.totalEarned
 
   // Batch claim tokens
   batchClaim(session.tokens, session.sessionId, label)

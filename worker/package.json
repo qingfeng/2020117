@@ -7,7 +7,8 @@
     "2020117-agent": "./dist/agent.js",
     "2020117-customer": "./dist/customer.js",
     "2020117-provider": "./dist/provider.js",
-    "2020117-pipeline": "./dist/pipeline.js"
+    "2020117-pipeline": "./dist/pipeline.js",
+    "2020117-session": "./dist/session.js"
   },
   "files": ["dist"],
   "exports": {
@@ -23,13 +24,15 @@
     "customer": "node dist/customer.js",
     "provider": "node dist/provider.js",
     "pipeline": "node dist/pipeline.js",
+    "session": "node dist/session.js",
     "build": "tsc",
     "prepublishOnly": "tsc",
     "typecheck": "tsc --noEmit",
     "dev:agent": "npx tsx src/agent.ts",
     "dev:customer": "npx tsx src/customer.ts",
     "dev:provider": "npx tsx src/provider.ts",
-    "dev:pipeline": "npx tsx src/pipeline.ts"
+    "dev:pipeline": "npx tsx src/pipeline.ts",
+    "dev:session": "npx tsx src/session.ts"
   },
   "dependencies": {
     "@cashu/cashu-ts": "^3.5.0",

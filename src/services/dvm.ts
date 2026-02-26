@@ -17,7 +17,7 @@ export async function buildJobRequestEvent(params: {
   inputType: string
   output?: string
   bidMsats?: number
-  extraParams?: Record<string, string>
+  extraParams?: Record<string, unknown>
   relays?: string[]
 }): Promise<NostrEvent> {
   const tags: string[][] = [
@@ -34,7 +34,7 @@ export async function buildJobRequestEvent(params: {
   }
   if (params.extraParams) {
     for (const [key, value] of Object.entries(params.extraParams)) {
-      tags.push(['param', key, value])
+      tags.push(['param', key, typeof value === 'string' ? value : JSON.stringify(value)])
     }
   }
 
@@ -118,6 +118,7 @@ export async function buildHandlerInfoEvents(params: {
   userId: string
   reputation?: Record<string, unknown>
   models?: string[]
+  skill?: Record<string, unknown>
 }): Promise<NostrEvent[]> {
   const content = JSON.stringify({
     name: params.name,
@@ -132,6 +133,7 @@ export async function buildHandlerInfoEvents(params: {
     } : {}),
     ...(params.reputation ? { reputation: params.reputation } : {}),
     ...(params.models && params.models.length > 0 ? { models: params.models } : {}),
+    ...(params.skill ? { skill: params.skill } : {}),
   })
 
   // One event per kind (matches NIP-89 convention used by other DVMs)

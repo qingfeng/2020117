@@ -98,23 +98,27 @@ api.get('/agents', async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const source = c.req.query('source') // 'local' | 'nostr' | undefined (all)
+  const featureFilter = c.req.query('feature')
 
   const cacheKey = `agents_cache_${source || 'all'}`
-  const cached = await c.env.KV.get(cacheKey)
+  let raw = await c.env.KV.get(cacheKey)
 
-  if (!cached) {
+  if (!raw) {
     // Cache not yet populated (first deploy or KV expired) — trigger inline refresh
     const { refreshAgentsCache } = await import('../services/cache')
     await refreshAgentsCache(c.env, c.get('db'))
-    const fresh = await c.env.KV.get(cacheKey)
-    if (!fresh) return c.json({ agents: [], meta: paginationMeta(0, page, limit) })
-    const allAgents = JSON.parse(fresh) as any[]
-    const total = allAgents.length
-    const offset = (page - 1) * limit
-    return c.json({ agents: allAgents.slice(offset, offset + limit), meta: paginationMeta(total, page, limit) })
+    raw = await c.env.KV.get(cacheKey)
+    if (!raw) return c.json({ agents: [], meta: paginationMeta(0, page, limit) })
   }
 
-  const allAgents = JSON.parse(cached) as any[]
+  let allAgents = JSON.parse(raw) as any[]
+
+  if (featureFilter) {
+    allAgents = allAgents.filter((a: any) =>
+      Array.isArray(a.features) && a.features.includes(featureFilter)
+    )
+  }
+
   const total = allAgents.length
   const offset = (page - 1) * limit
   const agents = allAgents.slice(offset, offset + limit)
@@ -370,6 +374,45 @@ api.get('/users/:identifier/activity', async (c) => {
       ...a.data,
     })),
     meta: paginationMeta(total, page, limit),
+  })
+})
+
+// ─── 公开端点：Agent Skill ───
+
+api.get('/agents/:identifier/skill', async (c) => {
+  const db = c.get('db')
+  const identifier = c.req.param('identifier')
+
+  let userCondition
+  if (identifier.startsWith('npub1')) {
+    const pubkey = npubToPubkey(identifier)
+    if (!pubkey) return c.json({ error: 'Invalid npub' }, 400)
+    userCondition = eq(users.nostrPubkey, pubkey)
+  } else if (/^[0-9a-f]{64}$/i.test(identifier)) {
+    userCondition = eq(users.nostrPubkey, identifier.toLowerCase())
+  } else {
+    userCondition = eq(users.username, identifier)
+  }
+
+  const result = await db.select({
+    username: users.username,
+    skill: dvmServices.skill,
+    kinds: dvmServices.kinds,
+    models: dvmServices.models,
+  })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(and(userCondition, eq(dvmServices.active, 1)))
+    .limit(1)
+
+  if (result.length === 0) return c.json({ error: 'Agent not found or no active service' }, 404)
+
+  const row = result[0]
+  return c.json({
+    username: row.username,
+    kinds: JSON.parse(row.kinds),
+    models: row.models ? JSON.parse(row.models) : [],
+    skill: row.skill ? JSON.parse(row.skill) : null,
   })
 })
 
@@ -1991,6 +2034,36 @@ api.post('/zap', requireApiAuth, async (c) => {
 
 // ─── DVM (NIP-90 Data Vending Machine) ───
 
+// GET /api/dvm/skills — 公开：所有 Agent 的 skill 列表
+api.get('/dvm/skills', async (c) => {
+  const db = c.get('db')
+  const kindFilter = c.req.query('kind')
+
+  const conditions: any[] = [eq(dvmServices.active, 1), sql`${dvmServices.skill} IS NOT NULL`]
+  if (kindFilter) {
+    conditions.push(sql`EXISTS (SELECT 1 FROM json_each(${dvmServices.kinds}) WHERE json_each.value = ${parseInt(kindFilter)})`)
+  }
+
+  const rows = await db.select({
+    username: users.username,
+    kinds: dvmServices.kinds,
+    models: dvmServices.models,
+    skill: dvmServices.skill,
+  })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(and(...conditions))
+
+  return c.json({
+    skills: rows.map(r => ({
+      username: r.username,
+      kinds: JSON.parse(r.kinds),
+      models: r.models ? JSON.parse(r.models) : [],
+      skill: JSON.parse(r.skill!),
+    })),
+  })
+})
+
 // GET /api/dvm/market — 公开：可接单的任务列表（无需认证）
 api.get('/dvm/market', async (c) => {
   const db = c.get('db')
@@ -2107,7 +2180,7 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     bid_sats?: number
     min_zap_sats?: number
     provider?: string
-    params?: Record<string, string>
+    params?: Record<string, unknown>
   }
 
   const kind = body.kind
@@ -2847,6 +2920,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     pricing?: { min_sats?: number; max_sats?: number }
     direct_request_enabled?: boolean
     models?: string[]
+    skill?: Record<string, unknown>
   }
 
   if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
@@ -2893,6 +2967,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     userId: user.id,
     reputation,
     models: body.models,
+    skill: body.skill,
   })
   const handlerEvent = handlerEvents[0] // use first event ID for DB
 
@@ -2914,6 +2989,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     }
     if (directRequestEnabled !== undefined) updateSet.directRequestEnabled = directRequestEnabled
     if (body.models) updateSet.models = JSON.stringify(body.models)
+    if (body.skill !== undefined) updateSet.skill = body.skill ? JSON.stringify(body.skill) : null
     await db.update(dvmServices).set(updateSet).where(eq(dvmServices.id, serviceId))
   } else {
     serviceId = generateId()
@@ -2928,6 +3004,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       active: 1,
       directRequestEnabled: directRequestEnabled || 0,
       models: body.models ? JSON.stringify(body.models) : null,
+      skill: body.skill ? JSON.stringify(body.skill) : null,
       createdAt: now,
       updatedAt: now,
     })
@@ -3594,6 +3671,8 @@ api.get('/agents/online', async (c) => {
   const db = c.get('db')
   const kindFilter = c.req.query('kind')
 
+  const featureFilter = c.req.query('feature')
+
   let query = db.select({
     username: users.username,
     displayName: users.displayName,
@@ -3605,6 +3684,7 @@ api.get('/agents/online', async (c) => {
     pricing: agentHeartbeats.pricing,
     lastSeenAt: agentHeartbeats.lastSeenAt,
     models: dvmServices.models,
+    skill: dvmServices.skill,
   })
     .from(agentHeartbeats)
     .innerJoin(users, eq(agentHeartbeats.userId, users.id))
@@ -3625,6 +3705,7 @@ api.get('/agents/online', async (c) => {
     pricing: r.pricing ? JSON.parse(r.pricing) : null,
     models: r.models ? JSON.parse(r.models) : [],
     last_seen_at: r.lastSeenAt,
+    _skill: r.skill,
   }))
 
   // Filter by kind if specified
@@ -3633,7 +3714,21 @@ api.get('/agents/online', async (c) => {
     agents = agents.filter(a => a.kinds.includes(kind))
   }
 
-  return c.json({ agents, total: agents.length })
+  // Filter by feature if specified
+  if (featureFilter) {
+    agents = agents.filter(a => {
+      if (!a._skill) return false
+      try {
+        const skill = JSON.parse(a._skill)
+        return Array.isArray(skill.features) && skill.features.includes(featureFilter)
+      } catch { return false }
+    })
+  }
+
+  // Strip internal _skill field from response
+  const result = agents.map(({ _skill, ...rest }) => rest)
+
+  return c.json({ agents: result, total: result.length })
 })
 
 // ─── Phase 2: Kind 31117 — Job Review ───

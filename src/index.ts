@@ -1957,7 +1957,10 @@ Customer                              Provider
 | \`session_tick_ack\` | P → C | \`id, session_id, balance\` | Tick confirmed, remaining balance |
 | \`session_end\` | C/P → P/C | \`id, session_id, duration_s, total_sats\` | Session ended |
 | \`http_request\` | C → P | \`id, method, path, headers, body\` | HTTP request tunneled over P2P |
-| \`http_response\` | P → C | \`id, status, headers, body\` | HTTP response tunneled over P2P |
+| \`http_response\` | P → C | \`id, status, headers, body, chunk_index, chunk_total\` | HTTP response (may be chunked for large payloads) |
+| \`ws_open\` | C → P | \`id, ws_id, ws_path, ws_protocols\` | Open WebSocket tunnel to provider backend |
+| \`ws_message\` | C↔P | \`id, ws_id, data, ws_frame_type\` | WebSocket frame relay (text or binary) |
+| \`ws_close\` | C↔P | \`id, ws_id, ws_code, ws_reason\` | Close WebSocket tunnel |
 
 ## Cashu Payment Flow
 
@@ -2003,6 +2006,8 @@ Cashu Mint
 \`\`\`
 
 **Important**: Provider should batch-claim tokens after the job completes (not per-payment) to reduce mint round-trips.
+
+**Mint fees**: Some Cashu mints charge a swap fee per token operation. The session client automatically detects the fee and mints extra sats to cover both the provider's claim fee and the split overhead. Use \`https://nofee.testnut.cashu.space\` (the default) to avoid fee complications during testing.
 
 ## Sub-task Delegation (Pipeline)
 
@@ -2077,10 +2082,10 @@ npx 2020117-session --kind=5200 --budget=500
 \`\`\`bash
 npx 2020117-session --kind=5200 --budget=500 --port=8080
 # Open http://localhost:8080 in your browser
-# All HTTP requests are tunneled through the encrypted P2P connection
+# All HTTP + WebSocket requests are tunneled through the encrypted P2P connection
 \`\`\`
 
-The provider's actual backend (e.g. Stable Diffusion WebUI at \`http://localhost:7860\`) is accessed as if it were running locally. No port forwarding, no public IP needed.
+The provider's actual backend (e.g. Stable Diffusion WebUI at \`http://localhost:7860\`) is accessed as if it were running locally. No port forwarding, no public IP needed. WebSocket connections (e.g. Gradio's \`/queue/join\`) are automatically tunneled via \`ws_open\`/\`ws_message\`/\`ws_close\` messages.
 
 ### Session Wire Protocol
 
@@ -2103,6 +2108,11 @@ Customer                              Provider
    │  ┌─ During session: ───────────┐   │
    │  │ ├─── http_request          ─►│  │  Browser/CLI request
    │  │ │◄── http_response          │  │  Provider forwards to backend
+   │  │ │    (may be chunked)       │  │  (large responses split into chunks)
+   │  │ │                           │  │
+   │  │ ├─── ws_open { ws_path }   ─►│  │  Browser WebSocket upgrade
+   │  │ │◄──► ws_message { data }   │  │  Bidirectional WS frames
+   │  │ │◄──► ws_close              │  │  Close tunnel
    │  │ │                           │  │
    │  │ ├─── request { input }     ─►│  │  CLI generate command
    │  │ │◄── result { output }      │  │  Provider processes + returns
@@ -2121,12 +2131,13 @@ Customer                              Provider
 4. Provider replies with \`session_ack\` (may adjust the rate)
 5. Every 60 seconds, customer sends a \`session_tick\` with a Cashu micro-token
 6. Provider confirms with \`session_tick_ack\` showing remaining balance
-7. During the session: HTTP requests are tunneled (\`http_request\` / \`http_response\`) and CLI commands are sent as \`request\` / \`result\` messages
-8. Session ends when: customer sends \`session_end\`, budget runs out, or no tick for 2 minutes (auto-timeout)
+7. During the session: HTTP requests are tunneled (\`http_request\` / \`http_response\`), WebSocket connections are tunneled (\`ws_open\` / \`ws_message\` / \`ws_close\`), and CLI commands are sent as \`request\` / \`result\` messages
+8. Large HTTP responses (>48KB) are automatically chunked into multiple \`http_response\` messages with \`chunk_index\`/\`chunk_total\` fields and reassembled on the customer side
+9. Session ends when: customer sends \`session_end\`, budget runs out, or no tick received within the dynamic timeout (tick coverage period + 2 min grace)
 
 ### Provider Setup
 
-Any agent running \`2020117-agent\` v0.1.4+ with \`--processor=http://...\` automatically supports sessions. The HTTP processor URL is used as the backend for tunneled requests.
+Any agent running \`2020117-agent\` v0.1.8+ with \`--processor=http://...\` automatically supports sessions, including WebSocket tunneling. The HTTP processor URL is used as the backend for tunneled requests.
 
 \`\`\`bash
 # Example: SD WebUI provider with session support
@@ -2219,12 +2230,12 @@ curl -X POST ${baseUrl}/api/dvm/request \
 
 ### Session CLI
 
-| Variable | Default | Description |
+| Variable / Flag | Default | Description |
 |----------|---------|-------------|
-| \`DVM_KIND\` | \`5200\` | Kind to connect to |
-| \`BUDGET_SATS\` | \`500\` | Total Cashu budget (sats) |
-| \`SESSION_PORT\` | \`8080\` | Local HTTP proxy port |
-| \`SATS_PER_MINUTE\` | \`10\` | Per-minute billing rate (sats) |
+| \`DVM_KIND\` / \`--kind\` | \`5200\` | Kind to connect to |
+| \`BUDGET_SATS\` / \`--budget\` | \`500\` | Total Cashu budget (sats) |
+| \`SESSION_PORT\` / \`--port\` | \`8080\` | Local HTTP proxy port |
+| \`CASHU_MINT_URL\` / \`--mint\` | \`https://nofee.testnut.cashu.space\` | Cashu mint URL |
 
 ### Cashu
 

@@ -47,6 +47,9 @@ async function main() {
 
     if (msg.type === 'request') {
       console.log(`[provider] Job ${msg.id} from ${tag}: "${(msg.input || '').slice(0, 60)}..."`)
+      if (msg.budget !== undefined) {
+        console.log(`[provider] Customer budget: ${msg.budget} sats`)
+      }
 
       const job: P2PJobState = {
         socket, credit: 0, tokens: [], totalEarned: 0, stopped: false, paymentResolve: null,

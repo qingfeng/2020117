@@ -155,6 +155,7 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
         }
 
         case 'payment_ack':
+          console.log(`[${tag}] Payment confirmed: ${msg.amount} sats`)
           break
 
         case 'accepted':

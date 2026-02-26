@@ -6,7 +6,7 @@
  *   2020117-customer --kind=5100 --budget=50 "Explain quantum computing"
  */
 
-// --- CLI args -> env (before any imports) ---
+// --- CLI args → env (before any imports) ---
 for (const arg of process.argv.slice(2)) {
   if (!arg.startsWith('--')) continue
   const eq = arg.indexOf('=')
@@ -20,8 +20,7 @@ for (const arg of process.argv.slice(2)) {
   }
 }
 
-import { SwarmNode, topicFromKind } from './swarm.js'
-import { streamFromProvider, queryProviderSkill } from './p2p-customer.js'
+import { streamFromProvider } from './p2p-customer.js'
 
 const KIND = Number(process.env.DVM_KIND) || 5100
 const BUDGET_SATS = Number(process.env.BUDGET_SATS) || 100
@@ -37,33 +36,7 @@ async function main() {
   console.log(`[customer] Prompt: "${prompt.slice(0, 60)}..."`)
   console.log(`[customer] Budget: ${BUDGET_SATS} sats, max price: ${MAX_SATS_PER_CHUNK} sat/chunk`)
 
-  // Optional: query provider skill before streaming
-  const node = new SwarmNode()
-  const topic = topicFromKind(KIND)
-  await node.connect(topic)
-
-  let peer: { socket: any; peerId: string }
-  try {
-    peer = await node.waitForPeer(30_000)
-  } catch {
-    console.error('[customer] No provider found within 30s.')
-    await node.destroy()
-    process.exit(1)
-  }
-
-  console.log(`[customer] Connected to provider: ${peer.peerId.slice(0, 12)}...`)
-
-  const skill = await queryProviderSkill(node, peer.socket, KIND)
-  if (skill) {
-    console.log(`[customer] Provider skill: ${(skill as any).name} v${(skill as any).version}`)
-    if ((skill as any).features) {
-      console.log(`[customer] Features: ${((skill as any).features as string[]).join(', ')}`)
-    }
-  }
-
-  await node.destroy()
-
-  // Stream from provider (creates its own SwarmNode internally)
+  // Stream from provider (handles connection, negotiation, payments internally)
   let output = ''
   for await (const chunk of streamFromProvider({
     kind: KIND,

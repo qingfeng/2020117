@@ -28,6 +28,8 @@ import { EventEmitter } from 'events'
 
 export interface SwarmMessage {
   type: 'request' | 'accepted' | 'chunk' | 'result' | 'error' | 'payment' | 'payment_ack' | 'offer' | 'pay_required' | 'stop' | 'skill_request' | 'skill_response'
+    | 'session_start' | 'session_ack' | 'session_tick' | 'session_tick_ack' | 'session_end'
+    | 'http_request' | 'http_response'
   id: string
   kind?: number
   input?: string
@@ -45,6 +47,17 @@ export interface SwarmMessage {
   earned?: number             // pay_required: total sats earned so far
   next?: number               // pay_required: sats needed for next batch
   total_sats?: number         // result: final total cost
+  // Session fields
+  session_id?: string         // session: identifier for active session
+  sats_per_minute?: number    // session_start/ack: billing rate
+  balance?: number            // session_tick_ack: remaining balance
+  duration_s?: number         // session_end: total session duration in seconds
+  // HTTP proxy fields
+  method?: string             // http_request: HTTP method
+  path?: string               // http_request: URL path
+  headers?: Record<string, string> // http_request/response: HTTP headers
+  body?: string               // http_request/response: HTTP body
+  status?: number             // http_response: HTTP status code
 }
 
 /**

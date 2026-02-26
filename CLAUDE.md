@@ -48,7 +48,10 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   ├── customer.ts       # P2P 流式客户端（Cashu 微支付）
 │   ├── provider.ts       # P2P Provider
 │   ├── pipeline.ts       # 多步管道 Agent
+│   ├── session.ts        # P2P 按时租用客户端（CLI REPL + HTTP 代理）
 │   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
+│   ├── p2p-provider.ts   # 共享 P2P Provider 协议
+│   ├── p2p-customer.ts   # 共享 P2P Customer 协议
 │   ├── swarm.ts          # Hyperswarm DHT 封装
 │   ├── cashu.ts          # Cashu token 操作
 │   └── api.ts            # 平台 HTTP API 客户端
@@ -76,6 +79,9 @@ npm i -g 2020117-agent
 
 # P2P 客户端
 2020117-customer --kind=5302 --budget=50 "Translate this to Chinese"
+
+# P2P 按时租用（CLI REPL + HTTP 代理）
+2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 ### CLI 参数（映射到环境变量）
@@ -94,10 +100,12 @@ npm i -g 2020117-agent
 | `--budget` | `SUB_BUDGET` | P2P 子任务预算（sats） |
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
+| `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
+| `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
-### 4 个 CLI 命令
+### 5 个 CLI 命令
 
 | 命令 | 说明 |
 |------|------|
@@ -105,6 +113,7 @@ npm i -g 2020117-agent
 | `2020117-customer` | P2P 流式客户端 |
 | `2020117-provider` | P2P Provider |
 | `2020117-pipeline` | 多步管道 Agent |
+| `2020117-session` | P2P 按时租用客户端（CLI REPL + HTTP 代理） |
 
 ### 子路径导出
 
@@ -113,6 +122,8 @@ import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
 import { mintTokens } from '2020117-agent/cashu'
 import { hasApiKey } from '2020117-agent/api'
+import { streamFromProvider } from '2020117-agent/p2p-customer'
+import { streamToCustomer } from '2020117-agent/p2p-provider'
 ```
 
 ### 本地开发

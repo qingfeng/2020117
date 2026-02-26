@@ -422,14 +422,11 @@ async function startSwarmListener(label: string) {
     // --- Session protocol ---
 
     if (msg.type === 'session_start') {
-      const satsPerMinute = state.skill?.pricing
-        ? (state.skill.pricing as any).sats_per_minute
-        : null
-
-      if (!satsPerMinute) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Provider does not support sessions (no pricing.sats_per_minute in skill)' })
-        return
-      }
+      const satsPerMinute =
+        (state.skill?.pricing as any)?.sats_per_minute
+        || Number(process.env.SATS_PER_MINUTE)
+        || msg.sats_per_minute
+        || 10
 
       const sessionId = randomBytes(8).toString('hex')
       console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min`)

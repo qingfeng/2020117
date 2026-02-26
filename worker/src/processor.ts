@@ -10,15 +10,23 @@
  *   PROCESSOR=http://url    — remote HTTP endpoint
  */
 
+/** Structured request passed to every Processor method. */
+export interface JobRequest {
+  /** The text input (prompt / source text / query) */
+  input: string
+  /** Optional extra parameters (model overrides, LoRA, ControlNet, etc.) */
+  params?: Record<string, unknown>
+}
+
 export interface Processor {
   /** Human-readable name for logs (e.g. "ollama:llama3.2", "none") */
   readonly name: string
   /** Startup check — may throw to abort launch */
   verify(): Promise<void>
   /** Non-streaming generation */
-  generate(prompt: string): Promise<string>
+  generate(req: JobRequest): Promise<string>
   /** Streaming generation — yields chunks as they arrive */
-  generateStream(prompt: string): AsyncGenerator<string>
+  generateStream(req: JobRequest): AsyncGenerator<string>
 }
 
 /**

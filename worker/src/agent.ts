@@ -189,7 +189,7 @@ function startInboxPoller(label: string) {
         }
 
         // Process in background — don't await
-        processAsyncJob(label, job.id, job.input).catch((err) => {
+        processAsyncJob(label, job.id, job.input, job.params).catch((err) => {
           console.error(`[${label}] Async job ${job.id} error: ${err.message}`)
         })
       }
@@ -209,7 +209,7 @@ function startInboxPoller(label: string) {
   state.pollTimer = setTimeout(poll, 2000)
 }
 
-async function processAsyncJob(label: string, inboxJobId: string, input: string) {
+async function processAsyncJob(label: string, inboxJobId: string, input: string, params?: Record<string, unknown>) {
   try {
     console.log(`[${label}] Accepting job ${inboxJobId}...`)
     const accepted = await acceptJob(inboxJobId)
@@ -233,7 +233,7 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
           // API delegation is non-streaming — collect full result, then process
           const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
           console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
-          result = await state.processor!.generate(subResult)
+          result = await state.processor!.generate({ input: subResult, params })
         } else {
           // P2P delegation — stream-collect from sub-provider, batch-translate
           result = ''
@@ -243,11 +243,11 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string)
         }
       } catch (e: any) {
         console.error(`[${label}] Job ${providerJobId}: sub-task failed: ${e.message}, using original input`)
-        result = await state.processor!.generate(input)
+        result = await state.processor!.generate({ input, params })
       }
     } else {
       // No pipeline — direct local processing
-      result = await state.processor!.generate(input)
+      result = await state.processor!.generate({ input, params })
     }
 
     console.log(`[${label}] Job ${providerJobId}: generated ${result.length} chars`)
@@ -442,7 +442,7 @@ async function* pipelineStream(kind: number, input: string, budgetSats: number):
   let batch = ''
 
   async function* translateBatch(text: string): AsyncGenerator<string> {
-    for await (const token of state.processor!.generateStream(text)) {
+    for await (const token of state.processor!.generateStream({ input: text })) {
       yield token
     }
   }
@@ -654,7 +654,7 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
   // Pick the source: pipeline (delegate + local) or direct local generation
   const source = SUB_KIND
     ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
-    : state.processor!.generateStream(msg.input || '')
+    : state.processor!.generateStream({ input: msg.input || '', params: (msg as any).params })
 
   try {
     for await (const chunk of source) {

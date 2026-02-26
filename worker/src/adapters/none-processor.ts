@@ -5,7 +5,7 @@
  * generate() returns the prompt as-is so the pipeline can forward it.
  */
 
-import type { Processor } from '../processor.js'
+import type { Processor, JobRequest } from '../processor.js'
 
 export class NoneProcessor implements Processor {
   readonly name = 'none'
@@ -14,11 +14,11 @@ export class NoneProcessor implements Processor {
     // No-op — nothing to check
   }
 
-  async generate(prompt: string): Promise<string> {
-    return prompt
+  async generate(req: JobRequest): Promise<string> {
+    return req.input
   }
 
-  async *generateStream(prompt: string): AsyncGenerator<string> {
-    yield prompt
+  async *generateStream(req: JobRequest): AsyncGenerator<string> {
+    yield req.input
   }
 }

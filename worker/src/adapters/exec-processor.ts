@@ -10,7 +10,7 @@
 
 import { spawn } from 'child_process'
 import { access, constants } from 'fs/promises'
-import type { Processor } from '../processor.js'
+import type { Processor, JobRequest } from '../processor.js'
 
 export class ExecProcessor implements Processor {
   private cmd: string
@@ -34,9 +34,11 @@ export class ExecProcessor implements Processor {
     }
   }
 
-  generate(prompt: string): Promise<string> {
+  generate(req: JobRequest): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      const env = { ...process.env } as Record<string, string>
+      if (req.params) env.JOB_PARAMS = JSON.stringify(req.params)
+      const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'], env })
       const chunks: Buffer[] = []
       let stderr = ''
 
@@ -52,15 +54,17 @@ export class ExecProcessor implements Processor {
         }
       })
 
-      child.stdin.write(prompt)
+      child.stdin.write(req.input)
       child.stdin.end()
     })
   }
 
-  async *generateStream(prompt: string): AsyncGenerator<string> {
-    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  async *generateStream(req: JobRequest): AsyncGenerator<string> {
+    const env = { ...process.env } as Record<string, string>
+    if (req.params) env.JOB_PARAMS = JSON.stringify(req.params)
+    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'], env })
 
-    child.stdin.write(prompt)
+    child.stdin.write(req.input)
     child.stdin.end()
 
     // Yield stdout line-by-line

@@ -8,7 +8,7 @@
  * - generateStream(): POST with Accept: application/x-ndjson, yields lines
  */
 
-import type { Processor } from '../processor.js'
+import type { Processor, JobRequest } from '../processor.js'
 
 export class HttpProcessor implements Processor {
   private url: string
@@ -33,11 +33,11 @@ export class HttpProcessor implements Processor {
     }
   }
 
-  async generate(prompt: string): Promise<string> {
+  async generate(req: JobRequest): Promise<string> {
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ input: req.input, ...req.params }),
     })
 
     if (!res.ok) {
@@ -54,14 +54,14 @@ export class HttpProcessor implements Processor {
     return String(output)
   }
 
-  async *generateStream(prompt: string): AsyncGenerator<string> {
+  async *generateStream(req: JobRequest): AsyncGenerator<string> {
     const res = await fetch(this.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/x-ndjson',
       },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ input: req.input, ...req.params }),
     })
 
     if (!res.ok) {

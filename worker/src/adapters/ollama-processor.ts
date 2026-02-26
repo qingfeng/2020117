@@ -5,7 +5,7 @@
  * Zero behavior change from the previous hard-coded path in agent.ts.
  */
 
-import type { Processor } from '../processor.js'
+import type { Processor, JobRequest } from '../processor.js'
 import { generate, generateStream, listModels } from './ollama.js'
 
 export class OllamaProcessor implements Processor {
@@ -29,11 +29,11 @@ export class OllamaProcessor implements Processor {
     }
   }
 
-  async generate(prompt: string): Promise<string> {
-    return generate({ model: this.model, prompt })
+  async generate(req: JobRequest): Promise<string> {
+    return generate({ model: this.model, prompt: req.input })
   }
 
-  async *generateStream(prompt: string): AsyncGenerator<string> {
-    yield* generateStream({ model: this.model, prompt })
+  async *generateStream(req: JobRequest): AsyncGenerator<string> {
+    yield* generateStream({ model: this.model, prompt: req.input })
   }
 }

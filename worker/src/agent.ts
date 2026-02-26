@@ -40,6 +40,7 @@ for (const arg of process.argv.slice(2)) {
   }
 }
 
+import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { P2PJobState, waitForPayment, handlePayment, handleStop, streamToCustomer, batchClaim } from './p2p-provider.js'
 import { streamFromProvider } from './p2p-customer.js'
@@ -49,6 +50,7 @@ import {
   getInbox, acceptJob, sendFeedback, submitResult,
   createJob, getJob,
 } from './api.js'
+import { peekToken } from './cashu.js'
 import { readFileSync } from 'fs'
 
 // --- Config from env ---
@@ -381,6 +383,22 @@ async function delegateAPI(kind: number, input: string, bidSats: number, provide
 
 const p2pJobs = new Map<string, P2PJobState>()
 
+// --- Session state ---
+
+interface SessionState {
+  socket: any
+  peerId: string
+  sessionId: string
+  satsPerMinute: number
+  tokens: string[]
+  totalEarned: number
+  startedAt: number
+  lastTickAt: number
+  timeoutTimer: ReturnType<typeof setInterval> | null
+}
+
+const activeSessions = new Map<string, SessionState>()
+
 async function startSwarmListener(label: string) {
   const node = new SwarmNode()
   state.swarmNode = node
@@ -398,6 +416,160 @@ async function startSwarmListener(label: string) {
 
     if (msg.type === 'skill_request') {
       node.send(socket, { type: 'skill_response', id: msg.id, skill: state.skill })
+      return
+    }
+
+    // --- Session protocol ---
+
+    if (msg.type === 'session_start') {
+      const satsPerMinute = state.skill?.pricing
+        ? (state.skill.pricing as any).sats_per_minute
+        : null
+
+      if (!satsPerMinute) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Provider does not support sessions (no pricing.sats_per_minute in skill)' })
+        return
+      }
+
+      const sessionId = randomBytes(8).toString('hex')
+      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min`)
+
+      const session: SessionState = {
+        socket,
+        peerId,
+        sessionId,
+        satsPerMinute,
+        tokens: [],
+        totalEarned: 0,
+        startedAt: Date.now(),
+        lastTickAt: Date.now(),
+        timeoutTimer: null,
+      }
+
+      // Timeout checker — if no tick for 2 minutes, end session
+      session.timeoutTimer = setInterval(() => {
+        const elapsed = Date.now() - session.lastTickAt
+        if (elapsed > 120_000) {
+          console.log(`[${label}] Session ${sessionId}: timeout (no tick for 2 min)`)
+          endSession(node, session, label)
+        }
+      }, 30_000)
+
+      activeSessions.set(sessionId, session)
+
+      node.send(socket, {
+        type: 'session_ack',
+        id: msg.id,
+        session_id: sessionId,
+        sats_per_minute: satsPerMinute,
+      })
+      return
+    }
+
+    if (msg.type === 'session_tick') {
+      const session = activeSessions.get(msg.session_id || '')
+      if (!session) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Unknown session' })
+        return
+      }
+
+      if (!msg.token) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Tick missing token' })
+        return
+      }
+
+      try {
+        const peek = peekToken(msg.token)
+        session.tokens.push(msg.token)
+        session.totalEarned += peek.amount
+        session.lastTickAt = Date.now()
+
+        console.log(`[${label}] Session ${session.sessionId}: tick ${peek.amount} sats (total: ${session.totalEarned})`)
+        node.send(socket, {
+          type: 'session_tick_ack',
+          id: msg.id,
+          session_id: session.sessionId,
+          balance: msg.budget ? msg.budget - session.totalEarned : undefined,
+        })
+      } catch (e: any) {
+        node.send(socket, { type: 'error', id: msg.id, message: `Tick payment failed: ${e.message}` })
+      }
+      return
+    }
+
+    if (msg.type === 'session_end') {
+      const session = activeSessions.get(msg.session_id || '')
+      if (!session) return
+      endSession(node, session, label)
+      return
+    }
+
+    if (msg.type === 'http_request') {
+      const session = findSessionBySocket(socket)
+      if (!session) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'No active session' })
+        return
+      }
+
+      const processorUrl = process.env.PROCESSOR
+      if (!processorUrl || (!processorUrl.startsWith('http://') && !processorUrl.startsWith('https://'))) {
+        node.send(socket, {
+          type: 'http_response',
+          id: msg.id,
+          status: 502,
+          body: JSON.stringify({ error: 'Provider has no HTTP backend configured' }),
+        })
+        return
+      }
+
+      try {
+        const targetUrl = new URL(msg.path || '/', processorUrl).toString()
+        const fetchHeaders: Record<string, string> = { ...(msg.headers || {}) }
+        delete fetchHeaders['host']
+
+        const res = await fetch(targetUrl, {
+          method: msg.method || 'GET',
+          headers: fetchHeaders,
+          body: msg.method !== 'GET' && msg.method !== 'HEAD' ? msg.body : undefined,
+        })
+
+        const resBody = await res.text()
+        const resHeaders: Record<string, string> = {}
+        res.headers.forEach((v, k) => { resHeaders[k] = v })
+
+        node.send(socket, {
+          type: 'http_response',
+          id: msg.id,
+          status: res.status,
+          headers: resHeaders,
+          body: resBody,
+        })
+      } catch (e: any) {
+        node.send(socket, {
+          type: 'http_response',
+          id: msg.id,
+          status: 502,
+          body: JSON.stringify({ error: e.message }),
+        })
+      }
+      return
+    }
+
+    // Session-scoped request (no payment negotiation — session pays per-minute)
+    if (msg.type === 'request' && msg.session_id) {
+      const session = activeSessions.get(msg.session_id)
+      if (!session) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Unknown session' })
+        return
+      }
+      console.log(`[${label}] Session job ${msg.id}: "${(msg.input || '').slice(0, 60)}..."`)
+      try {
+        const result = await state.processor!.generate({ input: msg.input || '', params: msg.params })
+        node.send(socket, { type: 'result', id: msg.id, output: result })
+        console.log(`[${label}] Session job ${msg.id}: ${result.length} chars`)
+      } catch (e: any) {
+        node.send(socket, { type: 'error', id: msg.id, message: e.message })
+      }
       return
     }
 
@@ -481,6 +653,38 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
   await batchClaim(job.tokens, msg.id, label)
   p2pJobs.delete(msg.id)
   releaseSlot()
+}
+
+// --- Session helpers ---
+
+function findSessionBySocket(socket: any): SessionState | undefined {
+  for (const session of activeSessions.values()) {
+    if (session.socket === socket) return session
+  }
+  return undefined
+}
+
+function endSession(node: SwarmNode, session: SessionState, label: string) {
+  const durationS = Math.round((Date.now() - session.startedAt) / 1000)
+
+  if (session.timeoutTimer) {
+    clearInterval(session.timeoutTimer)
+    session.timeoutTimer = null
+  }
+
+  node.send(session.socket, {
+    type: 'session_end',
+    id: session.sessionId,
+    session_id: session.sessionId,
+    total_sats: session.totalEarned,
+    duration_s: durationS,
+  })
+
+  console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
+
+  // Batch claim tokens
+  batchClaim(session.tokens, session.sessionId, label)
+  activeSessions.delete(session.sessionId)
 }
 
 // --- 5. Graceful shutdown ---

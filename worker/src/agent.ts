@@ -52,6 +52,7 @@ import {
 } from './api.js'
 import { peekToken } from './cashu.js'
 import { readFileSync } from 'fs'
+import WebSocket from 'ws'
 
 // --- Config from env ---
 
@@ -611,31 +612,27 @@ async function startSwarmListener(label: string) {
         const backendWs = new WebSocket(backendWsUrl, msg.ws_protocols || [])
         backendWebSockets.set(wsId, { ws: backendWs, peerId })
 
-        backendWs.addEventListener('open', () => {
+        backendWs.on('open', () => {
           console.log(`[${label}] WS ${wsId}: backend connected`)
         })
 
-        backendWs.addEventListener('message', (event: MessageEvent) => {
-          const d = event.data
-          if (typeof d === 'string') {
-            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: d, ws_frame_type: 'text' })
-          } else if (d instanceof ArrayBuffer) {
-            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: Buffer.from(d).toString('base64'), ws_frame_type: 'binary' })
-          } else if (d instanceof Blob) {
-            d.arrayBuffer().then(ab => {
-              node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: Buffer.from(ab).toString('base64'), ws_frame_type: 'binary' })
-            })
+        backendWs.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
+          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+          if (isBinary) {
+            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: buf.toString('base64'), ws_frame_type: 'binary' })
+          } else {
+            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: buf.toString('utf-8'), ws_frame_type: 'text' })
           }
         })
 
-        backendWs.addEventListener('close', (event: any) => {
-          console.log(`[${label}] WS ${wsId}: backend closed (code=${event.code})`)
+        backendWs.on('close', (code: number, reason: Buffer) => {
+          console.log(`[${label}] WS ${wsId}: backend closed (code=${code})`)
           backendWebSockets.delete(wsId)
-          node.send(socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: event.code, ws_reason: event.reason || '' })
+          node.send(socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: code, ws_reason: reason.toString() })
         })
 
-        backendWs.addEventListener('error', () => {
-          console.error(`[${label}] WS ${wsId}: backend error`)
+        backendWs.on('error', (err: Error) => {
+          console.error(`[${label}] WS ${wsId}: backend error: ${err.message}`)
           backendWebSockets.delete(wsId)
           node.send(socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: 1011, ws_reason: 'Backend WebSocket error' })
         })

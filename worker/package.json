@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
   "type": "module",
   "bin": {
@@ -38,10 +38,12 @@
   },
   "dependencies": {
     "@cashu/cashu-ts": "^3.5.0",
-    "hyperswarm": "^4.17.0"
+    "hyperswarm": "^4.17.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
     "typescript": "^5.9.3"
   }

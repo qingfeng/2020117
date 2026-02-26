@@ -30,6 +30,7 @@ export interface SwarmMessage {
   type: 'request' | 'accepted' | 'chunk' | 'result' | 'error' | 'payment' | 'payment_ack' | 'offer' | 'pay_required' | 'stop' | 'skill_request' | 'skill_response'
     | 'session_start' | 'session_ack' | 'session_tick' | 'session_tick_ack' | 'session_end'
     | 'http_request' | 'http_response'
+    | 'ws_open' | 'ws_message' | 'ws_close'
   id: string
   kind?: number
   input?: string
@@ -58,6 +59,16 @@ export interface SwarmMessage {
   headers?: Record<string, string> // http_request/response: HTTP headers
   body?: string               // http_request/response: HTTP body
   status?: number             // http_response: HTTP status code
+  // Chunked response fields
+  chunk_index?: number        // http_response: 0-based chunk index
+  chunk_total?: number        // http_response: total number of chunks
+  // WebSocket tunnel fields
+  ws_id?: string              // unique id per WS connection
+  ws_path?: string            // ws_open: URL path (e.g. "/queue/join")
+  ws_protocols?: string[]     // ws_open: sub-protocols requested
+  ws_frame_type?: 'text' | 'binary'  // ws_message: frame data type
+  ws_code?: number            // ws_close: close code
+  ws_reason?: string          // ws_close: close reason
 }
 
 /**
@@ -90,6 +101,7 @@ export class SwarmNode extends EventEmitter {
         const existing = this.buffers.get(peerId) ?? ''
         const combined = existing + buf.toString()
         const lines = combined.split('\n')
+        // Last element is incomplete (or empty after trailing newline)
         // Last element is incomplete (or empty after trailing newline)
         this.buffers.set(peerId, lines.pop()!)
 

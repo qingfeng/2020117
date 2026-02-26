@@ -26,16 +26,18 @@ for (const arg of process.argv.slice(2)) {
     case '--port':     process.env.SESSION_PORT = val; break
     case '--agent':    process.env.AGENT = val; break
     case '--provider': process.env.PROVIDER_PEER = val; break
+    case '--mint':     process.env.CASHU_MINT_URL = val; break
   }
 }
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
-import { mintTokens, splitTokens } from './cashu.js'
-import { randomBytes } from 'crypto'
+import { mintTokens, splitTokens, createWallet } from './cashu.js'
+import { randomBytes, createHash } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
 import { mkdirSync, writeFileSync } from 'fs'
+import { Socket } from 'net'
 
 // --- Config ---
 
@@ -54,6 +56,8 @@ interface SessionClientState {
   sessionId: string
   skill: Record<string, unknown> | null
   satsPerMinute: number
+  satsPerToken: number
+  tickIntervalMs: number
   microTokens: string[]
   tokenIndex: number
   totalSpent: number
@@ -63,6 +67,10 @@ interface SessionClientState {
   shuttingDown: boolean
   // Pending request/response maps keyed by message id
   pendingRequests: Map<string, { resolve: (msg: SwarmMessage) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>
+  // Chunked response reassembly buffers keyed by message id
+  chunkBuffers: Map<string, { chunks: (string | undefined)[]; total: number; firstMsg: SwarmMessage }>
+  // Active WebSocket tunnels: ws_id -> raw TCP socket from browser upgrade
+  activeWebSockets: Map<string, Socket>
   outputCounter: number
 }
 
@@ -73,6 +81,8 @@ const state: SessionClientState = {
   sessionId: '',
   skill: null,
   satsPerMinute: 0,
+  satsPerToken: 1,
+  tickIntervalMs: 60_000,
   microTokens: [],
   tokenIndex: 0,
   totalSpent: 0,
@@ -81,6 +91,8 @@ const state: SessionClientState = {
   httpServer: null,
   shuttingDown: false,
   pendingRequests: new Map(),
+  chunkBuffers: new Map(),
+  activeWebSockets: new Map(),
   outputCounter: 0,
 }
 
@@ -134,6 +146,37 @@ function sendAndWait(msg: SwarmMessage, timeoutMs: number): Promise<SwarmMessage
 
 function setupMessageHandler() {
   state.node!.on('message', (msg: SwarmMessage) => {
+    // Handle chunked HTTP responses — reassemble before resolving
+    if (msg.type === 'http_response' && msg.chunk_total && msg.chunk_total > 1) {
+      const id = msg.id
+      let buf = state.chunkBuffers.get(id)
+      if (!buf) {
+        buf = { chunks: new Array(msg.chunk_total), total: msg.chunk_total, firstMsg: msg }
+        state.chunkBuffers.set(id, buf)
+      }
+      buf.chunks[msg.chunk_index ?? 0] = msg.body ?? ''
+
+      const received = buf.chunks.filter(c => c !== undefined).length
+      if (received < buf.total) return // wait for more chunks
+
+      // All chunks received — reassemble and resolve
+      const assembled: SwarmMessage = {
+        ...buf.firstMsg,
+        body: buf.chunks.join(''),
+        chunk_index: undefined,
+        chunk_total: undefined,
+      }
+      state.chunkBuffers.delete(id)
+
+      const pending = state.pendingRequests.get(id)
+      if (pending) {
+        clearTimeout(pending.timer)
+        state.pendingRequests.delete(id)
+        pending.resolve(assembled)
+      }
+      return
+    }
+
     // Check pending requests first — match by id
     const pending = state.pendingRequests.get(msg.id)
     if (pending) {
@@ -170,6 +213,45 @@ function setupMessageHandler() {
         break
       }
 
+      case 'ws_message': {
+        const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
+        if (!browserSocket || browserSocket.destroyed) {
+          state.activeWebSockets.delete(msg.ws_id || '')
+          break
+        }
+        const isText = msg.ws_frame_type !== 'binary'
+        const payload = isText
+          ? Buffer.from(msg.data || '', 'utf-8')
+          : Buffer.from(msg.data || '', 'base64')
+        try { browserSocket.write(buildWsFrame(payload, isText ? 0x01 : 0x02)) } catch {}
+        break
+      }
+
+      case 'ws_close': {
+        const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
+        if (browserSocket && !browserSocket.destroyed) {
+          sendWsClose(browserSocket, msg.ws_code || 1000, msg.ws_reason || '')
+          browserSocket.end()
+        }
+        state.activeWebSockets.delete(msg.ws_id || '')
+        log(`WS ${msg.ws_id}: closed by provider (code=${msg.ws_code || 1000})`)
+        break
+      }
+
+      case 'ws_open': {
+        // Provider failed to open backend WS
+        if (msg.message) {
+          const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
+          if (browserSocket && !browserSocket.destroyed) {
+            sendWsClose(browserSocket, 1011, msg.message)
+            browserSocket.end()
+          }
+          state.activeWebSockets.delete(msg.ws_id || '')
+          warn(`WS ${msg.ws_id}: provider failed: ${msg.message}`)
+        }
+        break
+      }
+
       default:
         // Unrecognized unsolicited message — ignore
         break
@@ -187,41 +269,46 @@ function setupMessageHandler() {
 
 // --- 3. Tick timer ---
 
+async function sendTick(): Promise<boolean> {
+  if (state.shuttingDown) return false
+
+  if (remainingTokens() <= 0) {
+    log('Budget exhausted — ending session')
+    await endSession()
+    return false
+  }
+
+  if (remainingTokens() <= 2) {
+    warn(`Low balance! Only ${remainingTokens()} tick(s) remaining (${remainingSats()} sats)`)
+  }
+
+  const token = state.microTokens[state.tokenIndex++]
+  state.totalSpent += state.satsPerToken
+
+  const tickId = randomBytes(4).toString('hex')
+  try {
+    const resp = await sendAndWait({
+      type: 'session_tick',
+      id: tickId,
+      session_id: state.sessionId,
+      token,
+      budget: BUDGET,
+    }, 15_000)
+
+    if (resp.balance !== undefined) {
+      log(`Tick OK — balance: ${resp.balance} sats`)
+    }
+    return true
+  } catch (e: any) {
+    warn(`Tick failed: ${e.message}`)
+    return false
+  }
+}
+
 function startTickTimer() {
-  state.tickTimer = setInterval(async () => {
-    if (state.shuttingDown) return
-
-    if (remainingTokens() <= 0) {
-      log('Budget exhausted — ending session')
-      await endSession()
-      return
-    }
-
-    // Low balance warning
-    if (remainingTokens() <= 2) {
-      warn(`Low balance! Only ${remainingTokens()} tick(s) remaining (${remainingSats()} sats)`)
-    }
-
-    const token = state.microTokens[state.tokenIndex++]
-    state.totalSpent += state.satsPerMinute
-
-    const tickId = randomBytes(4).toString('hex')
-    try {
-      const resp = await sendAndWait({
-        type: 'session_tick',
-        id: tickId,
-        session_id: state.sessionId,
-        token,
-        budget: BUDGET,
-      }, 15_000)
-
-      if (resp.balance !== undefined) {
-        log(`Tick OK — balance: ${resp.balance} sats`)
-      }
-    } catch (e: any) {
-      warn(`Tick failed: ${e.message}`)
-    }
-  }, TICK_INTERVAL_MS)
+  // Send first tick immediately (prepay) to prevent provider timeout
+  sendTick()
+  state.tickTimer = setInterval(() => sendTick(), state.tickIntervalMs)
 }
 
 // --- 4. HTTP proxy ---
@@ -264,9 +351,11 @@ function startHttpProxy(): Promise<void> {
 
         // Forward response back to browser
         const respHeaders: Record<string, string> = { ...(resp.headers || {}) }
-        // Remove hop-by-hop headers
+        // Remove hop-by-hop and size headers (body may differ after P2P relay)
         delete respHeaders['transfer-encoding']
         delete respHeaders['connection']
+        delete respHeaders['content-length']
+        delete respHeaders['content-encoding']
 
         res.writeHead(resp.status || 200, respHeaders)
         res.end(resp.body || '')
@@ -275,6 +364,9 @@ function startHttpProxy(): Promise<void> {
         res.end(JSON.stringify({ error: e.message }))
       }
     })
+
+    // Enable WebSocket tunneling on the same server
+    setupWebSocketProxy(server)
 
     server.on('error', (err: Error) => {
       if (!state.httpServer) {
@@ -291,9 +383,186 @@ function startHttpProxy(): Promise<void> {
   })
 }
 
+// --- 4b. WebSocket tunnel (RFC 6455 minimal codec) ---
+
+function wsAcceptKey(clientKey: string): string {
+  return createHash('sha1')
+    .update(clientKey + '258EAFA5-E914-47DA-95CA-5AB5DB63F35E')
+    .digest('base64')
+}
+
+function buildWsFrame(data: Buffer, opcode: number): Buffer {
+  const len = data.length
+  let header: Buffer
+  if (len < 126) {
+    header = Buffer.alloc(2)
+    header[0] = 0x80 | opcode
+    header[1] = len
+  } else if (len < 65536) {
+    header = Buffer.alloc(4)
+    header[0] = 0x80 | opcode
+    header[1] = 126
+    header.writeUInt16BE(len, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[0] = 0x80 | opcode
+    header[1] = 127
+    header.writeUInt32BE(0, 2)
+    header.writeUInt32BE(len, 6)
+  }
+  return Buffer.concat([header, data])
+}
+
+function sendWsClose(socket: Socket, code: number, reason: string) {
+  const reasonBuf = Buffer.from(reason, 'utf-8')
+  const payload = Buffer.alloc(2 + reasonBuf.length)
+  payload.writeUInt16BE(code, 0)
+  reasonBuf.copy(payload, 2)
+  try { socket.write(buildWsFrame(payload, 0x08)) } catch {}
+}
+
+class WsFrameParser {
+  private buf = Buffer.alloc(0)
+  onFrame: (opcode: number, payload: Buffer) => void = () => {}
+
+  feed(chunk: Buffer) {
+    this.buf = Buffer.concat([this.buf, chunk])
+    while (this.parseOne()) {}
+  }
+
+  private parseOne(): boolean {
+    if (this.buf.length < 2) return false
+    const byte1 = this.buf[1]
+    const masked = (byte1 & 0x80) !== 0
+    let payloadLen = byte1 & 0x7f
+    let offset = 2
+
+    if (payloadLen === 126) {
+      if (this.buf.length < 4) return false
+      payloadLen = this.buf.readUInt16BE(2)
+      offset = 4
+    } else if (payloadLen === 127) {
+      if (this.buf.length < 10) return false
+      payloadLen = this.buf.readUInt32BE(6)
+      offset = 10
+    }
+
+    const maskSize = masked ? 4 : 0
+    const totalLen = offset + maskSize + payloadLen
+    if (this.buf.length < totalLen) return false
+
+    const opcode = this.buf[0] & 0x0f
+    let payload: Buffer
+    if (masked) {
+      const mask = this.buf.subarray(offset, offset + 4)
+      payload = Buffer.alloc(payloadLen)
+      for (let i = 0; i < payloadLen; i++) {
+        payload[i] = this.buf[offset + 4 + i] ^ mask[i & 3]
+      }
+    } else {
+      payload = Buffer.from(this.buf.subarray(offset, offset + payloadLen))
+    }
+
+    this.buf = Buffer.from(this.buf.subarray(totalLen))
+    this.onFrame(opcode, payload)
+    return true
+  }
+}
+
+function setupWebSocketProxy(server: ReturnType<typeof createServer>) {
+  server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+    if (!state.sessionId || state.shuttingDown) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n')
+      return
+    }
+
+    const wsKey = req.headers['sec-websocket-key']
+    if (!wsKey) {
+      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
+      return
+    }
+
+    const wsId = randomBytes(4).toString('hex')
+    const path = req.url || '/'
+    const protocols = req.headers['sec-websocket-protocol']
+      ? req.headers['sec-websocket-protocol'].split(',').map(s => s.trim())
+      : undefined
+
+    log(`WS ${wsId}: upgrade ${path}`)
+
+    // Complete handshake with browser
+    const lines = [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${wsAcceptKey(wsKey)}`,
+    ]
+    if (protocols && protocols.length > 0) lines.push(`Sec-WebSocket-Protocol: ${protocols[0]}`)
+    socket.write(lines.join('\r\n') + '\r\n\r\n')
+
+    state.activeWebSockets.set(wsId, socket)
+
+    // Tell provider to open backend WS
+    state.node!.send(state.socket, {
+      type: 'ws_open',
+      id: wsId,
+      ws_id: wsId,
+      session_id: state.sessionId,
+      ws_path: path,
+      ws_protocols: protocols,
+    })
+
+    // Parse frames from browser → relay to provider
+    const parser = new WsFrameParser()
+    parser.onFrame = (opcode, payload) => {
+      if (opcode === 0x08) { // close
+        const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1000
+        state.node!.send(state.socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: code, ws_reason: payload.length > 2 ? payload.subarray(2).toString('utf-8') : '' })
+        state.activeWebSockets.delete(wsId)
+        return
+      }
+      if (opcode === 0x09) { // ping → pong
+        try { socket.write(buildWsFrame(payload, 0x0a)) } catch {}
+        return
+      }
+      if (opcode === 0x0a) return // pong — ignore
+
+      // text (0x01) or binary (0x02)
+      const isText = opcode === 0x01
+      state.node!.send(state.socket, {
+        type: 'ws_message',
+        id: wsId,
+        ws_id: wsId,
+        data: isText ? payload.toString('utf-8') : payload.toString('base64'),
+        ws_frame_type: isText ? 'text' : 'binary',
+      })
+    }
+
+    socket.on('data', (chunk: Buffer) => parser.feed(chunk))
+    if (head.length > 0) parser.feed(head)
+
+    socket.on('close', () => {
+      if (state.activeWebSockets.has(wsId)) {
+        state.activeWebSockets.delete(wsId)
+        try {
+          state.node!.send(state.socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: 1001, ws_reason: 'Browser disconnected' })
+        } catch {}
+      }
+    })
+
+    socket.on('error', () => { state.activeWebSockets.delete(wsId) })
+  })
+}
+
 // --- 5. CLI REPL ---
 
 function startRepl() {
+  // Skip REPL when stdin is not a TTY (e.g. background process, piped input)
+  if (!process.stdin.isTTY) {
+    log('Non-interactive mode (no TTY) — session will run until budget exhausted or provider ends it')
+    return
+  }
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -510,6 +779,14 @@ async function endSession() {
     pending.reject(new Error('Session ending'))
     state.pendingRequests.delete(id)
   }
+  state.chunkBuffers.clear()
+
+  // Close all WebSocket tunnels
+  for (const [wsId, socket] of state.activeWebSockets) {
+    sendWsClose(socket, 1001, 'Session ending')
+    socket.end()
+  }
+  state.activeWebSockets.clear()
 
   // Send session_end
   if (state.node && state.socket && state.sessionId) {
@@ -589,11 +866,37 @@ async function main() {
   log(`Budget: ${BUDGET} sats (~${Math.floor(BUDGET / satsPerMinute)} min)`)
 
   // 4. Mint and split tokens
-  log(`Minting ${BUDGET} sats...`)
-  const { token: bigToken } = await mintTokens(BUDGET)
+  // Cashu tokens must be whole sats. If rate < 1, use 1 sat tokens with longer tick intervals.
+  const satsPerToken = Math.max(1, Math.ceil(satsPerMinute))
+  const tickMinutes = satsPerToken / satsPerMinute  // e.g. 0.1 sats/min → 1 sat every 10 min
+  state.tickIntervalMs = Math.round(tickMinutes * 60_000)
+  state.satsPerToken = satsPerToken
 
-  log(`Splitting into ${satsPerMinute}-sat micro-tokens...`)
-  state.microTokens = await splitTokens(bigToken, satsPerMinute)
+  // Check mint fees — each micro-token must cover satsPerToken + swap fee (so provider
+  // can claim it), and each wallet.send during splitting also costs a fee.
+  const mintUrl = process.env.CASHU_MINT_URL || 'https://nofee.testnut.cashu.space'
+  const { wallet: tmpWallet } = createWallet(mintUrl)
+  await tmpWallet.loadMint()
+  const swapFee = tmpWallet.getFeesForKeyset(1, tmpWallet.keysetId)
+  const tokenAmount = satsPerToken + swapFee   // what each micro-token contains
+  const numTokens = Math.ceil(BUDGET / satsPerToken)
+  // Each split (wallet.send) also costs a fee, plus proof fragmentation overhead
+  const splitOverhead = swapFee > 0 ? Math.ceil(swapFee * 1.5) : 0
+  const totalNeeded = (tokenAmount + splitOverhead) * numTokens
+  const mintAmount = Math.max(BUDGET, totalNeeded)
+
+  if (swapFee > 0) {
+    log(`Mint swap fee: ${swapFee} sats/token → minting ${tokenAmount} sats/token (${satsPerToken} + ${swapFee} fee)`)
+    if (mintAmount > BUDGET * 3) {
+      warn(`High fee overhead: minting ${mintAmount} sats for ${BUDGET} sats budget. Consider using a no-fee mint.`)
+    }
+  }
+
+  log(`Minting ${mintAmount} sats...`)
+  const { token: bigToken } = await mintTokens(mintAmount, mintUrl)
+
+  log(`Splitting into ${tokenAmount}-sat micro-tokens (tick every ${tickMinutes} min)...`)
+  state.microTokens = await splitTokens(bigToken, tokenAmount)
   log(`Ready: ${state.microTokens.length} micro-tokens`)
 
   if (state.microTokens.length === 0) {

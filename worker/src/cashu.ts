@@ -97,11 +97,26 @@ export async function splitTokens(tokenStr: string, perAmount: number): Promise<
     const total = remaining.reduce((sum: number, p: { amount: number }) => sum + p.amount, 0)
     if (total < perAmount) break
 
-    const { send, keep } = await wallet.send(perAmount, remaining)
-    microTokens.push(getEncodedToken({ mint: mintUrl, proofs: send }))
-    remaining = keep
+    let retries = 5
+    while (retries > 0) {
+      try {
+        const { send, keep: kept } = await wallet.send(perAmount, remaining)
+        microTokens.push(getEncodedToken({ mint: mintUrl, proofs: send }))
+        remaining = kept
+        break
+      } catch (e: any) {
+        if (retries > 1 && /rate.limit/i.test(e.message || '')) {
+          const delay = (6 - retries) * 2000 // 2s, 4s, 6s, 8s
+          console.log(`[cashu] Rate limited, waiting ${delay / 1000}s... (${retries - 1} retries left)`)
+          await sleep(delay)
+          retries--
+        } else {
+          throw e
+        }
+      }
+    }
 
-    if (keep.length === 0) break
+    if (remaining.length === 0) break
   }
 
   console.log(`[cashu] Split into ${microTokens.length} micro-tokens of ${perAmount} sats each`)

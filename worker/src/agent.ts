@@ -399,6 +399,9 @@ interface SessionState {
 
 const activeSessions = new Map<string, SessionState>()
 
+// Backend WebSocket connections for WS tunnel (keyed by ws_id)
+const backendWebSockets = new Map<string, { ws: WebSocket; peerId: string }>()
+
 async function startSwarmListener(label: string) {
   const node = new SwarmNode()
   state.swarmNode = node
@@ -443,11 +446,22 @@ async function startSwarmListener(label: string) {
         timeoutTimer: null,
       }
 
-      // Timeout checker — if no tick for 2 minutes, end session
+      // Dynamic timeout based on tick value: if a tick covers N minutes of service,
+      // allow N minutes + 2 min grace before timing out. Updates on each tick.
+      const baseTimeoutMs = satsPerMinute > 0
+        ? Math.max(120_000, Math.round((1 / satsPerMinute) * 60_000) + 120_000)
+        : 120_000
       session.timeoutTimer = setInterval(() => {
+        // Recalculate timeout based on last tick amount
+        const lastTickAmount = session.totalEarned > 0
+          ? Math.max(1, session.tokens.length > 0 ? peekToken(session.tokens[session.tokens.length - 1]).amount : 1)
+          : 1
+        const tickCoverageMs = satsPerMinute > 0
+          ? Math.round((lastTickAmount / satsPerMinute) * 60_000) + 120_000
+          : baseTimeoutMs
         const elapsed = Date.now() - session.lastTickAt
-        if (elapsed > 120_000) {
-          console.log(`[${label}] Session ${sessionId}: timeout (no tick for 2 min)`)
+        if (elapsed > tickCoverageMs) {
+          console.log(`[${label}] Session ${sessionId}: timeout (no tick for ${Math.round(elapsed / 1000)}s, limit ${Math.round(tickCoverageMs / 1000)}s)`)
           endSession(node, session, label)
         }
       }, 30_000)
@@ -534,13 +548,33 @@ async function startSwarmListener(label: string) {
         const resHeaders: Record<string, string> = {}
         res.headers.forEach((v, k) => { resHeaders[k] = v })
 
-        node.send(socket, {
-          type: 'http_response',
-          id: msg.id,
-          status: res.status,
-          headers: resHeaders,
-          body: resBody,
-        })
+        // Chunk large responses to avoid swarm transport truncation
+        const CHUNK_SIZE = 48_000 // ~48KB per chunk (safe margin under 64KB NOISE frame)
+        if (resBody.length > CHUNK_SIZE) {
+          const chunks: string[] = []
+          for (let i = 0; i < resBody.length; i += CHUNK_SIZE) {
+            chunks.push(resBody.slice(i, i + CHUNK_SIZE))
+          }
+          for (let i = 0; i < chunks.length; i++) {
+            node.send(socket, {
+              type: 'http_response',
+              id: msg.id,
+              status: i === 0 ? res.status : undefined,
+              headers: i === 0 ? resHeaders : undefined,
+              body: chunks[i],
+              chunk_index: i,
+              chunk_total: chunks.length,
+            })
+          }
+        } else {
+          node.send(socket, {
+            type: 'http_response',
+            id: msg.id,
+            status: res.status,
+            headers: resHeaders,
+            body: resBody,
+          })
+        }
       } catch (e: any) {
         node.send(socket, {
           type: 'http_response',
@@ -548,6 +582,90 @@ async function startSwarmListener(label: string) {
           status: 502,
           body: JSON.stringify({ error: e.message }),
         })
+      }
+      return
+    }
+
+    // --- WebSocket tunnel ---
+
+    if (msg.type === 'ws_open') {
+      const session = findSessionBySocket(socket)
+      if (!session) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'No active session' })
+        return
+      }
+
+      const processorUrl = process.env.PROCESSOR
+      if (!processorUrl || (!processorUrl.startsWith('http://') && !processorUrl.startsWith('https://'))) {
+        node.send(socket, { type: 'ws_open', id: msg.id, ws_id: msg.ws_id, message: 'No HTTP backend configured' })
+        return
+      }
+
+      const wsId = msg.ws_id!
+      const wsPath = msg.ws_path || '/'
+      const backendWsUrl = processorUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:').replace(/\/$/, '') + wsPath
+
+      console.log(`[${label}] WS ${wsId}: opening ${backendWsUrl}`)
+
+      try {
+        const backendWs = new WebSocket(backendWsUrl, msg.ws_protocols || [])
+        backendWebSockets.set(wsId, { ws: backendWs, peerId })
+
+        backendWs.addEventListener('open', () => {
+          console.log(`[${label}] WS ${wsId}: backend connected`)
+        })
+
+        backendWs.addEventListener('message', (event: MessageEvent) => {
+          const d = event.data
+          if (typeof d === 'string') {
+            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: d, ws_frame_type: 'text' })
+          } else if (d instanceof ArrayBuffer) {
+            node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: Buffer.from(d).toString('base64'), ws_frame_type: 'binary' })
+          } else if (d instanceof Blob) {
+            d.arrayBuffer().then(ab => {
+              node.send(socket, { type: 'ws_message', id: wsId, ws_id: wsId, data: Buffer.from(ab).toString('base64'), ws_frame_type: 'binary' })
+            })
+          }
+        })
+
+        backendWs.addEventListener('close', (event: any) => {
+          console.log(`[${label}] WS ${wsId}: backend closed (code=${event.code})`)
+          backendWebSockets.delete(wsId)
+          node.send(socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: event.code, ws_reason: event.reason || '' })
+        })
+
+        backendWs.addEventListener('error', () => {
+          console.error(`[${label}] WS ${wsId}: backend error`)
+          backendWebSockets.delete(wsId)
+          node.send(socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: 1011, ws_reason: 'Backend WebSocket error' })
+        })
+      } catch (e: any) {
+        node.send(socket, { type: 'ws_open', id: msg.id, ws_id: wsId, message: e.message })
+      }
+      return
+    }
+
+    if (msg.type === 'ws_message') {
+      const entry = backendWebSockets.get(msg.ws_id || '')
+      if (!entry || entry.ws.readyState !== WebSocket.OPEN) return
+      try {
+        if (msg.ws_frame_type === 'binary') {
+          entry.ws.send(Buffer.from(msg.data || '', 'base64'))
+        } else {
+          entry.ws.send(msg.data || '')
+        }
+      } catch (e: any) {
+        console.error(`[${label}] WS ${msg.ws_id}: send failed: ${e.message}`)
+      }
+      return
+    }
+
+    if (msg.type === 'ws_close') {
+      const entry = backendWebSockets.get(msg.ws_id || '')
+      if (entry) {
+        console.log(`[${label}] WS ${msg.ws_id}: closing backend`)
+        try { entry.ws.close(msg.ws_code || 1000, msg.ws_reason || '') } catch {}
+        backendWebSockets.delete(msg.ws_id || '')
       }
       return
     }
@@ -667,6 +785,14 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   if (session.timeoutTimer) {
     clearInterval(session.timeoutTimer)
     session.timeoutTimer = null
+  }
+
+  // Close all backend WebSockets for this peer
+  for (const [wsId, entry] of backendWebSockets) {
+    if (entry.peerId === session.peerId) {
+      try { entry.ws.close(1001, 'Session ended') } catch {}
+      backendWebSockets.delete(wsId)
+    }
   }
 
   node.send(session.socket, {

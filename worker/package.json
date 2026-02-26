@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
   "type": "module",
   "bin": {
@@ -10,7 +10,9 @@
     "2020117-pipeline": "./dist/pipeline.js",
     "2020117-session": "./dist/session.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",

@@ -33,11 +33,12 @@ for (const arg of process.argv.slice(2)) {
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
 import { mintTokens, splitTokens, createWallet } from './cashu.js'
-import { randomBytes, createHash } from 'crypto'
+import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Socket } from 'net'
+import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 
 // --- Config ---
 
@@ -69,8 +70,8 @@ interface SessionClientState {
   pendingRequests: Map<string, { resolve: (msg: SwarmMessage) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>
   // Chunked response reassembly buffers keyed by message id
   chunkBuffers: Map<string, { chunks: (string | undefined)[]; total: number; firstMsg: SwarmMessage }>
-  // Active WebSocket tunnels: ws_id -> raw TCP socket from browser upgrade
-  activeWebSockets: Map<string, Socket>
+  // Active WebSocket tunnels: ws_id -> ws WebSocket from browser upgrade
+  activeWebSockets: Map<string, WsWebSocket>
   outputCounter: number
 }
 
@@ -214,24 +215,25 @@ function setupMessageHandler() {
       }
 
       case 'ws_message': {
-        const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
-        if (!browserSocket || browserSocket.destroyed) {
+        const browserWs = state.activeWebSockets.get(msg.ws_id || '')
+        if (!browserWs || browserWs.readyState !== WsWebSocket.OPEN) {
           state.activeWebSockets.delete(msg.ws_id || '')
           break
         }
-        const isText = msg.ws_frame_type !== 'binary'
-        const payload = isText
-          ? Buffer.from(msg.data || '', 'utf-8')
-          : Buffer.from(msg.data || '', 'base64')
-        try { browserSocket.write(buildWsFrame(payload, isText ? 0x01 : 0x02)) } catch {}
+        try {
+          if (msg.ws_frame_type === 'binary') {
+            browserWs.send(Buffer.from(msg.data || '', 'base64'))
+          } else {
+            browserWs.send(msg.data || '')
+          }
+        } catch {}
         break
       }
 
       case 'ws_close': {
-        const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
-        if (browserSocket && !browserSocket.destroyed) {
-          sendWsClose(browserSocket, msg.ws_code || 1000, msg.ws_reason || '')
-          browserSocket.end()
+        const browserWs = state.activeWebSockets.get(msg.ws_id || '')
+        if (browserWs && browserWs.readyState === WsWebSocket.OPEN) {
+          browserWs.close(msg.ws_code || 1000, msg.ws_reason || '')
         }
         state.activeWebSockets.delete(msg.ws_id || '')
         log(`WS ${msg.ws_id}: closed by provider (code=${msg.ws_code || 1000})`)
@@ -241,10 +243,9 @@ function setupMessageHandler() {
       case 'ws_open': {
         // Provider failed to open backend WS
         if (msg.message) {
-          const browserSocket = state.activeWebSockets.get(msg.ws_id || '')
-          if (browserSocket && !browserSocket.destroyed) {
-            sendWsClose(browserSocket, 1011, msg.message)
-            browserSocket.end()
+          const browserWs = state.activeWebSockets.get(msg.ws_id || '')
+          if (browserWs && browserWs.readyState === WsWebSocket.OPEN) {
+            browserWs.close(1011, msg.message)
           }
           state.activeWebSockets.delete(msg.ws_id || '')
           warn(`WS ${msg.ws_id}: provider failed: ${msg.message}`)
@@ -383,102 +384,14 @@ function startHttpProxy(): Promise<void> {
   })
 }
 
-// --- 4b. WebSocket tunnel (RFC 6455 minimal codec) ---
-
-function wsAcceptKey(clientKey: string): string {
-  return createHash('sha1')
-    .update(clientKey + '258EAFA5-E914-47DA-95CA-5AB5DB63F35E')
-    .digest('base64')
-}
-
-function buildWsFrame(data: Buffer, opcode: number): Buffer {
-  const len = data.length
-  let header: Buffer
-  if (len < 126) {
-    header = Buffer.alloc(2)
-    header[0] = 0x80 | opcode
-    header[1] = len
-  } else if (len < 65536) {
-    header = Buffer.alloc(4)
-    header[0] = 0x80 | opcode
-    header[1] = 126
-    header.writeUInt16BE(len, 2)
-  } else {
-    header = Buffer.alloc(10)
-    header[0] = 0x80 | opcode
-    header[1] = 127
-    header.writeUInt32BE(0, 2)
-    header.writeUInt32BE(len, 6)
-  }
-  return Buffer.concat([header, data])
-}
-
-function sendWsClose(socket: Socket, code: number, reason: string) {
-  const reasonBuf = Buffer.from(reason, 'utf-8')
-  const payload = Buffer.alloc(2 + reasonBuf.length)
-  payload.writeUInt16BE(code, 0)
-  reasonBuf.copy(payload, 2)
-  try { socket.write(buildWsFrame(payload, 0x08)) } catch {}
-}
-
-class WsFrameParser {
-  private buf = Buffer.alloc(0)
-  onFrame: (opcode: number, payload: Buffer) => void = () => {}
-
-  feed(chunk: Buffer) {
-    this.buf = Buffer.concat([this.buf, chunk])
-    while (this.parseOne()) {}
-  }
-
-  private parseOne(): boolean {
-    if (this.buf.length < 2) return false
-    const byte1 = this.buf[1]
-    const masked = (byte1 & 0x80) !== 0
-    let payloadLen = byte1 & 0x7f
-    let offset = 2
-
-    if (payloadLen === 126) {
-      if (this.buf.length < 4) return false
-      payloadLen = this.buf.readUInt16BE(2)
-      offset = 4
-    } else if (payloadLen === 127) {
-      if (this.buf.length < 10) return false
-      payloadLen = this.buf.readUInt32BE(6)
-      offset = 10
-    }
-
-    const maskSize = masked ? 4 : 0
-    const totalLen = offset + maskSize + payloadLen
-    if (this.buf.length < totalLen) return false
-
-    const opcode = this.buf[0] & 0x0f
-    let payload: Buffer
-    if (masked) {
-      const mask = this.buf.subarray(offset, offset + 4)
-      payload = Buffer.alloc(payloadLen)
-      for (let i = 0; i < payloadLen; i++) {
-        payload[i] = this.buf[offset + 4 + i] ^ mask[i & 3]
-      }
-    } else {
-      payload = Buffer.from(this.buf.subarray(offset, offset + payloadLen))
-    }
-
-    this.buf = Buffer.from(this.buf.subarray(totalLen))
-    this.onFrame(opcode, payload)
-    return true
-  }
-}
+// --- 4b. WebSocket tunnel (via ws library) ---
 
 function setupWebSocketProxy(server: ReturnType<typeof createServer>) {
+  const wss = new WebSocketServer({ noServer: true })
+
   server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     if (!state.sessionId || state.shuttingDown) {
-      socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n')
-      return
-    }
-
-    const wsKey = req.headers['sec-websocket-key']
-    if (!wsKey) {
-      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
+      socket.destroy()
       return
     }
 
@@ -490,67 +403,48 @@ function setupWebSocketProxy(server: ReturnType<typeof createServer>) {
 
     log(`WS ${wsId}: upgrade ${path}`)
 
-    // Complete handshake with browser
-    const lines = [
-      'HTTP/1.1 101 Switching Protocols',
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Accept: ${wsAcceptKey(wsKey)}`,
-    ]
-    if (protocols && protocols.length > 0) lines.push(`Sec-WebSocket-Protocol: ${protocols[0]}`)
-    socket.write(lines.join('\r\n') + '\r\n\r\n')
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      state.activeWebSockets.set(wsId, ws)
 
-    state.activeWebSockets.set(wsId, socket)
-
-    // Tell provider to open backend WS
-    state.node!.send(state.socket, {
-      type: 'ws_open',
-      id: wsId,
-      ws_id: wsId,
-      session_id: state.sessionId,
-      ws_path: path,
-      ws_protocols: protocols,
-    })
-
-    // Parse frames from browser → relay to provider
-    const parser = new WsFrameParser()
-    parser.onFrame = (opcode, payload) => {
-      if (opcode === 0x08) { // close
-        const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1000
-        state.node!.send(state.socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: code, ws_reason: payload.length > 2 ? payload.subarray(2).toString('utf-8') : '' })
-        state.activeWebSockets.delete(wsId)
-        return
-      }
-      if (opcode === 0x09) { // ping → pong
-        try { socket.write(buildWsFrame(payload, 0x0a)) } catch {}
-        return
-      }
-      if (opcode === 0x0a) return // pong — ignore
-
-      // text (0x01) or binary (0x02)
-      const isText = opcode === 0x01
+      // Tell provider to open backend WS
       state.node!.send(state.socket, {
-        type: 'ws_message',
+        type: 'ws_open',
         id: wsId,
         ws_id: wsId,
-        data: isText ? payload.toString('utf-8') : payload.toString('base64'),
-        ws_frame_type: isText ? 'text' : 'binary',
+        session_id: state.sessionId,
+        ws_path: path,
+        ws_protocols: protocols,
       })
-    }
 
-    socket.on('data', (chunk: Buffer) => parser.feed(chunk))
-    if (head.length > 0) parser.feed(head)
+      // Browser → provider
+      ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+        state.node!.send(state.socket, {
+          type: 'ws_message',
+          id: wsId,
+          ws_id: wsId,
+          data: isBinary ? buf.toString('base64') : buf.toString('utf-8'),
+          ws_frame_type: isBinary ? 'binary' : 'text',
+        })
+      })
 
-    socket.on('close', () => {
-      if (state.activeWebSockets.has(wsId)) {
-        state.activeWebSockets.delete(wsId)
-        try {
-          state.node!.send(state.socket, { type: 'ws_close', id: wsId, ws_id: wsId, ws_code: 1001, ws_reason: 'Browser disconnected' })
-        } catch {}
-      }
+      ws.on('close', (code: number, reason: Buffer) => {
+        if (state.activeWebSockets.has(wsId)) {
+          state.activeWebSockets.delete(wsId)
+          try {
+            state.node!.send(state.socket, {
+              type: 'ws_close',
+              id: wsId,
+              ws_id: wsId,
+              ws_code: code,
+              ws_reason: reason.toString('utf-8'),
+            })
+          } catch {}
+        }
+      })
+
+      ws.on('error', () => { state.activeWebSockets.delete(wsId) })
     })
-
-    socket.on('error', () => { state.activeWebSockets.delete(wsId) })
   })
 }
 
@@ -782,9 +676,8 @@ async function endSession() {
   state.chunkBuffers.clear()
 
   // Close all WebSocket tunnels
-  for (const [wsId, socket] of state.activeWebSockets) {
-    sendWsClose(socket, 1001, 'Session ending')
-    socket.end()
+  for (const [wsId, ws] of state.activeWebSockets) {
+    try { ws.close(1001, 'Session ending') } catch {}
   }
   state.activeWebSockets.clear()
 

@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
   "type": "module",
   "bin": {

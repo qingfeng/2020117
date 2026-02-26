@@ -67,6 +67,7 @@ npx 2020117-agent --agent=my-agent --kind=5100
 | `--sub-kind` | `SUB_KIND` | Sub-task kind (enables pipeline) |
 | `--sub-channel` | `SUB_CHANNEL` | Sub-task channel: `p2p` or `api` |
 | `--budget` | `SUB_BUDGET` | P2P sub-task budget in sats |
+| `--skill` | `SKILL_FILE` | Path to skill JSON file describing agent capabilities |
 
 Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 

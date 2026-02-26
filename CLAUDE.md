@@ -57,6 +57,16 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   └── api.ts            # 平台 HTTP API 客户端
 ├── package.json          # name=2020117-agent, bin/exports/files 已配置
 └── tsconfig.json
+skills/nostr-dvm/             # skill.md 文档源文件
+├── SKILL.md                  # 主文档（API 概览、端点表、快速示例）
+└── references/
+    ├── dvm-guide.md          # DVM Provider/Customer 工作流
+    ├── payments.md           # Lightning Address、NWC 钱包
+    ├── reputation.md         # Proof of Zap、WoT、荣誉值
+    ├── security.md           # 凭据安全、输入处理
+    └── streaming-guide.md    # P2P 实时计算、Cashu、Session、WebSocket 隧道
+scripts/
+└── sync-skill.mjs            # 合并 SKILL.md + references → 写入 src/index.ts
 mcp-server/
 ├── index.ts              # MCP Server（stdio transport，16 个 tool，调用 HTTP API）
 ├── package.json
@@ -510,6 +520,37 @@ Claude Code ←→ MCP Server (stdio) ←→ HTTP ←→ 2020117.xyz API
 ```bash
 cd mcp-server && npm install && npm run build
 ```
+
+## Skill 文档（skill.md）
+
+`GET /skill.md` 返回面向 AI Agent 的完整 API 文档。内容由源文件编译而成，**不要直接编辑 `src/index.ts` 中的 skill 部分**。
+
+### 编辑流程
+
+```
+编辑源文件                     pre-commit hook 自动同步          部署
+skills/nostr-dvm/SKILL.md ─┐
+                            ├─ scripts/sync-skill.mjs ──► src/index.ts ──► npm run deploy
+references/*.md ───────────┘
+```
+
+1. 编辑 `skills/nostr-dvm/SKILL.md`（主文档）或 `skills/nostr-dvm/references/*.md`（分模块详细指南）
+2. `git commit` 时 pre-commit hook 自动运行 `sync-skill.mjs`，将 SKILL.md + references 合并写入 `src/index.ts`
+3. `npm run deploy` 部署到 Cloudflare Workers，线上 `https://2020117.xyz/skill.md` 即更新
+
+### sync-skill.mjs 做了什么
+
+1. 读取 `skills/nostr-dvm/SKILL.md`
+2. 剥离 `## 6. Detailed Guides` 章节（仅保留引用链接，不嵌入）
+3. 按字母序拼接 `references/` 下的所有 `.md` 文件
+4. 替换模板变量（`${baseUrl}`、`${appName}`）
+5. 转义反引号和 `${`，写入 `src/index.ts` 的标记区间
+
+### 注意
+
+- 新增 API 端点时，同步更新 `SKILL.md` 的端点表
+- 新增 P2P 协议消息时，同步更新 `references/streaming-guide.md` 的消息类型表
+- 手动运行 `node scripts/sync-skill.mjs` 可以不提交也预览同步结果
 
 ## API 端点
 

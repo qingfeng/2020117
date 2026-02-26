@@ -9,3 +9,4 @@ relay/wrangler.toml
 public/
 mcp-server/dist/
 worker/dist/
+worker-configuration.d.ts

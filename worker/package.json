@@ -14,7 +14,9 @@
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
     "./cashu": "./dist/cashu.js",
-    "./api": "./dist/api.js"
+    "./api": "./dist/api.js",
+    "./p2p-provider": "./dist/p2p-provider.js",
+    "./p2p-customer": "./dist/p2p-customer.js"
   },
   "scripts": {
     "agent": "node dist/agent.js",

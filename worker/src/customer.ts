@@ -79,6 +79,34 @@ async function main() {
 
   console.log(`[customer] Connected to provider: ${peer.peerId.slice(0, 12)}...`)
 
+  // Query provider skill
+  console.log(`[customer] Querying provider skill...`)
+  const skillJobId = randomBytes(4).toString('hex')
+  node.send(peer.socket, { type: 'skill_request', id: skillJobId, kind: KIND })
+
+  const providerSkill = await new Promise<Record<string, unknown> | null>((resolve) => {
+    const timer = setTimeout(() => {
+      console.log(`[customer] No skill response (provider may not support skill)`)
+      resolve(null)
+    }, 5000)
+
+    const handler = (msg: SwarmMessage) => {
+      if (msg.type === 'skill_response' && msg.id === skillJobId) {
+        clearTimeout(timer)
+        node.removeListener('message', handler)
+        resolve(msg.skill || null)
+      }
+    }
+    node.on('message', handler)
+  })
+
+  if (providerSkill) {
+    console.log(`[customer] Provider skill: ${(providerSkill as any).name} v${(providerSkill as any).version}`)
+    if ((providerSkill as any).features) {
+      console.log(`[customer] Features: ${((providerSkill as any).features as string[]).join(', ')}`)
+    }
+  }
+
   // --- Step 3: Send request and handle streaming payment ---
   return new Promise<void>((resolve) => {
     let microTokens: string[] = []

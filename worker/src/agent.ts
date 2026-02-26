@@ -36,6 +36,7 @@ for (const arg of process.argv.slice(2)) {
     case '--api-key':      process.env.API_2020117_KEY = val; break
     case '--api-url':      process.env.API_2020117_URL = val; break
     case '--models':       process.env.MODELS = val; break
+    case '--skill':        process.env.SKILL_FILE = val; break
   }
 }
 
@@ -48,6 +49,7 @@ import {
   createJob, getJob,
 } from './api.js'
 import { randomBytes } from 'crypto'
+import { readFileSync } from 'fs'
 
 // --- Config from env ---
 
@@ -68,6 +70,25 @@ const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
 const MIN_BID_SATS = Number(process.env.MIN_BID_SATS) || SATS_PER_CHUNK * CHUNKS_PER_PAYMENT  // default = pricing per job
 const SUB_BATCH_SIZE = Number(process.env.SUB_BATCH_SIZE) || 500 // chars to accumulate before local processing
 
+// --- Skill file loading ---
+
+function loadSkill(): Record<string, unknown> | null {
+  const skillPath = process.env.SKILL_FILE
+  if (!skillPath) return null
+  try {
+    const raw = readFileSync(skillPath, 'utf-8')
+    const skill = JSON.parse(raw)
+    if (!skill.name || !skill.version || !Array.isArray(skill.features)) {
+      console.error(`[agent] Skill file missing required fields: name, version, features`)
+      process.exit(1)
+    }
+    return skill
+  } catch (e: any) {
+    console.error(`[agent] Failed to load skill file "${skillPath}": ${e.message}`)
+    process.exit(1)
+  }
+}
+
 // --- State ---
 
 interface AgentState {
@@ -78,6 +99,7 @@ interface AgentState {
   pollTimer: ReturnType<typeof setTimeout> | null
   swarmNode: SwarmNode | null
   processor: Processor | null
+  skill: Record<string, unknown> | null
 }
 
 const state: AgentState = {
@@ -88,6 +110,7 @@ const state: AgentState = {
   pollTimer: null,
   swarmNode: null,
   processor: null,
+  skill: loadSkill(),
 }
 
 // --- Capacity management ---
@@ -124,6 +147,10 @@ async function main() {
   await state.processor.verify()
   console.log(`[${label}] Processor "${state.processor.name}" verified`)
 
+  if (state.skill) {
+    console.log(`[${label}] Skill: ${state.skill.name} v${state.skill.version} (${(state.skill.features as string[]).join(', ')})`)
+  }
+
   // 2. Platform registration + heartbeat
   await setupPlatform(label)
 
@@ -154,6 +181,7 @@ async function setupPlatform(label: string) {
     chunksPerPayment: CHUNKS_PER_PAYMENT,
     model: state.processor?.name || 'unknown',
     models,
+    skill: state.skill,
   })
   state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity())
 }
@@ -530,6 +558,11 @@ async function startSwarmListener(label: string) {
   node.on('message', async (msg: SwarmMessage, socket: any, peerId: string) => {
     const tag = peerId.slice(0, 8)
 
+    if (msg.type === 'skill_request') {
+      node.send(socket, { type: 'skill_response', id: msg.id, skill: state.skill })
+      return
+    }
+
     if (msg.type === 'request') {
       console.log(`[${label}] P2P job ${msg.id} from ${tag}: "${(msg.input || '').slice(0, 60)}..."`)
 
@@ -654,7 +687,7 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
   // Pick the source: pipeline (delegate + local) or direct local generation
   const source = SUB_KIND
     ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
-    : state.processor!.generateStream({ input: msg.input || '', params: (msg as any).params })
+    : state.processor!.generateStream({ input: msg.input || '', params: msg.params })
 
   try {
     for await (const chunk of source) {

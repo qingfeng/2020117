@@ -147,6 +147,7 @@ export async function registerService(opts: {
   chunksPerPayment: number
   model?: string
   models?: string[]
+  skill?: Record<string, unknown> | null
 }): Promise<unknown | null> {
   if (!API_KEY) return null
   try {
@@ -160,6 +161,7 @@ export async function registerService(opts: {
       pricing: { min_sats: satsPerPayment, max_sats: satsPerPayment },
     }
     if (opts.models && opts.models.length > 0) body.models = opts.models
+    if (opts.skill) body.skill = opts.skill
     const resp = await fetch(`${BASE_URL}/api/dvm/services`, {
       method: 'POST',
       headers: {

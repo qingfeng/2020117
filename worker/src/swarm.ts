@@ -5,7 +5,9 @@
  * Customer: joins the same topic to find the provider
  *
  * Wire protocol (newline-delimited JSON) — streaming payment:
- *   → { type: "request", id, kind, input, budget }         customer sends job with budget
+ *   → { type: "skill_request", id, kind }                  customer queries provider skill
+ *   ← { type: "skill_response", id, skill }                provider replies with skill manifest
+ *   → { type: "request", id, kind, input, budget, params } customer sends job with budget
  *   ← { type: "offer", id, sats_per_chunk, chunks_per_payment }  provider quotes price
  *   → { type: "payment", id, token }                       customer sends micro-token
  *   ← { type: "payment_ack", id, amount }                  provider confirms + accepts
@@ -25,7 +27,7 @@ import { createHash } from 'crypto'
 import { EventEmitter } from 'events'
 
 export interface SwarmMessage {
-  type: 'request' | 'accepted' | 'chunk' | 'result' | 'error' | 'payment' | 'payment_ack' | 'offer' | 'pay_required' | 'stop'
+  type: 'request' | 'accepted' | 'chunk' | 'result' | 'error' | 'payment' | 'payment_ack' | 'offer' | 'pay_required' | 'stop' | 'skill_request' | 'skill_response'
   id: string
   kind?: number
   input?: string
@@ -34,6 +36,8 @@ export interface SwarmMessage {
   token?: string
   amount?: number
   message?: string
+  params?: Record<string, unknown>      // request: additional job parameters
+  skill?: Record<string, unknown> | null // skill_response: provider's skill manifest
   // Streaming payment fields
   sats_per_chunk?: number     // offer: cost per chunk
   chunks_per_payment?: number // offer: how many chunks per payment cycle

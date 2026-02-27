@@ -4,7 +4,11 @@
  * When a provider sends a heartbeat, we check if they have uncollected fees
  * (totalEarnedMsats - feeBilledMsats) and debit via their platform ndebit.
  *
- * If debit fails (rejected), the service is deactivated — provider must
+ * Guards:
+ *   - Minimum 1000 sats fee before collecting (Lightning routing cost)
+ *   - At least 1 hour between collections (avoid spamming on every heartbeat)
+ *
+ * If debit is explicitly rejected, the service is deactivated — provider must
  * re-register with a valid ndebit to resume receiving jobs.
  */
 
@@ -13,7 +17,8 @@ import { dvmServices } from '../db/schema'
 import { debitForPayment, decryptNdebit } from './clink'
 import type { Database } from '../db'
 
-const MIN_FEE_SATS = 10  // don't bother collecting less than 10 sats
+const MIN_FEE_SATS = 1000         // minimum fee worth a Lightning payment
+const COLLECT_INTERVAL_S = 3600   // 1 hour between collection attempts
 
 export interface FeeResult {
   collected: boolean
@@ -42,6 +47,7 @@ export async function collectProviderFee(opts: {
     id: dvmServices.id,
     totalEarnedMsats: dvmServices.totalEarnedMsats,
     feeBilledMsats: dvmServices.feeBilledMsats,
+    lastFeeAt: dvmServices.lastFeeAt,
     platformNdebitEncrypted: dvmServices.platformNdebitEncrypted,
     platformNdebitIv: dvmServices.platformNdebitIv,
   }).from(dvmServices)
@@ -49,10 +55,18 @@ export async function collectProviderFee(opts: {
     .limit(1)
 
   if (svc.length === 0 || !svc[0].platformNdebitEncrypted || !svc[0].platformNdebitIv) {
-    return { collected: false }  // no service or no ndebit — skip
+    return { collected: false }
   }
 
   const s = svc[0]
+
+  // Time guard: don't collect more than once per hour
+  const now = Math.floor(Date.now() / 1000)
+  if (s.lastFeeAt && (now - s.lastFeeAt) < COLLECT_INTERVAL_S) {
+    return { collected: false }
+  }
+
+  // Amount guard: need enough unbilled earnings
   const earnedMsats = s.totalEarnedMsats || 0
   const billedMsats = s.feeBilledMsats || 0
   const unbilledMsats = earnedMsats - billedMsats
@@ -74,13 +88,13 @@ export async function collectProviderFee(opts: {
     if (result.ok) {
       await db.update(dvmServices).set({
         feeBilledMsats: billedMsats + unbilledMsats,
+        lastFeeAt: now,
         updatedAt: new Date(),
       }).where(eq(dvmServices.id, s.id))
       console.log(`[PlatformFee] Collected ${feeSats} sats from user ${userId}`)
       return { collected: true, fee_sats: feeSats }
     } else {
       console.warn(`[PlatformFee] Debit rejected for user ${userId}: ${result.error}`)
-      // Deactivate service — provider must re-register with valid ndebit
       await db.update(dvmServices).set({
         active: 0,
         updatedAt: new Date(),
@@ -89,7 +103,6 @@ export async function collectProviderFee(opts: {
     }
   } catch (e) {
     console.error(`[PlatformFee] Error collecting from user ${userId}:`, e)
-    // Network errors — don't deactivate, just skip
     return { collected: false, error: e instanceof Error ? e.message : 'Unknown error' }
   }
 }

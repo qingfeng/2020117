@@ -43,7 +43,7 @@ for (const arg of process.argv.slice(2)) {
 
 import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
-import { P2PJobState, waitForPayment, handlePayment, handleStop, streamToCustomer, batchClaim } from './p2p-provider.js'
+import { P2PJobState, collectP2PPayment, handleStop, streamToCustomer } from './p2p-provider.js'
 import { streamFromProvider } from './p2p-customer.js'
 import { createProcessor, Processor } from './processor.js'
 import {
@@ -320,10 +320,13 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string,
  * Thin wrapper around the shared streamFromProvider() module.
  */
 async function* delegateP2PStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
+  const ndebit = process.env.CLINK_NDEBIT || ''
+  if (!ndebit) throw new Error('Pipeline sub-delegation requires CLINK_NDEBIT env var (--ndebit)')
   yield* streamFromProvider({
     kind,
     input,
     budgetSats,
+    ndebit,
     maxSatsPerChunk: MAX_SATS_PER_CHUNK,
     label: 'sub-p2p',
   })
@@ -741,6 +744,16 @@ async function startSwarmListener(label: string) {
     if (msg.type === 'request') {
       console.log(`[${label}] P2P job ${msg.id} from ${tag}: "${(msg.input || '').slice(0, 60)}..."`)
 
+      if (!LIGHTNING_ADDRESS) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Provider has no Lightning Address configured' })
+        return
+      }
+
+      if (!msg.ndebit) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Request requires ndebit authorization' })
+        return
+      }
+
       if (!acquireSlot()) {
         node.send(socket, {
           type: 'error',
@@ -758,10 +771,9 @@ async function startSwarmListener(label: string) {
       const job: P2PJobState = {
         socket,
         credit: 0,
-        tokens: [],
+        ndebit: msg.ndebit,
         totalEarned: 0,
         stopped: false,
-        paymentResolve: null,
       }
       p2pJobs.set(msg.id, job)
 
@@ -773,10 +785,16 @@ async function startSwarmListener(label: string) {
         chunks_per_payment: CHUNKS_PER_PAYMENT,
       })
 
-      // Wait for first payment
-      const paid = await waitForPayment(job, msg.id, node, label, PAYMENT_TIMEOUT)
+      // Debit first payment cycle via CLINK
+      const paid = await collectP2PPayment({
+        job, node, jobId: msg.id,
+        satsPerChunk: SATS_PER_CHUNK,
+        chunksPerPayment: CHUNKS_PER_PAYMENT,
+        lightningAddress: LIGHTNING_ADDRESS,
+        label,
+      })
       if (!paid) {
-        console.log(`[${label}] P2P job ${msg.id}: no initial payment, aborting`)
+        console.log(`[${label}] P2P job ${msg.id}: first debit failed, aborting`)
         p2pJobs.delete(msg.id)
         releaseSlot()
         return
@@ -787,18 +805,13 @@ async function startSwarmListener(label: string) {
       await runP2PGeneration(node, job, msg, label)
     }
 
-    if (msg.type === 'payment') {
-      const job = p2pJobs.get(msg.id)
-      if (job) handlePayment(node, socket, msg, job, SATS_PER_CHUNK, label)
-    }
-
     if (msg.type === 'stop') {
       const job = p2pJobs.get(msg.id)
       if (job) handleStop(job, msg.id, label)
     }
   })
 
-  // Handle customer disconnect — claim any earned tokens immediately
+  // Handle customer disconnect — payments already settled via CLINK
   node.on('peer-leave', (peerId: string) => {
     const tag = peerId.slice(0, 8)
 
@@ -813,9 +826,8 @@ async function startSwarmListener(label: string) {
     // Clean up any P2P streaming jobs for this peer
     for (const [jobId, job] of p2pJobs) {
       if (job.socket?.remotePublicKey?.toString('hex') === peerId) {
-        console.log(`[${label}] Peer ${tag} disconnected — claiming P2P job ${jobId} tokens`)
+        console.log(`[${label}] Peer ${tag} disconnected — P2P job ${jobId} (${job.totalEarned} sats earned)`)
         job.stopped = true
-        batchClaim(job.tokens, jobId, label)
         p2pJobs.delete(jobId)
         releaseSlot()
       }
@@ -843,11 +855,11 @@ async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMes
     source,
     satsPerChunk: SATS_PER_CHUNK,
     chunksPerPayment: CHUNKS_PER_PAYMENT,
-    timeoutMs: PAYMENT_TIMEOUT,
+    lightningAddress: LIGHTNING_ADDRESS,
     label,
   })
 
-  await batchClaim(job.tokens, msg.id, label)
+  // No batch claim needed — CLINK payments settle instantly via Lightning
   p2pJobs.delete(msg.id)
   releaseSlot()
 }

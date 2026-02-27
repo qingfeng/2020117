@@ -1,16 +1,15 @@
 /**
  * Shared P2P provider protocol — reusable building blocks for provider-side
- * streaming with credit-based flow control and Cashu micropayments.
+ * streaming with credit-based flow control and CLINK debit payments.
  *
- * Extracted from agent.ts and provider.ts to eliminate duplication.
- * Both modules had 95%+ identical P2P protocol logic; this module
- * provides the canonical implementation.
+ * Provider actively pulls payments from customer's wallet via CLINK ndebit,
+ * generating invoices from their own Lightning Address via LNURL-pay.
  *
- * Consumers: agent.ts, provider.ts (will be wired in a follow-up commit)
+ * Consumers: agent.ts, provider.ts
  */
 
 import { SwarmNode, SwarmMessage } from './swarm.js'
-import { peekToken, receiveToken } from './cashu.js'
+import { collectPayment } from './clink.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,10 +19,9 @@ import { peekToken, receiveToken } from './cashu.js'
 export interface P2PJobState {
   socket: any
   credit: number
-  tokens: string[]
+  ndebit: string           // customer's ndebit1... authorization
   totalEarned: number
   stopped: boolean
-  paymentResolve: (() => void) | null
 }
 
 /** Options for {@link streamToCustomer} */
@@ -34,7 +32,7 @@ export interface StreamOptions {
   source: AsyncIterable<string>
   satsPerChunk: number
   chunksPerPayment: number
-  timeoutMs: number
+  lightningAddress: string  // provider's Lightning Address for invoice generation
   label: string
 }
 
@@ -43,84 +41,53 @@ export interface StreamOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Wait until the job has positive credit or times out.
+ * Provider pulls a payment cycle from the customer's wallet via CLINK debit.
  *
- * Resolves `true` when credit is available, `false` on timeout.
- * If the job already has credit when called, resolves immediately.
+ * Generates an invoice from the provider's Lightning Address, then sends a
+ * debit request to the customer's wallet service via Nostr relay.
+ *
+ * Returns true if payment succeeded and credit was added.
  */
-export function waitForPayment(
-  job: P2PJobState,
-  jobId: string,
-  node: SwarmNode,
-  label: string,
-  timeoutMs: number,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      job.paymentResolve = null
-      console.log(`[${label}] P2P job ${jobId}: payment timeout (${timeoutMs}ms)`)
-      node.send(job.socket, {
-        type: 'error',
-        id: jobId,
-        message: `Payment timeout after ${timeoutMs}ms`,
-      })
-      resolve(false)
-    }, timeoutMs)
-
-    job.paymentResolve = () => {
-      clearTimeout(timer)
-      resolve(true)
-    }
-
-    if (job.credit > 0) {
-      clearTimeout(timer)
-      job.paymentResolve = null
-      resolve(true)
-    }
-  })
-}
-
-/**
- * Handle an incoming `payment` message: peek the token, update credit,
- * send an ack, and wake any blocked {@link waitForPayment} call.
- */
-export function handlePayment(
-  node: SwarmNode,
-  socket: any,
-  msg: SwarmMessage,
-  job: P2PJobState,
-  satsPerChunk: number,
-  label: string,
-): void {
-  if (!msg.token) {
-    node.send(socket, { type: 'error', id: msg.id, message: 'Payment missing token' })
-    return
-  }
+export async function collectP2PPayment(opts: {
+  job: P2PJobState
+  node: SwarmNode
+  jobId: string
+  satsPerChunk: number
+  chunksPerPayment: number
+  lightningAddress: string
+  label: string
+}): Promise<boolean> {
+  const { job, node, jobId, satsPerChunk, chunksPerPayment, lightningAddress, label } = opts
+  const amount = satsPerChunk * chunksPerPayment
 
   try {
-    const peek = peekToken(msg.token)
-    const chunksUnlocked = Math.floor(peek.amount / satsPerChunk)
-    job.credit += chunksUnlocked
-    job.totalEarned += peek.amount
-    job.tokens.push(msg.token)
+    const result = await collectPayment({
+      ndebit: job.ndebit,
+      lightningAddress,
+      amountSats: amount,
+    })
+
+    if (!result.ok) {
+      console.log(`[${label}] P2P job ${jobId}: debit failed: ${result.error}`)
+      return false
+    }
+
+    job.credit += chunksPerPayment
+    job.totalEarned += amount
 
     console.log(
-      `[${label}] Payment for ${msg.id}: ${peek.amount} sats → +${chunksUnlocked} chunks (credit: ${job.credit}, total: ${job.totalEarned} sats)`,
+      `[${label}] P2P job ${jobId}: debit OK +${amount} sats → +${chunksPerPayment} chunks (credit: ${job.credit}, total: ${job.totalEarned} sats)`,
     )
-    node.send(socket, { type: 'payment_ack', id: msg.id, amount: peek.amount })
-
-    if (job.paymentResolve) {
-      job.paymentResolve()
-      job.paymentResolve = null
-    }
+    node.send(job.socket, { type: 'payment_ack', id: jobId, amount })
+    return true
   } catch (e: any) {
-    node.send(socket, { type: 'error', id: msg.id, message: `Payment failed: ${e.message}` })
+    console.log(`[${label}] P2P job ${jobId}: debit error: ${e.message}`)
+    return false
   }
 }
 
 /**
- * Handle an incoming `stop` message: mark the job as stopped and wake
- * any blocked {@link waitForPayment} call so the generation loop exits.
+ * Handle an incoming `stop` message: mark the job as stopped.
  */
 export function handleStop(
   job: P2PJobState,
@@ -129,10 +96,6 @@ export function handleStop(
 ): void {
   console.log(`[${label}] P2P job ${jobId}: customer requested stop`)
   job.stopped = true
-  if (job.paymentResolve) {
-    job.paymentResolve()
-    job.paymentResolve = null
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,10 +104,8 @@ export function handleStop(
 
 /**
  * Stream chunks from an async source to the customer with credit-based
- * flow control.
- *
- * When credit runs out the function sends a `pay_required` message and
- * waits for the next payment (or timeout / stop).
+ * flow control. When credit runs out, the provider debits the customer's
+ * wallet via CLINK before continuing.
  *
  * Returns the concatenated full output string.
  *
@@ -153,7 +114,7 @@ export function handleStop(
  * cleanup.
  */
 export async function streamToCustomer(opts: StreamOptions): Promise<string> {
-  const { node, job, jobId, source, satsPerChunk, chunksPerPayment, timeoutMs, label } = opts
+  const { node, job, jobId, source, satsPerChunk, chunksPerPayment, lightningAddress, label } = opts
   let fullOutput = ''
 
   try {
@@ -164,16 +125,12 @@ export async function streamToCustomer(opts: StreamOptions): Promise<string> {
       }
 
       if (job.credit <= 0) {
-        const nextAmount = satsPerChunk * chunksPerPayment
-        node.send(job.socket, {
-          type: 'pay_required',
-          id: jobId,
-          earned: job.totalEarned,
-          next: nextAmount,
+        // Pull next payment from customer's wallet
+        console.log(`[${label}] P2P job ${jobId}: credit exhausted, debiting customer...`)
+        const paid = await collectP2PPayment({
+          job, node, jobId, satsPerChunk, chunksPerPayment, lightningAddress, label,
         })
-        console.log(`[${label}] P2P job ${jobId}: pay_required (earned: ${job.totalEarned}, next: ${nextAmount})`)
 
-        const paid = await waitForPayment(job, jobId, node, label, timeoutMs)
         if (!paid || job.stopped) {
           console.log(`[${label}] P2P job ${jobId}: ending (paid=${paid}, stopped=${job.stopped})`)
           break
@@ -199,32 +156,4 @@ export async function streamToCustomer(opts: StreamOptions): Promise<string> {
   console.log(`[${label}] P2P job ${jobId} completed (${fullOutput.length} chars, ${job.totalEarned} sats earned)`)
 
   return fullOutput
-}
-
-// ---------------------------------------------------------------------------
-// Token claiming
-// ---------------------------------------------------------------------------
-
-/**
- * Batch-claim all accumulated Cashu tokens after a job ends.
- *
- * Returns the total number of sats successfully claimed.
- */
-export async function batchClaim(tokens: string[], jobId: string, label: string): Promise<number> {
-  if (tokens.length === 0) return 0
-
-  console.log(`[${label}] P2P job ${jobId}: claiming ${tokens.length} tokens...`)
-  let totalClaimed = 0
-
-  for (let i = 0; i < tokens.length; i++) {
-    try {
-      const received = await receiveToken(tokens[i])
-      totalClaimed += received.amount
-    } catch (e: any) {
-      console.warn(`[${label}] P2P job ${jobId}: claim ${i + 1}/${tokens.length} failed: ${e.message}`)
-    }
-  }
-
-  console.log(`[${label}] P2P job ${jobId}: claimed ${totalClaimed} sats total`)
-  return totalClaimed
 }

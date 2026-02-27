@@ -1,9 +1,10 @@
 /**
  * Shared P2P customer protocol — connects to a provider via Hyperswarm,
- * negotiates price, pays with Cashu micro-tokens, and streams chunks.
+ * negotiates price, authorizes CLINK debit payments, and streams chunks.
  *
- * Extracted from agent.ts delegateP2PStream(), customer.ts, and pipeline.ts runStep()
- * to eliminate triple duplication of the same protocol logic.
+ * The customer sends an ndebit authorization with the request. The provider
+ * pulls payments directly from the customer's wallet via CLINK debit —
+ * the customer does not send payment messages.
  *
  * Exports:
  *   - P2PStreamOptions — config interface
@@ -12,7 +13,6 @@
  */
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
-import { mintTokens, splitTokens } from './cashu.js'
 import { randomBytes } from 'crypto'
 
 /**
@@ -25,6 +25,8 @@ export interface P2PStreamOptions {
   input: string
   /** Total budget in sats for this session */
   budgetSats: number
+  /** Customer's ndebit1... authorization for CLINK debit payments */
+  ndebit: string
   /** Maximum acceptable price per chunk in sats (default: 5) */
   maxSatsPerChunk?: number
   /** Overall timeout in milliseconds (default: 120_000) */
@@ -36,8 +38,8 @@ export interface P2PStreamOptions {
 }
 
 /**
- * Connect to a provider via Hyperswarm, negotiate price, pay with Cashu
- * micro-tokens, and yield output chunks as they arrive.
+ * Connect to a provider via Hyperswarm, authorize CLINK debit payments,
+ * and yield output chunks as they arrive.
  *
  * Creates and destroys its own temporary SwarmNode — callers do not need
  * to manage any swarm state.
@@ -48,6 +50,7 @@ export interface P2PStreamOptions {
  *   kind: 5100,
  *   input: 'Explain quantum computing',
  *   budgetSats: 50,
+ *   ndebit: 'ndebit1...',
  * })) {
  *   process.stdout.write(chunk)
  * }
@@ -58,17 +61,19 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
     kind,
     input,
     budgetSats,
+    ndebit,
     maxSatsPerChunk = 5,
     timeoutMs = 120_000,
     label = 'p2p',
     params,
   } = opts
 
+  if (!ndebit) {
+    throw new Error('ndebit authorization required for P2P streaming')
+  }
+
   const jobId = randomBytes(8).toString('hex')
   const tag = `${label}-${jobId.slice(0, 8)}`
-
-  console.log(`[${tag}] Minting ${budgetSats} sats...`)
-  const { token: bigToken } = await mintTokens(budgetSats)
 
   const node = new SwarmNode()
   const topic = topicFromKind(kind)
@@ -95,17 +100,6 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
       return new Promise<void>(r => { notify = r })
     }
 
-    let microTokens: string[] = []
-    let tokenIndex = 0
-
-    function sendNextPayment() {
-      if (tokenIndex >= microTokens.length) return false
-      const token = microTokens[tokenIndex++]
-      console.log(`[${tag}] Payment ${tokenIndex}/${microTokens.length}`)
-      node.send(peer.socket, { type: 'payment', id: jobId, token })
-      return true
-    }
-
     // Timeout
     const timeout = setTimeout(() => {
       error = new Error(`P2P delegation timed out after ${timeoutMs / 1000}s`)
@@ -118,8 +112,6 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
       switch (msg.type) {
         case 'offer': {
           const spc = msg.sats_per_chunk ?? 0
-          const cpp = msg.chunks_per_payment ?? 0
-          const satsPerPayment = spc * cpp
 
           if (spc > maxSatsPerChunk) {
             node.send(peer.socket, { type: 'stop', id: jobId })
@@ -128,34 +120,14 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
             return
           }
 
-          if (satsPerPayment <= 0) {
-            error = new Error(`Invalid offer: sats_per_payment = 0`)
-            wake()
-            return
-          }
-
-          console.log(`[${tag}] Offer: ${spc} sat/chunk, ${cpp} chunks/payment`)
-          try {
-            microTokens = await splitTokens(bigToken, satsPerPayment)
-            console.log(`[${tag}] Split into ${microTokens.length} micro-tokens`)
-          } catch (e: any) {
-            error = new Error(`Token split failed: ${e.message}`)
-            wake()
-            return
-          }
-
-          if (microTokens.length === 0) {
-            error = new Error(`Budget too small for payment cycle`)
-            wake()
-            return
-          }
-
-          sendNextPayment()
+          console.log(`[${tag}] Offer: ${spc} sat/chunk, ${msg.chunks_per_payment ?? 0} chunks/payment`)
+          // No action needed — provider will debit our wallet via CLINK
           break
         }
 
         case 'payment_ack':
-          console.log(`[${tag}] Payment confirmed: ${msg.amount} sats`)
+          // Provider debited our wallet and is reporting the amount
+          console.log(`[${tag}] Provider debited: ${msg.amount} sats`)
           break
 
         case 'accepted':
@@ -170,10 +142,9 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
           break
 
         case 'pay_required':
-          if (!sendNextPayment()) {
-            console.log(`[${tag}] Budget exhausted, sending stop`)
-            node.send(peer.socket, { type: 'stop', id: jobId })
-          }
+          // With CLINK, provider handles payment collection directly
+          // This shouldn't normally fire, but log it if it does
+          console.log(`[${tag}] Provider requested payment (will be debited via CLINK)`)
           break
 
         case 'result':
@@ -189,13 +160,14 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
       }
     })
 
-    // Send request (include params if provided)
+    // Send request with ndebit authorization (provider will use it to debit)
     const requestMsg: SwarmMessage = {
       type: 'request',
       id: jobId,
       kind,
       input,
       budget: budgetSats,
+      ndebit,
     }
     if (params) {
       requestMsg.params = params

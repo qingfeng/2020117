@@ -3,14 +3,28 @@
  * Pipeline — chain multiple P2P providers in sequence.
  *
  * Usage:
- *   BUDGET_SATS=100 TARGET_LANG=Chinese npm run pipeline "Write a short poem"
+ *   BUDGET_SATS=100 CLINK_NDEBIT=ndebit1... TARGET_LANG=Chinese npm run pipeline "Write a short poem"
  */
+
+// --- CLI args → env (before any imports) ---
+for (const arg of process.argv.slice(2)) {
+  if (!arg.startsWith('--')) continue
+  const eq = arg.indexOf('=')
+  if (eq === -1) continue
+  const key = arg.slice(0, eq)
+  const val = arg.slice(eq + 1)
+  switch (key) {
+    case '--ndebit': process.env.CLINK_NDEBIT = val; break
+    case '--budget': process.env.BUDGET_SATS = val; break
+  }
+}
 
 import { streamFromProvider } from './p2p-customer.js'
 import { getOnlineProviders } from './api.js'
 
 const BUDGET_SATS = Number(process.env.BUDGET_SATS) || 100
 const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
+const NDEBIT = process.env.CLINK_NDEBIT || ''
 const GEN_KIND = Number(process.env.GEN_KIND) || 5100
 const TRANS_KIND = Number(process.env.TRANS_KIND) || 5302
 const TARGET_LANG = process.env.TARGET_LANG || 'Chinese'
@@ -43,9 +57,14 @@ async function collectStream(opts: Parameters<typeof streamFromProvider>[0]): Pr
 }
 
 async function main() {
-  const prompt = process.argv.slice(2).join(' ')
+  const prompt = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ')
   if (!prompt) {
-    console.error('Usage: BUDGET_SATS=100 TARGET_LANG=Chinese npm run pipeline "your prompt"')
+    console.error('Usage: 2020117-pipeline --ndebit=ndebit1... --budget=100 "your prompt"')
+    process.exit(1)
+  }
+
+  if (!NDEBIT) {
+    console.error('[pipeline] Error: --ndebit=ndebit1... required (CLINK debit authorization)')
     process.exit(1)
   }
 
@@ -64,7 +83,7 @@ async function main() {
   await showProviders(GEN_KIND, 'gen')
 
   const generated = await collectStream({
-    kind: GEN_KIND, input: prompt, budgetSats: genBudget,
+    kind: GEN_KIND, input: prompt, budgetSats: genBudget, ndebit: NDEBIT,
     maxSatsPerChunk: MAX_SATS_PER_CHUNK, label: 'gen',
   })
 
@@ -81,7 +100,7 @@ async function main() {
 
   const translated = await collectStream({
     kind: TRANS_KIND, input: `Translate the following text to ${TARGET_LANG}:\n\n${generated}`,
-    budgetSats: transBudget, maxSatsPerChunk: MAX_SATS_PER_CHUNK, label: 'trans',
+    budgetSats: transBudget, ndebit: NDEBIT, maxSatsPerChunk: MAX_SATS_PER_CHUNK, label: 'trans',
   })
 
   // Summary

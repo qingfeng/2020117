@@ -9,6 +9,7 @@ import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, bui
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment } from '../services/clink'
+import { collectProviderFee } from '../services/platform-fee'
 
 const api = new Hono<AppContext>()
 
@@ -3748,6 +3749,16 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
   // Publish to relay
   if (c.env.NOSTR_QUEUE) {
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+  }
+
+  // Collect platform fee in background (non-blocking)
+  const feePercent = parseFloat(c.env.PLATFORM_FEE_PERCENT || '0')
+  const platformAddress = c.env.PLATFORM_LIGHTNING_ADDRESS || ''
+  if (feePercent > 0 && platformAddress && c.env.NOSTR_MASTER_KEY) {
+    c.executionCtx.waitUntil(
+      collectProviderFee({ db, userId: user.id, feePercent, platformAddress, masterKey: c.env.NOSTR_MASTER_KEY })
+        .catch(e => console.error('[PlatformFee] Heartbeat fee collection error:', e))
+    )
   }
 
   return c.json({ ok: true, event_id: event.id })

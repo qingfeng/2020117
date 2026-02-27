@@ -1,82 +1,95 @@
 /**
- * Platform fee collection via CLINK ndebit.
+ * Platform fee collection via CLINK ndebit — triggered per-provider on heartbeat.
  *
- * Providers sign an ndebit authorization to the platform when registering
- * their DVM service. A Cron job periodically calculates owed fees based on
- * earnings (totalEarnedMsats) minus already-billed amount (feeBilledMsats),
- * then debits the provider's wallet via CLINK.
+ * When a provider sends a heartbeat, we check if they have uncollected fees
+ * (totalEarnedMsats - feeBilledMsats) and debit via their platform ndebit.
  *
- * If debit fails, the provider is soft-banned: their service is deactivated
- * so they stop receiving new jobs via NIP-90 broadcast.
+ * If debit fails (rejected), the service is deactivated — provider must
+ * re-register with a valid ndebit to resume receiving jobs.
  */
 
-import { eq, and, gt, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { dvmServices } from '../db/schema'
 import { debitForPayment, decryptNdebit } from './clink'
 import type { Database } from '../db'
-import type { Bindings } from '../types'
 
 const MIN_FEE_SATS = 10  // don't bother collecting less than 10 sats
 
-export async function collectPlatformFees(env: Bindings, db: Database) {
-  const feePercent = parseFloat(env.PLATFORM_FEE_PERCENT || '0')
-  const platformAddress = env.PLATFORM_LIGHTNING_ADDRESS || ''
-  if (feePercent <= 0 || !platformAddress || !env.NOSTR_MASTER_KEY) {
-    return  // platform fee not configured
+export interface FeeResult {
+  collected: boolean
+  fee_sats?: number
+  error?: string
+}
+
+/**
+ * Attempt to collect platform fee from a single provider.
+ * Called from POST /api/heartbeat — no table scan, just one provider.
+ */
+export async function collectProviderFee(opts: {
+  db: Database
+  userId: string
+  feePercent: number
+  platformAddress: string
+  masterKey: string
+}): Promise<FeeResult> {
+  const { db, userId, feePercent, platformAddress, masterKey } = opts
+
+  if (feePercent <= 0 || !platformAddress) {
+    return { collected: false }
   }
 
-  // Find active services with ndebit that have uncollected earnings
-  const services = await db.select({
+  const svc = await db.select({
     id: dvmServices.id,
-    userId: dvmServices.userId,
     totalEarnedMsats: dvmServices.totalEarnedMsats,
     feeBilledMsats: dvmServices.feeBilledMsats,
     platformNdebitEncrypted: dvmServices.platformNdebitEncrypted,
     platformNdebitIv: dvmServices.platformNdebitIv,
   }).from(dvmServices)
-    .where(and(
-      eq(dvmServices.active, 1),
-      sql`${dvmServices.platformNdebitEncrypted} IS NOT NULL`,
-      gt(dvmServices.totalEarnedMsats, sql`COALESCE(${dvmServices.feeBilledMsats}, 0)`),
-    ))
+    .where(eq(dvmServices.userId, userId))
+    .limit(1)
 
-  for (const svc of services) {
-    const earnedMsats = svc.totalEarnedMsats || 0
-    const billedMsats = svc.feeBilledMsats || 0
-    const unbilledMsats = earnedMsats - billedMsats
-    const unbilledSats = Math.floor(unbilledMsats / 1000)
-    const feeSats = Math.floor(unbilledSats * feePercent / 100)
+  if (svc.length === 0 || !svc[0].platformNdebitEncrypted || !svc[0].platformNdebitIv) {
+    return { collected: false }  // no service or no ndebit — skip
+  }
 
-    if (feeSats < MIN_FEE_SATS) continue
+  const s = svc[0]
+  const earnedMsats = s.totalEarnedMsats || 0
+  const billedMsats = s.feeBilledMsats || 0
+  const unbilledMsats = earnedMsats - billedMsats
+  if (unbilledMsats <= 0) return { collected: false }
 
-    try {
-      const ndebit = await decryptNdebit(svc.platformNdebitEncrypted!, svc.platformNdebitIv!, env.NOSTR_MASTER_KEY!)
-      const result = await debitForPayment({
-        ndebit,
-        lightningAddress: platformAddress,
-        amountSats: feeSats,
-        timeoutSeconds: 15,
-      })
+  const unbilledSats = Math.floor(unbilledMsats / 1000)
+  const feeSats = Math.floor(unbilledSats * feePercent / 100)
+  if (feeSats < MIN_FEE_SATS) return { collected: false }
 
-      if (result.ok) {
-        // Mark the full unbilled amount as billed (not just feeSats, but the earnings base it came from)
-        await db.update(dvmServices).set({
-          feeBilledMsats: billedMsats + unbilledMsats,
-          updatedAt: new Date(),
-        }).where(eq(dvmServices.id, svc.id))
-        console.log(`[PlatformFee] Collected ${feeSats} sats from service ${svc.id} (user ${svc.userId})`)
-      } else {
-        console.warn(`[PlatformFee] Debit rejected for service ${svc.id}: ${result.error}`)
-        // Deactivate service — provider must re-register with valid ndebit
-        await db.update(dvmServices).set({
-          active: 0,
-          updatedAt: new Date(),
-        }).where(eq(dvmServices.id, svc.id))
-        console.warn(`[PlatformFee] Deactivated service ${svc.id} due to failed fee collection`)
-      }
-    } catch (e) {
-      console.error(`[PlatformFee] Error collecting from service ${svc.id}:`, e)
-      // Don't deactivate on network errors — only on explicit rejection
+  try {
+    const ndebit = await decryptNdebit(s.platformNdebitEncrypted!, s.platformNdebitIv!, masterKey)
+    const result = await debitForPayment({
+      ndebit,
+      lightningAddress: platformAddress,
+      amountSats: feeSats,
+      timeoutSeconds: 15,
+    })
+
+    if (result.ok) {
+      await db.update(dvmServices).set({
+        feeBilledMsats: billedMsats + unbilledMsats,
+        updatedAt: new Date(),
+      }).where(eq(dvmServices.id, s.id))
+      console.log(`[PlatformFee] Collected ${feeSats} sats from user ${userId}`)
+      return { collected: true, fee_sats: feeSats }
+    } else {
+      console.warn(`[PlatformFee] Debit rejected for user ${userId}: ${result.error}`)
+      // Deactivate service — provider must re-register with valid ndebit
+      await db.update(dvmServices).set({
+        active: 0,
+        updatedAt: new Date(),
+      }).where(eq(dvmServices.id, s.id))
+      return { collected: false, error: result.error }
     }
+  } catch (e) {
+    console.error(`[PlatformFee] Error collecting from user ${userId}:`, e)
+    // Network errors — don't deactivate, just skip
+    return { collected: false, error: e instanceof Error ? e.message : 'Unknown error' }
   }
 }

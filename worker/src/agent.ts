@@ -316,7 +316,7 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string,
 // --- Sub-task delegation ---
 
 /**
- * Delegate a sub-task via Hyperswarm P2P with Cashu streaming payments.
+ * Delegate a sub-task via Hyperswarm P2P with CLINK debit payments.
  * Thin wrapper around the shared streamFromProvider() module.
  */
 async function* delegateP2PStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {

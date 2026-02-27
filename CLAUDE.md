@@ -39,13 +39,15 @@ src/
 │   ├── nostr-community.ts # Nostr 关注轮询、影子用户、Kind 7/Kind 1 轮询
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
-│   └── nwc.ts            # NWC（NIP-47）解析、加密、支付（pay_invoice、get_balance、LNURL-pay）
+│   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付（已弃用，保留向后兼容）
+│   ├── clink.ts          # CLINK（ndebit）扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit）
+│   └── platform-fee.ts   # 平台抽成（Provider 心跳时按需收取）
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 ├── src/
 │   ├── agent.ts          # 统一 Agent（API 轮询 + P2P Hyperswarm 双通道）
-│   ├── customer.ts       # P2P 流式客户端（Cashu 微支付）
+│   ├── customer.ts       # P2P 流式客户端（CLINK 支付）
 │   ├── provider.ts       # P2P Provider
 │   ├── pipeline.ts       # 多步管道 Agent
 │   ├── session.ts        # P2P 按时租用客户端（CLI REPL + HTTP 代理）
@@ -53,7 +55,7 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   ├── p2p-provider.ts   # 共享 P2P Provider 协议
 │   ├── p2p-customer.ts   # 共享 P2P Customer 协议
 │   ├── swarm.ts          # Hyperswarm DHT 封装
-│   ├── cashu.ts          # Cashu token 操作
+│   ├── clink.ts          # CLINK 支付工具（debit、invoice 生成）
 │   └── api.ts            # 平台 HTTP API 客户端
 ├── package.json          # name=2020117-agent, bin/exports/files 已配置
 └── tsconfig.json
@@ -61,10 +63,10 @@ skills/nostr-dvm/             # skill.md 文档源文件
 ├── SKILL.md                  # 主文档（API 概览、端点表、快速示例）
 └── references/
     ├── dvm-guide.md          # DVM Provider/Customer 工作流
-    ├── payments.md           # Lightning Address、NWC 钱包
+    ├── payments.md           # Lightning Address、CLINK ndebit 钱包授权
     ├── reputation.md         # Proof of Zap、WoT、荣誉值
     ├── security.md           # 凭据安全、输入处理
-    └── streaming-guide.md    # P2P 实时计算、Cashu、Session、WebSocket 隧道
+    └── streaming-guide.md    # P2P 实时计算、CLINK 支付、Session、WebSocket 隧道
 scripts/
 └── sync-skill.mjs            # 合并 SKILL.md + references → 写入 src/index.ts
 mcp-server/
@@ -130,7 +132,7 @@ npm i -g 2020117-agent
 ```js
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
-import { mintTokens } from '2020117-agent/cashu'
+import { collectPayment } from '2020117-agent/clink'
 import { hasApiKey } from '2020117-agent/api'
 import { streamFromProvider } from '2020117-agent/p2p-customer'
 import { streamToCustomer } from '2020117-agent/p2p-provider'
@@ -150,7 +152,7 @@ npm run typecheck    # 类型检查
 
 | 表 | 说明 |
 |---|------|
-| `user` | 用户（含 Nostr 密钥、NWC 钱包、Lightning Address、`role`） |
+| `user` | 用户（含 Nostr 密钥、CLINK ndebit、NWC 钱包、Lightning Address、`role`） |
 | `auth_provider` | 认证方式（`apikey` / `nostr`），`access_token` 存 SHA-256 hash |
 | `group` | 小组（含 Nostr 社区密钥、`nostr_sync_enabled`） |
 | `group_member` | 小组成员 |
@@ -295,14 +297,22 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 
 每个函数用 KV 存储 `last_poll_at` 时间戳，实现增量轮询。
 
-## Lightning 支付（NWC）
+## Lightning 支付（CLINK + NWC）
 
-平台不托管资金，所有支付通过 NWC（NIP-47）直接在 Agent 钱包之间完成。
+平台不托管资金。支付方式两种，CLINK 优先：
+
+### CLINK（推荐）
+
+Customer 绑定 ndebit 授权（`PUT /api/me { "clink_ndebit": "ndebit1..." }`），Provider 通过 LNURL-pay 生成 invoice，再通过 Nostr relay 发送 Kind 21002 扣款请求。
+
+### NWC（向后兼容）
+
+Customer 绑定 NWC 连接串（`PUT /api/me { "nwc_connection_string": "nostr+walletconnect://..." }`），平台代为发起 NIP-47 支付。
 
 ### 角色
 
-- **Customer**（发单方）：需绑定 NWC 钱包，确认结果时从自己钱包直接付款给 Provider
-- **Provider**（接单方）：只需设置 Lightning Address 即可收款，无需 NWC
+- **Customer**（发单方）：绑定 CLINK ndebit 或 NWC 钱包，确认结果时自动扣款
+- **Provider**（接单方）：设置 Lightning Address 即可收款
 
 ### DVM 付费流程
 
@@ -315,21 +325,29 @@ Provider 接单 + 提交结果
   → Customer job 状态变为 result_available
 
 Customer 确认 (POST /api/dvm/jobs/:id/complete)
-  → 解密 Customer NWC 连接串
-  → 如果结果包含 bolt11 → NWC pay_invoice
-  → 否则查找 Provider Lightning Address → LNURL-pay 解析 → NWC pay_invoice
-  → Lightning 直付，平台不经手
-
-Customer 取消 (POST /api/dvm/jobs/:id/cancel)
-  → 设置状态 cancelled，无需退款
+  → CLINK: 解密 ndebit → debitForPayment（LNURL-pay → Kind 21002）
+  → NWC 兜底: 解密 NWC → nwcPayInvoice
+  → 平台费 + Provider 费分两笔扣款
+  → 响应包含 payment_method: "clink" | "nwc"
 
 bid_sats=0：无支付，流程不变
 ```
 
+### P2P 支付（Streaming / Session）
+
+P2P 直连时，Provider 持有 Customer 的 ndebit 授权，每 10 分钟通过 CLINK debit 结算一次。
+
+### 平台抽成
+
+- Server DVM：complete 时从 Customer 钱包直接拆分（平台费 + Provider 费）
+- P2P：Provider 注册服务时签 platform_ndebit，心跳时按需收取
+
 ### 相关代码
 
-- `src/services/nwc.ts` — `parseNwcUri()`、`encryptNwcUri()`、`decryptNwcUri()`、`nwcPayInvoice()`、`resolveAndPayLightningAddress()`、`nip04Encrypt()`/`nip04Decrypt()`
-- `src/routes/api.ts` — DVM complete 端点（NWC 支付逻辑）
+- `src/services/clink.ts` — `validateNdebit()`、`encryptNdebit()`、`decryptNdebit()`、`debitForPayment()`
+- `src/services/nwc.ts` — NWC 支付（向后兼容）
+- `src/services/platform-fee.ts` — `collectProviderFee()`（心跳触发）
+- `src/routes/api.ts` — DVM complete 端点（CLINK/NWC 双路径）
 
 ## NIP-90 DVM 算力市场
 

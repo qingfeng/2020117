@@ -466,8 +466,11 @@ async function startSwarmListener(label: string) {
         || msg.sats_per_minute
         || 10
 
+      const BILLING_INTERVAL_MIN = 10
+      const debitAmount = satsPerMinute * BILLING_INTERVAL_MIN
+
       const sessionId = randomBytes(8).toString('hex')
-      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min (CLINK debit)`)
+      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min, billing every ${BILLING_INTERVAL_MIN}min (${debitAmount} sats)`)
 
       const session: SessionState = {
         socket,
@@ -484,11 +487,11 @@ async function startSwarmListener(label: string) {
 
       activeSessions.set(sessionId, session)
 
-      // Debit first minute immediately (prepaid model)
+      // Debit first 10 minutes immediately (prepaid model)
       const firstDebit = await collectPayment({
         ndebit: session.ndebit,
         lightningAddress: LIGHTNING_ADDRESS,
-        amountSats: satsPerMinute,
+        amountSats: debitAmount,
       })
 
       if (!firstDebit.ok) {
@@ -498,9 +501,9 @@ async function startSwarmListener(label: string) {
         return
       }
 
-      session.totalEarned += satsPerMinute
+      session.totalEarned += debitAmount
       session.lastDebitAt = Date.now()
-      console.log(`[${label}] Session ${sessionId}: first minute paid (${satsPerMinute} sats)`)
+      console.log(`[${label}] Session ${sessionId}: first ${BILLING_INTERVAL_MIN}min paid (${debitAmount} sats)`)
 
       node.send(socket, {
         type: 'session_ack',
@@ -514,16 +517,16 @@ async function startSwarmListener(label: string) {
         type: 'session_tick_ack',
         id: sessionId,
         session_id: sessionId,
-        amount: satsPerMinute,
+        amount: debitAmount,
         balance: msg.budget ? msg.budget - session.totalEarned : undefined,
       })
 
-      // Start per-minute debit timer
+      // Debit every 10 minutes
       session.debitTimer = setInterval(async () => {
         const debit = await collectPayment({
           ndebit: session.ndebit,
           lightningAddress: LIGHTNING_ADDRESS,
-          amountSats: satsPerMinute,
+          amountSats: debitAmount,
         })
 
         if (!debit.ok) {
@@ -532,19 +535,19 @@ async function startSwarmListener(label: string) {
           return
         }
 
-        session.totalEarned += satsPerMinute
+        session.totalEarned += debitAmount
         session.lastDebitAt = Date.now()
-        console.log(`[${label}] Session ${sessionId}: debit OK (+${satsPerMinute}, total: ${session.totalEarned} sats)`)
+        console.log(`[${label}] Session ${sessionId}: debit OK (+${debitAmount}, total: ${session.totalEarned} sats)`)
 
         // Notify customer
         node.send(socket, {
           type: 'session_tick_ack',
           id: sessionId,
           session_id: sessionId,
-          amount: satsPerMinute,
+          amount: debitAmount,
           balance: msg.budget ? msg.budget - session.totalEarned : undefined,
         })
-      }, 60_000)
+      }, BILLING_INTERVAL_MIN * 60_000)
 
       return
     }

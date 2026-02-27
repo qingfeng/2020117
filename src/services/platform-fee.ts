@@ -5,8 +5,8 @@
  * (totalEarnedMsats - feeBilledMsats) and debit via their platform ndebit.
  *
  * Guards:
- *   - Minimum 1000 sats fee before collecting (Lightning routing cost)
- *   - At least 1 hour between collections (avoid spamming on every heartbeat)
+ *   - Minimum 10 sats fee before collecting (avoid pointless tiny payments)
+ *   - At least 10 minutes between collections (don't collect on every heartbeat)
  *
  * If debit is explicitly rejected, the service is deactivated — provider must
  * re-register with a valid ndebit to resume receiving jobs.
@@ -17,8 +17,8 @@ import { dvmServices } from '../db/schema'
 import { debitForPayment, decryptNdebit } from './clink'
 import type { Database } from '../db'
 
-const MIN_FEE_SATS = 1000         // minimum fee worth a Lightning payment
-const COLLECT_INTERVAL_S = 3600   // 1 hour between collection attempts
+const MIN_FEE_SATS = 10          // minimum fee worth collecting
+const COLLECT_INTERVAL_S = 600   // 10 minutes between collection attempts
 
 export interface FeeResult {
   collected: boolean
@@ -60,7 +60,7 @@ export async function collectProviderFee(opts: {
 
   const s = svc[0]
 
-  // Time guard: don't collect more than once per hour
+  // Time guard: don't collect more than once per 10 minutes
   const now = Math.floor(Date.now() / 1000)
   if (s.lastFeeAt && (now - s.lastFeeAt) < COLLECT_INTERVAL_S) {
     return { collected: false }

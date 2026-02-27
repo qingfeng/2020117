@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * P2P Session Client — "rent" a provider's service over Hyperswarm with
- * per-minute Cashu payments.
+ * per-minute CLINK debit payments.
  *
  * Features:
- *   - Automatic per-minute micro-token billing via tick timer
+ *   - Provider pulls per-minute payments via CLINK debit (ndebit authorization)
  *   - HTTP proxy server for browser-based access to provider APIs
  *   - Interactive CLI REPL (generate, status, skill, help, quit)
  *
@@ -26,13 +26,12 @@ for (const arg of process.argv.slice(2)) {
     case '--port':     process.env.SESSION_PORT = val; break
     case '--agent':    process.env.AGENT = val; break
     case '--provider': process.env.PROVIDER_PEER = val; break
-    case '--mint':     process.env.CASHU_MINT_URL = val; break
+    case '--ndebit':   process.env.CLINK_NDEBIT = val; break
   }
 }
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
-import { mintTokens, splitTokens, createWallet } from './cashu.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
@@ -45,6 +44,7 @@ import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
+const NDEBIT = process.env.CLINK_NDEBIT || ''
 const TICK_INTERVAL_MS = 60_000
 const HTTP_TIMEOUT_MS = 60_000
 
@@ -57,13 +57,8 @@ interface SessionClientState {
   sessionId: string
   skill: Record<string, unknown> | null
   satsPerMinute: number
-  satsPerToken: number
-  tickIntervalMs: number
-  microTokens: string[]
-  tokenIndex: number
-  totalSpent: number
+  totalSpent: number          // tracked from provider's debit notifications
   startedAt: number
-  tickTimer: ReturnType<typeof setInterval> | null
   httpServer: ReturnType<typeof createServer> | null
   shuttingDown: boolean
   // Pending request/response maps keyed by message id
@@ -82,13 +77,8 @@ const state: SessionClientState = {
   sessionId: '',
   skill: null,
   satsPerMinute: 0,
-  satsPerToken: 1,
-  tickIntervalMs: 60_000,
-  microTokens: [],
-  tokenIndex: 0,
   totalSpent: 0,
   startedAt: 0,
-  tickTimer: null,
   httpServer: null,
   shuttingDown: false,
   pendingRequests: new Map(),
@@ -119,10 +109,6 @@ function formatDuration(totalSeconds: number): string {
 
 function remainingSats(): number {
   return BUDGET - state.totalSpent
-}
-
-function remainingTokens(): number {
-  return state.microTokens.length - state.tokenIndex
 }
 
 function estimatedMinutesLeft(): number {
@@ -202,9 +188,12 @@ function setupMessageHandler() {
       }
 
       case 'session_tick_ack': {
-        // Late tick ack that didn't match a pending request — just log it
+        // Provider debited our wallet and is reporting the result
+        if (msg.amount !== undefined) {
+          state.totalSpent += msg.amount
+        }
         if (msg.balance !== undefined) {
-          log(`Tick confirmed, provider reports balance: ${msg.balance} sats`)
+          log(`Debit: ${msg.amount ?? '?'} sats (balance: ${msg.balance} sats, ${estimatedMinutesLeft()} min left)`)
         }
         break
       }
@@ -268,49 +257,10 @@ function setupMessageHandler() {
   })
 }
 
-// --- 3. Tick timer ---
-
-async function sendTick(): Promise<boolean> {
-  if (state.shuttingDown) return false
-
-  if (remainingTokens() <= 0) {
-    log('Budget exhausted — ending session')
-    await endSession()
-    return false
-  }
-
-  if (remainingTokens() <= 2) {
-    warn(`Low balance! Only ${remainingTokens()} tick(s) remaining (${remainingSats()} sats)`)
-  }
-
-  const token = state.microTokens[state.tokenIndex++]
-  state.totalSpent += state.satsPerToken
-
-  const tickId = randomBytes(4).toString('hex')
-  try {
-    const resp = await sendAndWait({
-      type: 'session_tick',
-      id: tickId,
-      session_id: state.sessionId,
-      token,
-      budget: BUDGET,
-    }, 15_000)
-
-    if (resp.balance !== undefined) {
-      log(`Tick OK — balance: ${resp.balance} sats`)
-    }
-    return true
-  } catch (e: any) {
-    warn(`Tick failed: ${e.message}`)
-    return false
-  }
-}
-
-function startTickTimer() {
-  // Send first tick immediately (prepay) to prevent provider timeout
-  sendTick()
-  state.tickTimer = setInterval(() => sendTick(), state.tickIntervalMs)
-}
+// --- 3. Payment tracking (CLINK — provider pulls, customer monitors) ---
+// With CLINK debit, the provider generates invoices and debits the customer's
+// wallet directly. The customer receives session_tick_ack notifications with
+// updated balance. No tick timer needed on the customer side.
 
 // --- 4. HTTP proxy ---
 
@@ -669,12 +619,6 @@ async function endSession() {
   if (state.shuttingDown) return
   state.shuttingDown = true
 
-  // Clear tick timer
-  if (state.tickTimer) {
-    clearInterval(state.tickTimer)
-    state.tickTimer = null
-  }
-
   // Cancel all pending requests
   for (const [id, pending] of state.pendingRequests) {
     clearTimeout(pending.timer)
@@ -766,53 +710,24 @@ async function main() {
   log(`Pricing: ${satsPerMinute} sats/min`)
   log(`Budget: ${BUDGET} sats (~${Math.floor(BUDGET / satsPerMinute)} min)`)
 
-  // 4. Mint and split tokens
-  // Cashu tokens must be whole sats. If rate < 1, use 1 sat tokens with longer tick intervals.
-  const satsPerToken = Math.max(1, Math.ceil(satsPerMinute))
-  const tickMinutes = satsPerToken / satsPerMinute  // e.g. 0.1 sats/min → 1 sat every 10 min
-  state.tickIntervalMs = Math.round(tickMinutes * 60_000)
-  state.satsPerToken = satsPerToken
-
-  // Check mint fees — each micro-token must cover satsPerToken + swap fee (so provider
-  // can claim it), and each wallet.send during splitting also costs a fee.
-  const mintUrl = process.env.CASHU_MINT_URL || 'https://nofee.testnut.cashu.space'
-  const { wallet: tmpWallet } = createWallet(mintUrl)
-  await tmpWallet.loadMint()
-  const swapFee = tmpWallet.getFeesForKeyset(1, tmpWallet.keysetId)
-  const tokenAmount = satsPerToken + swapFee   // what each micro-token contains
-  const numTokens = Math.ceil(BUDGET / satsPerToken)
-  // Each split (wallet.send) also costs a fee, plus proof fragmentation overhead
-  const splitOverhead = swapFee > 0 ? Math.ceil(swapFee * 1.5) : 0
-  const totalNeeded = (tokenAmount + splitOverhead) * numTokens
-  const mintAmount = Math.max(BUDGET, totalNeeded)
-
-  if (swapFee > 0) {
-    log(`Mint swap fee: ${swapFee} sats/token → minting ${tokenAmount} sats/token (${satsPerToken} + ${swapFee} fee)`)
-    if (mintAmount > BUDGET * 3) {
-      warn(`High fee overhead: minting ${mintAmount} sats for ${BUDGET} sats budget. Consider using a no-fee mint.`)
-    }
-  }
-
-  log(`Minting ${mintAmount} sats...`)
-  const { token: bigToken } = await mintTokens(mintAmount, mintUrl)
-
-  log(`Splitting into ${tokenAmount}-sat micro-tokens (tick every ${tickMinutes} min)...`)
-  state.microTokens = await splitTokens(bigToken, tokenAmount)
-  log(`Ready: ${state.microTokens.length} micro-tokens`)
-
-  if (state.microTokens.length === 0) {
-    warn('Budget too small for even one tick payment')
+  // 4. Verify CLINK ndebit authorization
+  if (!NDEBIT) {
+    warn('No ndebit authorization. Provide --ndebit=ndebit1... or set CLINK_NDEBIT env var.')
+    warn('Get your ndebit from your CLINK-compatible wallet (e.g. ShockWallet → Connections).')
     await node.destroy()
     process.exit(1)
   }
 
-  // 5. Send session_start, wait for session_ack
+  log(`Payment: CLINK debit (provider pulls per-minute)`)
+
+  // 5. Send session_start with ndebit, wait for session_ack
   const startId = randomBytes(4).toString('hex')
   const ackResp = await sendAndWait({
     type: 'session_start',
     id: startId,
     budget: BUDGET,
     sats_per_minute: satsPerMinute,
+    ndebit: NDEBIT,
   }, 15_000)
 
   if (ackResp.type !== 'session_ack' || !ackResp.session_id) {
@@ -831,11 +746,9 @@ async function main() {
   }
 
   log(`Session started: ${state.sessionId}`)
+  log(`Provider will debit ${state.satsPerMinute} sats/min via CLINK`)
 
-  // 6. Start tick timer
-  startTickTimer()
-
-  // 7. Start HTTP proxy
+  // 6. Start HTTP proxy
   try {
     await startHttpProxy()
     log(`Web proxy ready at http://localhost:${PORT}`)
@@ -844,7 +757,7 @@ async function main() {
     warn('Continuing without HTTP proxy')
   }
 
-  // 8. Show ready message and start REPL
+  // 7. Show ready message and start REPL
   log("Type 'help' for commands")
 
   // SIGINT handler

@@ -1,7 +1,7 @@
 {
   "name": "2020117-agent",
   "version": "0.1.15",
-  "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu streaming payments",
+  "description": "2020117 agent runtime — API polling + Hyperswarm P2P + CLINK/Cashu payments",
   "type": "module",
   "bin": {
     "2020117-agent": "./dist/agent.js",
@@ -17,6 +17,7 @@
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
     "./cashu": "./dist/cashu.js",
+    "./clink": "./dist/clink.js",
     "./api": "./dist/api.js",
     "./p2p-provider": "./dist/p2p-provider.js",
     "./p2p-customer": "./dist/p2p-customer.js"
@@ -38,6 +39,7 @@
   },
   "dependencies": {
     "@cashu/cashu-ts": "^3.5.0",
+    "@shocknet/clink-sdk": "^1.5.4",
     "hyperswarm": "^4.17.0",
     "ws": "^8.19.0"
   },

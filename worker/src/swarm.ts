@@ -53,6 +53,7 @@ export interface SwarmMessage {
   sats_per_minute?: number    // session_start/ack: billing rate
   balance?: number            // session_tick_ack: remaining balance
   duration_s?: number         // session_end: total session duration in seconds
+  ndebit?: string             // session_start: customer's ndebit1... authorization (CLINK)
   // HTTP proxy fields
   method?: string             // http_request: HTTP method
   path?: string               // http_request: URL path

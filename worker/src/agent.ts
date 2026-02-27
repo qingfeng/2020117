@@ -2,7 +2,7 @@
 /**
  * Unified Agent Runtime — runs as a long-lived daemon that handles both:
  *   1. Async platform tasks (inbox polling → accept → Ollama → submit result)
- *   2. Real-time P2P streaming (Hyperswarm + Cashu micro-payments)
+ *   2. Real-time P2P streaming (Hyperswarm + CLINK debit payments)
  *
  * Both channels share a single capacity counter so the agent never overloads.
  *
@@ -37,6 +37,7 @@ for (const arg of process.argv.slice(2)) {
     case '--api-url':      process.env.API_2020117_URL = val; break
     case '--models':       process.env.MODELS = val; break
     case '--skill':        process.env.SKILL_FILE = val; break
+    case '--lightning-address': process.env.LIGHTNING_ADDRESS = val; break
   }
 }
 
@@ -50,7 +51,7 @@ import {
   getInbox, acceptJob, sendFeedback, submitResult,
   createJob, getJob,
 } from './api.js'
-import { peekToken } from './cashu.js'
+import { initClinkAgent, collectPayment } from './clink.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
 
@@ -62,6 +63,9 @@ const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 const PAYMENT_TIMEOUT = Number(process.env.PAYMENT_TIMEOUT) || 30_000
+
+// --- CLINK payment config ---
+const LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
 
 // --- Sub-task delegation config ---
 const SUB_KIND = process.env.SUB_KIND ? Number(process.env.SUB_KIND) : null
@@ -159,16 +163,22 @@ async function main() {
     console.log(`[${label}] Skill: ${state.skill.name} v${state.skill.version} (${(state.skill.features as string[]).join(', ')})`)
   }
 
-  // 2. Platform registration + heartbeat
+  // 2. Initialize CLINK agent identity (for P2P session debit)
+  if (LIGHTNING_ADDRESS) {
+    const { pubkey } = initClinkAgent()
+    console.log(`[${label}] CLINK: ${LIGHTNING_ADDRESS} (agent pubkey: ${pubkey.slice(0, 16)}...)`)
+  }
+
+  // 3. Platform registration + heartbeat
   await setupPlatform(label)
 
-  // 3. Async inbox poller
+  // 4. Async inbox poller
   startInboxPoller(label)
 
-  // 4. P2P swarm listener
+  // 5. P2P swarm listener
   await startSwarmListener(label)
 
-  // 5. Graceful shutdown
+  // 6. Graceful shutdown
   setupShutdown(label)
 
   console.log(`[${label}] Agent ready — async + P2P channels active\n`)
@@ -400,11 +410,12 @@ interface SessionState {
   peerId: string
   sessionId: string
   satsPerMinute: number
-  tokens: string[]
+  ndebit: string             // customer's ndebit1... authorization
   totalEarned: number
   startedAt: number
-  lastTickAt: number
-  timeoutTimer: ReturnType<typeof setInterval> | null
+  lastDebitAt: number
+  debitTimer: ReturnType<typeof setInterval> | null
+  timeoutTimer: ReturnType<typeof setTimeout> | null
 }
 
 const activeSessions = new Map<string, SessionState>()
@@ -435,6 +446,17 @@ async function startSwarmListener(label: string) {
     // --- Session protocol ---
 
     if (msg.type === 'session_start') {
+      if (!LIGHTNING_ADDRESS) {
+        console.warn(`[${label}] Session rejected: no --lightning-address configured`)
+        node.send(socket, { type: 'error', id: msg.id, message: 'Provider has no Lightning Address configured' })
+        return
+      }
+
+      if (!msg.ndebit) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'session_start requires ndebit authorization' })
+        return
+      }
+
       const satsPerMinute =
         (state.skill?.pricing as any)?.sats_per_minute
         || Number(process.env.SATS_PER_MINUTE)
@@ -442,41 +464,40 @@ async function startSwarmListener(label: string) {
         || 10
 
       const sessionId = randomBytes(8).toString('hex')
-      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min`)
+      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min (CLINK debit)`)
 
       const session: SessionState = {
         socket,
         peerId,
         sessionId,
         satsPerMinute,
-        tokens: [],
+        ndebit: msg.ndebit,
         totalEarned: 0,
         startedAt: Date.now(),
-        lastTickAt: Date.now(),
+        lastDebitAt: Date.now(),
+        debitTimer: null,
         timeoutTimer: null,
       }
 
-      // Dynamic timeout based on tick value: if a tick covers N minutes of service,
-      // allow N minutes + 2 min grace before timing out. Updates on each tick.
-      const baseTimeoutMs = satsPerMinute > 0
-        ? Math.max(120_000, Math.round((1 / satsPerMinute) * 60_000) + 120_000)
-        : 120_000
-      session.timeoutTimer = setInterval(() => {
-        // Recalculate timeout based on last tick amount
-        const lastTickAmount = session.totalEarned > 0
-          ? Math.max(1, session.tokens.length > 0 ? peekToken(session.tokens[session.tokens.length - 1]).amount : 1)
-          : 1
-        const tickCoverageMs = satsPerMinute > 0
-          ? Math.round((lastTickAmount / satsPerMinute) * 60_000) + 120_000
-          : baseTimeoutMs
-        const elapsed = Date.now() - session.lastTickAt
-        if (elapsed > tickCoverageMs) {
-          console.log(`[${label}] Session ${sessionId}: timeout (no tick for ${Math.round(elapsed / 1000)}s, limit ${Math.round(tickCoverageMs / 1000)}s)`)
-          endSession(node, session, label)
-        }
-      }, 30_000)
-
       activeSessions.set(sessionId, session)
+
+      // Debit first minute immediately (prepaid model)
+      const firstDebit = await collectPayment({
+        ndebit: session.ndebit,
+        lightningAddress: LIGHTNING_ADDRESS,
+        amountSats: satsPerMinute,
+      })
+
+      if (!firstDebit.ok) {
+        console.warn(`[${label}] Session ${sessionId}: first debit failed: ${firstDebit.error}`)
+        node.send(socket, { type: 'error', id: msg.id, message: `Payment failed: ${firstDebit.error}` })
+        activeSessions.delete(sessionId)
+        return
+      }
+
+      session.totalEarned += satsPerMinute
+      session.lastDebitAt = Date.now()
+      console.log(`[${label}] Session ${sessionId}: first minute paid (${satsPerMinute} sats)`)
 
       node.send(socket, {
         type: 'session_ack',
@@ -484,37 +505,44 @@ async function startSwarmListener(label: string) {
         session_id: sessionId,
         sats_per_minute: satsPerMinute,
       })
-      return
-    }
 
-    if (msg.type === 'session_tick') {
-      const session = activeSessions.get(msg.session_id || '')
-      if (!session) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Unknown session' })
-        return
-      }
+      // Notify customer of the debit
+      node.send(socket, {
+        type: 'session_tick_ack',
+        id: sessionId,
+        session_id: sessionId,
+        amount: satsPerMinute,
+        balance: msg.budget ? msg.budget - session.totalEarned : undefined,
+      })
 
-      if (!msg.token) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Tick missing token' })
-        return
-      }
+      // Start per-minute debit timer
+      session.debitTimer = setInterval(async () => {
+        const debit = await collectPayment({
+          ndebit: session.ndebit,
+          lightningAddress: LIGHTNING_ADDRESS,
+          amountSats: satsPerMinute,
+        })
 
-      try {
-        const peek = peekToken(msg.token)
-        session.tokens.push(msg.token)
-        session.totalEarned += peek.amount
-        session.lastTickAt = Date.now()
+        if (!debit.ok) {
+          console.log(`[${label}] Session ${sessionId}: debit failed (${debit.error}) — ending session`)
+          endSession(node, session, label)
+          return
+        }
 
-        console.log(`[${label}] Session ${session.sessionId}: tick ${peek.amount} sats (total: ${session.totalEarned})`)
+        session.totalEarned += satsPerMinute
+        session.lastDebitAt = Date.now()
+        console.log(`[${label}] Session ${sessionId}: debit OK (+${satsPerMinute}, total: ${session.totalEarned} sats)`)
+
+        // Notify customer
         node.send(socket, {
           type: 'session_tick_ack',
-          id: msg.id,
-          session_id: session.sessionId,
+          id: sessionId,
+          session_id: sessionId,
+          amount: satsPerMinute,
           balance: msg.budget ? msg.budget - session.totalEarned : undefined,
         })
-      } catch (e: any) {
-        node.send(socket, { type: 'error', id: msg.id, message: `Tick payment failed: ${e.message}` })
-      }
+      }, 60_000)
+
       return
     }
 
@@ -836,8 +864,14 @@ function findSessionBySocket(socket: any): SessionState | undefined {
 function endSession(node: SwarmNode, session: SessionState, label: string) {
   const durationS = Math.round((Date.now() - session.startedAt) / 1000)
 
+  // Stop debit timer
+  if (session.debitTimer) {
+    clearInterval(session.debitTimer)
+    session.debitTimer = null
+  }
+
   if (session.timeoutTimer) {
-    clearInterval(session.timeoutTimer)
+    clearTimeout(session.timeoutTimer)
     session.timeoutTimer = null
   }
 
@@ -863,12 +897,10 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
 
   console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
 
-  // Update P2P lifetime counters
+  // Update P2P lifetime counters — no batch claim needed with CLINK (payments settled instantly)
   state.p2pSessionsCompleted++
   state.p2pTotalEarnedSats += session.totalEarned
 
-  // Batch claim tokens
-  batchClaim(session.tokens, session.sessionId, label)
   activeSessions.delete(session.sessionId)
 }
 

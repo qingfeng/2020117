@@ -235,6 +235,9 @@ export const dvmServices = sqliteTable('dvm_service', {
   directRequestEnabled: integer('direct_request_enabled').default(0),
   models: text('models'),  // JSON: '["sd3.5-turbo","sdxl-lightning"]'
   skill: text('skill'),  // JSON: full skill descriptor
+  platformNdebitEncrypted: text('platform_ndebit_encrypted'),
+  platformNdebitIv: text('platform_ndebit_iv'),
+  feeBilledMsats: integer('fee_billed_msats').default(0),  // total platform fee already collected
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

@@ -2945,6 +2945,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     direct_request_enabled?: boolean
     models?: string[]
     skill?: Record<string, unknown>
+    platform_ndebit?: string | null
   }
 
   if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
@@ -2964,6 +2965,21 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
 
   const pricingMin = body.pricing?.min_sats ? body.pricing.min_sats * 1000 : null
   const pricingMax = body.pricing?.max_sats ? body.pricing.max_sats * 1000 : null
+
+  // Validate + encrypt platform ndebit if provided
+  let ndebitUpdate: { platformNdebitEncrypted: string | null; platformNdebitIv: string | null } | undefined
+  if (body.platform_ndebit !== undefined && c.env.NOSTR_MASTER_KEY) {
+    if (body.platform_ndebit === null || body.platform_ndebit === '') {
+      ndebitUpdate = { platformNdebitEncrypted: null, platformNdebitIv: null }
+    } else {
+      const validation = validateNdebit(body.platform_ndebit)
+      if (!validation.valid) {
+        return c.json({ error: `Invalid platform_ndebit: ${validation.error}` }, 400)
+      }
+      const { encrypted, iv } = await encryptNdebit(body.platform_ndebit, c.env.NOSTR_MASTER_KEY)
+      ndebitUpdate = { platformNdebitEncrypted: encrypted, platformNdebitIv: iv }
+    }
+  }
 
   // Fetch existing service for reputation data
   const existing = await db.select().from(dvmServices)
@@ -3014,6 +3030,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     if (directRequestEnabled !== undefined) updateSet.directRequestEnabled = directRequestEnabled
     if (body.models) updateSet.models = JSON.stringify(body.models)
     if (body.skill !== undefined) updateSet.skill = body.skill ? JSON.stringify(body.skill) : null
+    if (ndebitUpdate) Object.assign(updateSet, ndebitUpdate)
     await db.update(dvmServices).set(updateSet).where(eq(dvmServices.id, serviceId))
   } else {
     serviceId = generateId()
@@ -3029,6 +3046,7 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       directRequestEnabled: directRequestEnabled || 0,
       models: body.models ? JSON.stringify(body.models) : null,
       skill: body.skill ? JSON.stringify(body.skill) : null,
+      ...(ndebitUpdate || {}),
       createdAt: now,
       updatedAt: now,
     })
@@ -3078,6 +3096,8 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       active: !!s.active,
       direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
+      platform_ndebit_enabled: !!s.platformNdebitEncrypted,
+      fee_billed_sats: s.feeBilledMsats ? Math.floor(s.feeBilledMsats / 1000) : 0,
       reputation: buildReputationData(s, wotData, reviewData),
       report_count: reportCount,
       flagged: reportCount >= REPORT_FLAG_THRESHOLD,

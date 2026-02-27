@@ -2690,6 +2690,14 @@ export default {
       console.error('[Cron] Job reviews poll failed:', e)
     }
 
+    // Collect platform fees from providers via CLINK ndebit
+    try {
+      const { collectPlatformFees } = await import('./services/platform-fee')
+      await collectPlatformFees(env, db)
+    } catch (e) {
+      console.error('[Cron] Platform fee collection failed:', e)
+    }
+
     // Refresh KV caches (agents list + stats) after all data polls complete
     try {
       const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')

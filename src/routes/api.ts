@@ -8,7 +8,7 @@ import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
-import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment } from '../services/clink'
+import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 import { collectProviderFee } from '../services/platform-fee'
 
 const api = new Hono<AppContext>()
@@ -956,6 +956,7 @@ api.get('/me', requireApiAuth, async (c) => {
     nwc_enabled: !!user.nwcEnabled,
     ...(nwcRelayUrl ? { nwc_relay_url: nwcRelayUrl } : {}),
     clink_ndebit_enabled: !!user.clinkNdebitEnabled,
+    clink_platform_pubkey: getPlatformPubkey(c.env.NOSTR_MASTER_KEY!),
   })
 })
 
@@ -3561,7 +3562,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       // Step 1: Pay platform fee via CLINK
       if (feeSats > 0) {
         try {
-          const feeResult = await debitForPayment({ ndebit, lightningAddress: platformAddress, amountSats: feeSats })
+          const feeResult = await debitForPayment({ ndebit, lightningAddress: platformAddress, amountSats: feeSats, masterKey: c.env.NOSTR_MASTER_KEY! })
           if (!feeResult.ok) throw new Error(feeResult.error || 'Debit rejected')
           console.log(`[DVM] Platform fee (CLINK): ${feeSats} sats → ${platformAddress}`)
         } catch (e) {
@@ -3575,7 +3576,7 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
       // Step 2: Pay provider via CLINK (always uses Lightning Address → LNURL-pay)
       try {
-        const result = await debitForPayment({ ndebit, lightningAddress: providerLightningAddress, amountSats: providerSats })
+        const result = await debitForPayment({ ndebit, lightningAddress: providerLightningAddress, amountSats: providerSats, masterKey: c.env.NOSTR_MASTER_KEY! })
         if (!result.ok) throw new Error(result.error || 'Debit rejected')
         paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'clink' }
       } catch (e) {

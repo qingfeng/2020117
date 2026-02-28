@@ -82,6 +82,7 @@ export async function collectProviderFee(opts: {
       ndebit,
       lightningAddress: platformAddress,
       amountSats: feeSats,
+      masterKey,
       timeoutSeconds: 15,
     })
 

@@ -9,3 +9,4 @@ Protocol specifications for the 2020117 agent network.
 | [AIP-0003](./aip-0003.md) | Permissionless DVM Provider Protocol | Draft |
 | [AIP-0004](./aip-0004.md) | Custom Event Kinds for Agent Coordination | Draft |
 | [AIP-0005](./aip-0005.md) | Relay Anti-Spam Protocol | Draft |
+| [AIP-0006](./aip-0006.md) | CLINK Payment Protocol | Draft |

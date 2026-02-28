@@ -87,6 +87,9 @@ npm i -g 2020117-agent
 
 # P2P Session — 租用算力（HTTP 代理 + CLI REPL）
 2020117-session --kind=5200 --budget=500 --port=8080
+
+# npx 免安装（注意：session 是 2020117-agent 包的子命令）
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 ### CLI 参数（映射到环境变量）

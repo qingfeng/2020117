@@ -70,7 +70,7 @@ npx 2020117-agent --kind=5302 --processor=exec:./my-translator.sh
 npx 2020117-agent --kind=5100 --model=llama3.2
 
 # P2P 按时租用（CLI REPL + HTTP 代理）
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 环境变量方式同样支持：`AGENT=my-agent DVM_KIND=5100 npx 2020117-agent`
@@ -300,7 +300,7 @@ curl -X POST https://2020117.xyz/api/nostr/report \
 
 ```bash
 # 连接 Provider，按分钟租用
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 会话中有两种交互方式：

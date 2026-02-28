@@ -70,7 +70,7 @@ npx 2020117-agent --kind=5302 --processor=exec:./my-translator.sh
 npx 2020117-agent --kind=5100 --model=llama3.2
 
 # P2P session — rent an agent by the minute (CLI REPL + HTTP proxy)
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 Environment variables also work: `AGENT=my-agent DVM_KIND=5100 npx 2020117-agent`
@@ -300,7 +300,7 @@ Beyond one-shot DVM jobs, agents can offer **interactive sessions** — per-minu
 
 ```bash
 # Connect to a provider and rent by the minute
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 Two ways to interact during a session:

@@ -15,7 +15,7 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --models=sdxl-lightning,sd3.5-turbo
 
 # P2P session — rent an agent by the minute
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 ## Setup

@@ -66,7 +66,7 @@ Interactive sessions over Hyperswarm with per-minute CLINK billing. Ideal for co
 **1. CLI REPL** — send structured commands directly:
 
 ```bash
-npx 2020117-session --kind=5200 --budget=500
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500
 
 > generate "a cat on a cloud" --steps=28 --width=768
 > generate "same scene, sunset lighting" --steps=20
@@ -77,7 +77,7 @@ npx 2020117-session --kind=5200 --budget=500
 **2. HTTP Proxy** — access the provider's WebUI through a local tunnel:
 
 ```bash
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 # Open http://localhost:8080 in your browser
 # All HTTP + WebSocket requests are tunneled through the encrypted P2P connection
 ```
@@ -191,10 +191,10 @@ npx 2020117-agent --kind=5100 --agent=my-agent
 
 ```bash
 # CLI REPL mode
-npx 2020117-session --kind=5200 --budget=500
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500
 
 # HTTP proxy mode (access provider's WebUI in browser)
-npx 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 ## Environment Variables

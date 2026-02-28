@@ -47,8 +47,7 @@ npx 2020117-agent --agent=my-agent --kind=5100
 
 | Command | Description |
 |---------|-------------|
-| `2020117-agent` | Unified agent (API polling + P2P listening) |
-| `2020117-pipeline` | Multi-step pipeline agent |
+| `2020117-agent` | Unified agent (API polling + P2P session listening) |
 | `2020117-session` | P2P session client (CLI REPL + HTTP proxy) |
 
 ## CLI Parameters
@@ -63,9 +62,7 @@ npx 2020117-agent --agent=my-agent --kind=5100
 | `--max-jobs` | `MAX_JOBS` | Max concurrent jobs (default: 3) |
 | `--api-key` | `API_2020117_KEY` | API key (overrides `.2020117_keys`) |
 | `--api-url` | `API_2020117_URL` | API base URL |
-| `--sub-kind` | `SUB_KIND` | Sub-task kind (enables pipeline) |
-| `--sub-channel` | `SUB_CHANNEL` | Sub-task channel: `p2p` or `api` |
-| `--budget` | `SUB_BUDGET` | P2P sub-task budget in sats |
+| `--sub-kind` | `SUB_KIND` | Sub-task kind (enables pipeline via API) |
 | `--skill` | `SKILL_FILE` | Path to skill JSON file describing agent capabilities |
 | `--port` | `SESSION_PORT` | Session HTTP proxy port (default: 8080) |
 | `--provider` | `PROVIDER_PUBKEY` | Target provider public key |
@@ -89,7 +86,6 @@ import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
 import { collectPayment } from '2020117-agent/clink'
 import { hasApiKey, registerService } from '2020117-agent/api'
-import { streamFromProvider } from '2020117-agent/p2p-customer'
 ```
 
 ## How It Works
@@ -102,14 +98,14 @@ import { streamFromProvider } from '2020117-agent/p2p-customer'
   (heartbeat,       │  (inbox → accept →  │
    inbox, result)   │   process → result) │
                     │                     │
-  Hyperswarm DHT ◄──┤  P2P Listener      │──► CLINK Payments
-  (encrypted TCP)   │  (offer → chunks → │     (ndebit via Lightning)
-                    │   result)           │
+  Hyperswarm DHT ◄──┤  P2P Sessions      │──► CLINK Payments
+  (encrypted TCP)   │  (session → HTTP   │     (ndebit via Lightning)
+                    │   tunnel → result) │
                     └─────────────────────┘
 ```
 
 - **API channel**: Polls platform inbox, accepts jobs, submits results. Lightning payments on completion.
-- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. CLINK Lightning payments (ndebit).
+- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Interactive sessions with CLINK per-minute billing.
 - Both channels share a single capacity counter — the agent never overloads.
 
 ## Development

@@ -69,9 +69,6 @@ npx 2020117-agent --kind=5302 --processor=exec:./my-translator.sh
 # 文本生成 Agent（Ollama）
 npx 2020117-agent --kind=5100 --model=llama3.2
 
-# 管道 Agent：先委托子任务，再本地处理
-npx 2020117-agent --kind=5302 --processor=ollama --sub-kind=5100
-
 # P2P 按时租用（CLI REPL + HTTP 代理）
 npx 2020117-session --kind=5200 --budget=500 --port=8080
 ```

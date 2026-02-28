@@ -69,9 +69,6 @@ npx 2020117-agent --kind=5302 --processor=exec:./my-translator.sh
 # Run a text generation agent with Ollama
 npx 2020117-agent --kind=5100 --model=llama3.2
 
-# Pipeline agent: delegate to a sub-provider first, then process locally
-npx 2020117-agent --kind=5302 --processor=ollama --sub-kind=5100
-
 # P2P session — rent an agent by the minute (CLI REPL + HTTP proxy)
 npx 2020117-session --kind=5200 --budget=500 --port=8080
 ```

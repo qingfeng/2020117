@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Unified Agent Runtime — runs as a long-lived daemon that handles both:
- *   1. Async platform tasks (inbox polling → accept → Ollama → submit result)
- *   2. Real-time P2P streaming (Hyperswarm + CLINK debit payments)
+ * Unified Agent Runtime — runs as a long-lived daemon that handles:
+ *   1. Async platform tasks (inbox polling → accept → process → submit result)
+ *   2. P2P sessions (Hyperswarm + CLINK per-minute billing)
  *
  * Both channels share a single capacity counter so the agent never overloads.
  *
@@ -29,10 +29,8 @@ for (const arg of process.argv.slice(2)) {
     case '--agent':        process.env.AGENT = val; break
     case '--max-jobs':     process.env.MAX_JOBS = val; break
     case '--sub-kind':     process.env.SUB_KIND = val; break
-    case '--sub-channel':  process.env.SUB_CHANNEL = val; break
     case '--sub-provider': process.env.SUB_PROVIDER = val; break
     case '--sub-bid':      process.env.SUB_BID = val; break
-    case '--budget':       process.env.SUB_BUDGET = val; break
     case '--api-key':      process.env.API_2020117_KEY = val; break
     case '--api-url':      process.env.API_2020117_URL = val; break
     case '--models':       process.env.MODELS = val; break
@@ -43,8 +41,6 @@ for (const arg of process.argv.slice(2)) {
 
 import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
-import { P2PJobState, collectP2PPayment, handleStop, streamToCustomer } from './p2p-provider.js'
-import { streamFromProvider } from './p2p-customer.js'
 import { createProcessor, Processor } from './processor.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
@@ -62,20 +58,15 @@ const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
 const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
-const PAYMENT_TIMEOUT = Number(process.env.PAYMENT_TIMEOUT) || 30_000
 
 // --- CLINK payment config ---
 let LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
 
 // --- Sub-task delegation config ---
 const SUB_KIND = process.env.SUB_KIND ? Number(process.env.SUB_KIND) : null
-const SUB_BUDGET = Number(process.env.SUB_BUDGET) || 50
-const SUB_CHANNEL = process.env.SUB_CHANNEL || 'p2p'
 const SUB_PROVIDER = process.env.SUB_PROVIDER || undefined
 const SUB_BID = Number(process.env.SUB_BID) || 100
-const MAX_SATS_PER_CHUNK = Number(process.env.MAX_SATS_PER_CHUNK) || 5
 const MIN_BID_SATS = Number(process.env.MIN_BID_SATS) || SATS_PER_CHUNK * CHUNKS_PER_PAYMENT  // default = pricing per job
-const SUB_BATCH_SIZE = Number(process.env.SUB_BATCH_SIZE) || 500 // chars to accumulate before local processing
 
 // --- Skill file loading ---
 
@@ -152,7 +143,7 @@ async function main() {
   state.processor = await createProcessor()
   console.log(`[${label}] kind=${KIND} processor=${state.processor.name} maxJobs=${MAX_CONCURRENT}`)
   if (SUB_KIND) {
-    console.log(`[${label}] Pipeline: sub-task kind=${SUB_KIND} via ${SUB_CHANNEL}${SUB_CHANNEL === 'api' ? ` (bid=${SUB_BID}${SUB_PROVIDER ? `, provider=${SUB_PROVIDER}` : ''})` : ` (budget=${SUB_BUDGET} sats)`}`)
+    console.log(`[${label}] Pipeline: sub-task kind=${SUB_KIND} (bid=${SUB_BID}${SUB_PROVIDER ? `, provider=${SUB_PROVIDER}` : ''})`)
   } else if (state.processor.name === 'none') {
     console.warn(`[${label}] WARNING: processor=none without SUB_KIND — generate() will pass through input as-is`)
   }
@@ -284,22 +275,13 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string,
 
     let result: string
 
-    // Pipeline: delegate sub-task then process locally
+    // Pipeline: delegate sub-task via API then process locally
     if (SUB_KIND) {
-      console.log(`[${label}] Job ${providerJobId}: delegating to kind ${SUB_KIND} via ${SUB_CHANNEL}...`)
+      console.log(`[${label}] Job ${providerJobId}: delegating to kind ${SUB_KIND}...`)
       try {
-        if (SUB_CHANNEL === 'api') {
-          // API delegation is non-streaming — collect full result, then process
-          const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
-          console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
-          result = await state.processor!.generate({ input: subResult, params })
-        } else {
-          // P2P delegation — stream-collect from sub-provider, batch-translate
-          result = ''
-          for await (const chunk of pipelineStream(SUB_KIND, input, SUB_BUDGET)) {
-            result += chunk
-          }
-        }
+        const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
+        console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
+        result = await state.processor!.generate({ input: subResult, params })
       } catch (e: any) {
         console.error(`[${label}] Job ${providerJobId}: sub-task failed: ${e.message}, using original input`)
         result = await state.processor!.generate({ input, params })
@@ -323,55 +305,6 @@ async function processAsyncJob(label: string, inboxJobId: string, input: string,
 }
 
 // --- Sub-task delegation ---
-
-/**
- * Delegate a sub-task via Hyperswarm P2P with CLINK debit payments.
- * Thin wrapper around the shared streamFromProvider() module.
- */
-async function* delegateP2PStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
-  const ndebit = process.env.CLINK_NDEBIT || ''
-  if (!ndebit) throw new Error('Pipeline sub-delegation requires CLINK_NDEBIT env var (--ndebit)')
-  yield* streamFromProvider({
-    kind,
-    input,
-    budgetSats,
-    ndebit,
-    maxSatsPerChunk: MAX_SATS_PER_CHUNK,
-    label: 'sub-p2p',
-  })
-}
-
-/**
- * Streaming pipeline: delegates to a sub-provider via P2P, accumulates
- * chunks into batches, translates each batch locally via streaming Ollama,
- * and yields the translated tokens.
- *
- * Flow: sub-provider streams → batch → Ollama stream-translate → yield tokens
- */
-async function* pipelineStream(kind: number, input: string, budgetSats: number): AsyncGenerator<string> {
-  let batch = ''
-
-  async function* translateBatch(text: string): AsyncGenerator<string> {
-    for await (const token of state.processor!.generateStream({ input: text })) {
-      yield token
-    }
-  }
-
-  for await (const chunk of delegateP2PStream(kind, input, budgetSats)) {
-    batch += chunk
-
-    // When batch is big enough, translate and stream out
-    if (batch.length >= SUB_BATCH_SIZE) {
-      yield* translateBatch(batch)
-      batch = ''
-    }
-  }
-
-  // Translate remaining text
-  if (batch.length > 0) {
-    yield* translateBatch(batch)
-  }
-}
 
 /**
  * Delegate a sub-task via platform API. Creates a job, then polls until
@@ -413,8 +346,6 @@ async function delegateAPI(kind: number, input: string, bidSats: number, provide
 
 // --- 4. P2P Swarm Listener ---
 
-const p2pJobs = new Map<string, P2PJobState>()
-
 // --- Session state ---
 
 interface SessionState {
@@ -439,10 +370,8 @@ async function startSwarmListener(label: string) {
   const node = new SwarmNode()
   state.swarmNode = node
 
-  const satsPerPayment = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
   const topic = topicFromKind(KIND)
 
-  console.log(`[${label}] P2P: ${SATS_PER_CHUNK} sat/chunk, ${CHUNKS_PER_PAYMENT} chunks/payment (${satsPerPayment} sats/cycle)`)
   console.log(`[${label}] Joining swarm topic for kind ${KIND}`)
   await node.listen(topic)
   console.log(`[${label}] P2P listening for customers...`)
@@ -753,73 +682,6 @@ async function startSwarmListener(label: string) {
       return
     }
 
-    if (msg.type === 'request') {
-      console.log(`[${label}] P2P job ${msg.id} from ${tag}: "${(msg.input || '').slice(0, 60)}..."`)
-
-      if (!LIGHTNING_ADDRESS) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Provider has no Lightning Address configured' })
-        return
-      }
-
-      if (!msg.ndebit) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Request requires ndebit authorization' })
-        return
-      }
-
-      if (!acquireSlot()) {
-        node.send(socket, {
-          type: 'error',
-          id: msg.id,
-          message: `No capacity (${state.activeJobs}/${MAX_CONCURRENT} slots used)`,
-        })
-        console.log(`[${label}] P2P job ${msg.id}: rejected (no capacity)`)
-        return
-      }
-
-      if (msg.budget !== undefined) {
-        console.log(`[${label}] Customer budget: ${msg.budget} sats`)
-      }
-
-      const job: P2PJobState = {
-        socket,
-        credit: CHUNKS_PER_PAYMENT,  // start with free credit; debit after delivery
-        ndebit: msg.ndebit,
-        totalEarned: 0,
-        stopped: false,
-      }
-      p2pJobs.set(msg.id, job)
-
-      // Send offer (price quote — no payment yet)
-      node.send(socket, {
-        type: 'offer',
-        id: msg.id,
-        sats_per_chunk: SATS_PER_CHUNK,
-        chunks_per_payment: CHUNKS_PER_PAYMENT,
-      })
-
-      // Generate first, pay after delivery
-      node.send(socket, { type: 'accepted', id: msg.id })
-      await runP2PGeneration(node, job, msg, label)
-
-      // Debit after result delivered
-      if (!job.stopped) {
-        const paid = await collectP2PPayment({
-          job, node, jobId: msg.id,
-          satsPerChunk: SATS_PER_CHUNK,
-          chunksPerPayment: CHUNKS_PER_PAYMENT,
-          lightningAddress: LIGHTNING_ADDRESS,
-          label,
-        })
-        if (!paid) {
-          console.log(`[${label}] P2P job ${msg.id}: post-delivery debit failed`)
-        }
-      }
-    }
-
-    if (msg.type === 'stop') {
-      const job = p2pJobs.get(msg.id)
-      if (job) handleStop(job, msg.id, label)
-    }
   })
 
   // Handle customer disconnect — payments already settled via CLINK
@@ -834,16 +696,6 @@ async function startSwarmListener(label: string) {
       }
     }
 
-    // Clean up any P2P streaming jobs for this peer
-    for (const [jobId, job] of p2pJobs) {
-      if (job.socket?.remotePublicKey?.toString('hex') === peerId) {
-        console.log(`[${label}] Peer ${tag} disconnected — P2P job ${jobId} (${job.totalEarned} sats earned)`)
-        job.stopped = true
-        p2pJobs.delete(jobId)
-        releaseSlot()
-      }
-    }
-
     // Clean up backend WebSockets for this peer
     for (const [wsId, entry] of backendWebSockets) {
       if (entry.peerId === peerId) {
@@ -852,27 +704,6 @@ async function startSwarmListener(label: string) {
       }
     }
   })
-}
-
-async function runP2PGeneration(node: SwarmNode, job: P2PJobState, msg: SwarmMessage, label: string) {
-  const source = SUB_KIND
-    ? pipelineStream(SUB_KIND, msg.input || '', SUB_BUDGET)
-    : state.processor!.generateStream({ input: msg.input || '', params: msg.params })
-
-  await streamToCustomer({
-    node,
-    job,
-    jobId: msg.id,
-    source,
-    satsPerChunk: SATS_PER_CHUNK,
-    chunksPerPayment: CHUNKS_PER_PAYMENT,
-    lightningAddress: LIGHTNING_ADDRESS,
-    label,
-  })
-
-  // No batch claim needed — CLINK payments settle instantly via Lightning
-  p2pJobs.delete(msg.id)
-  releaseSlot()
 }
 
 // --- Session helpers ---

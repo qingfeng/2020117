@@ -16,7 +16,7 @@ import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { randomBytes } from 'crypto'
 
 /**
- * Configuration for a P2P streaming session.
+ * Configuration for a P2P connection.
  */
 export interface P2PStreamOptions {
   /** DVM kind number (e.g. 5100 for text generation) */
@@ -69,7 +69,7 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
   } = opts
 
   if (!ndebit) {
-    throw new Error('ndebit authorization required for P2P streaming')
+    throw new Error('ndebit authorization required for P2P connection')
   }
 
   const jobId = randomBytes(8).toString('hex')

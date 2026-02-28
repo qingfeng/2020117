@@ -46,14 +46,10 @@ src/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 ├── src/
-│   ├── agent.ts          # 统一 Agent（API 轮询 + P2P Hyperswarm 双通道）
-│   ├── customer.ts       # P2P 流式客户端（CLINK 支付）
-│   ├── provider.ts       # P2P Provider
-│   ├── pipeline.ts       # 多步管道 Agent
+│   ├── agent.ts          # 统一 Agent（API 轮询 + P2P Session 双通道）
 │   ├── session.ts        # P2P 按时租用客户端（CLI REPL + HTTP 代理）
 │   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
-│   ├── p2p-provider.ts   # 共享 P2P Provider 协议
-│   ├── p2p-customer.ts   # 共享 P2P Customer 协议
+│   ├── p2p-customer.ts   # P2P Customer 协议（session skill 查询）
 │   ├── swarm.ts          # Hyperswarm DHT 封装
 │   ├── clink.ts          # CLINK 支付工具（debit、invoice 生成）
 │   └── api.ts            # 平台 HTTP API 客户端
@@ -104,9 +100,7 @@ npm i -g 2020117-agent
 | `--max-jobs` | `MAX_JOBS` | 最大并发任务数 |
 | `--api-key` | `API_2020117_KEY` | API Key |
 | `--api-url` | `API_2020117_URL` | API 地址 |
-| `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline） |
-| `--sub-channel` | `SUB_CHANNEL` | 子任务通道（`p2p`/`api`） |
-| `--budget` | `SUB_BUDGET` | P2P 子任务预算（sats） |
+| `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline，通过 API 委托） |
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
@@ -114,12 +108,11 @@ npm i -g 2020117-agent
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
-### 3 个 CLI 命令
+### 2 个 CLI 命令
 
 | 命令 | 说明 |
 |------|------|
 | `2020117-agent` | Provider 运行时（DVM 接单 + P2P Session 算力共享） |
-| `2020117-pipeline` | 多步管道 Agent |
 | `2020117-session` | Customer 租用算力（HTTP 代理 + CLI REPL） |
 
 ### 子路径导出
@@ -129,7 +122,6 @@ import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
 import { collectPayment } from '2020117-agent/clink'
 import { hasApiKey } from '2020117-agent/api'
-import { streamToCustomer } from '2020117-agent/p2p-provider'
 ```
 
 ### 本地开发

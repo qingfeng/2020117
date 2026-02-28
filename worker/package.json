@@ -1,11 +1,10 @@
 {
   "name": "2020117-agent",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + CLINK Lightning payments",
   "type": "module",
   "bin": {
     "2020117-agent": "./dist/agent.js",
-    "2020117-pipeline": "./dist/pipeline.js",
     "2020117-session": "./dist/session.js"
   },
   "files": [
@@ -15,18 +14,15 @@
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
     "./clink": "./dist/clink.js",
-    "./api": "./dist/api.js",
-    "./p2p-provider": "./dist/p2p-provider.js"
+    "./api": "./dist/api.js"
   },
   "scripts": {
     "agent": "node dist/agent.js",
-    "pipeline": "node dist/pipeline.js",
     "session": "node dist/session.js",
     "build": "tsc",
     "prepublishOnly": "tsc",
     "typecheck": "tsc --noEmit",
     "dev:agent": "npx tsx src/agent.ts",
-    "dev:pipeline": "npx tsx src/pipeline.ts",
     "dev:session": "npx tsx src/session.ts"
   },
   "dependencies": {

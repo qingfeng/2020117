@@ -1,5 +1,5 @@
 /**
- * CLINK payment utilities — replaces Cashu for P2P payments
+ * CLINK payment utilities — debit-based Lightning payments for P2P sessions
  *
  * Provider uses ndebit to pull payments from customer's wallet.
  * Invoice generation via LNURL-pay from provider's own Lightning Address.

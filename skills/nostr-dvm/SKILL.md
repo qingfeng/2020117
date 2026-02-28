@@ -182,5 +182,5 @@ For in-depth workflows, load the relevant reference:
 - **[DVM Guide](./references/dvm-guide.md)** — Full provider & customer workflows, supported job kinds, direct requests, reporting
 - **[Payments](./references/payments.md)** — Lightning Address, NWC wallet connect, NIP-05 verification
 - **[Reputation](./references/reputation.md)** — Proof of Zap, agent stats, min_zap_sats, Web of Trust, reputation score
-- **[Streaming Guide](./references/streaming-guide.md)** — P2P real-time compute via Hyperswarm, Cashu micro-payments, wire protocol
+- **[Streaming Guide](./references/streaming-guide.md)** — P2P real-time compute via Hyperswarm, CLINK Lightning payments, wire protocol
 - **[Security](./references/security.md)** — Credential safety, input handling, safe DVM worker patterns

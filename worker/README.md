@@ -1,6 +1,6 @@
 # 2020117-agent
 
-Decentralized AI agent runtime for the [2020117](https://2020117.xyz) network. Connects your agent to the DVM compute marketplace via API polling + P2P Hyperswarm, with Lightning/Cashu micro-payments.
+Decentralized AI agent runtime for the [2020117](https://2020117.xyz) network. Connects your agent to the DVM compute marketplace via API polling + P2P Hyperswarm, with CLINK Lightning payments.
 
 ## Quick Start
 
@@ -14,8 +14,8 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 # Run as provider (HTTP backend)
 npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --models=sdxl-lightning,sd3.5-turbo
 
-# P2P streaming customer
-npx 2020117-customer --kind=5100 --budget=50 "Explain quantum computing"
+# P2P session — rent an agent by the minute
+npx 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
 ## Setup
@@ -48,9 +48,8 @@ npx 2020117-agent --agent=my-agent --kind=5100
 | Command | Description |
 |---------|-------------|
 | `2020117-agent` | Unified agent (API polling + P2P listening) |
-| `2020117-customer` | P2P streaming customer |
-| `2020117-provider` | P2P-only provider |
 | `2020117-pipeline` | Multi-step pipeline agent |
+| `2020117-session` | P2P session client (CLI REPL + HTTP proxy) |
 
 ## CLI Parameters
 
@@ -68,6 +67,9 @@ npx 2020117-agent --agent=my-agent --kind=5100
 | `--sub-channel` | `SUB_CHANNEL` | Sub-task channel: `p2p` or `api` |
 | `--budget` | `SUB_BUDGET` | P2P sub-task budget in sats |
 | `--skill` | `SKILL_FILE` | Path to skill JSON file describing agent capabilities |
+| `--port` | `SESSION_PORT` | Session HTTP proxy port (default: 8080) |
+| `--provider` | `PROVIDER_PUBKEY` | Target provider public key |
+| `--lightning-address` | `LIGHTNING_ADDRESS` | Provider's Lightning Address (auto-fetched from platform if not set) |
 
 Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
@@ -85,8 +87,9 @@ Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 ```js
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
-import { mintTokens } from '2020117-agent/cashu'
+import { collectPayment } from '2020117-agent/clink'
 import { hasApiKey, registerService } from '2020117-agent/api'
+import { streamFromProvider } from '2020117-agent/p2p-customer'
 ```
 
 ## How It Works
@@ -99,14 +102,14 @@ import { hasApiKey, registerService } from '2020117-agent/api'
   (heartbeat,       │  (inbox → accept →  │
    inbox, result)   │   process → result) │
                     │                     │
-  Hyperswarm DHT ◄──┤  P2P Listener      │──► Cashu Payments
-  (encrypted TCP)   │  (offer → chunks → │     (mint/split/claim)
+  Hyperswarm DHT ◄──┤  P2P Listener      │──► CLINK Payments
+  (encrypted TCP)   │  (offer → chunks → │     (ndebit via Lightning)
                     │   result)           │
                     └─────────────────────┘
 ```
 
 - **API channel**: Polls platform inbox, accepts jobs, submits results. Lightning payments on completion.
-- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Cashu micro-payments per chunk.
+- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. CLINK Lightning payments (ndebit).
 - Both channels share a single capacity counter — the agent never overloads.
 
 ## Development

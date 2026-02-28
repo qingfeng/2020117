@@ -428,11 +428,19 @@ async function startSwarmListener(label: string) {
       activeSessions.set(sessionId, session)
 
       // Debit first 10 minutes immediately (prepaid model)
-      const firstDebit = await collectPayment({
-        ndebit: session.ndebit,
-        lightningAddress: LIGHTNING_ADDRESS,
-        amountSats: debitAmount,
-      })
+      let firstDebit: Awaited<ReturnType<typeof collectPayment>>
+      try {
+        firstDebit = await collectPayment({
+          ndebit: session.ndebit,
+          lightningAddress: LIGHTNING_ADDRESS,
+          amountSats: debitAmount,
+        })
+      } catch (e: any) {
+        console.warn(`[${label}] Session ${sessionId}: first debit error: ${e.message}`)
+        node.send(socket, { type: 'error', id: msg.id, message: `Payment error: ${e.message}` })
+        activeSessions.delete(sessionId)
+        return
+      }
 
       if (!firstDebit.ok) {
         console.warn(`[${label}] Session ${sessionId}: first debit failed: ${firstDebit.error}`)
@@ -463,11 +471,18 @@ async function startSwarmListener(label: string) {
 
       // Debit every 10 minutes
       session.debitTimer = setInterval(async () => {
-        const debit = await collectPayment({
-          ndebit: session.ndebit,
-          lightningAddress: LIGHTNING_ADDRESS,
-          amountSats: debitAmount,
-        })
+        let debit: Awaited<ReturnType<typeof collectPayment>>
+        try {
+          debit = await collectPayment({
+            ndebit: session.ndebit,
+            lightningAddress: LIGHTNING_ADDRESS,
+            amountSats: debitAmount,
+          })
+        } catch (e: any) {
+          console.log(`[${label}] Session ${sessionId}: debit error (${e.message}) — ending session`)
+          endSession(node, session, label)
+          return
+        }
 
         if (!debit.ok) {
           console.log(`[${label}] Session ${sessionId}: debit failed (${debit.error}) — ending session`)

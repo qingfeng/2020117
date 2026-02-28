@@ -10,3 +10,4 @@ public/
 mcp-server/dist/
 worker/dist/
 worker-configuration.d.ts
+*-NOCOMMIT.md

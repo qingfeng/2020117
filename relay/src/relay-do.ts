@@ -18,9 +18,18 @@ export class RelayDO implements DurableObject {
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
-    // Restore hibernated sessions
+    // Restore hibernated sessions (with subscriptions from WebSocket attachments)
     for (const ws of this.state.getWebSockets()) {
-      this.sessions.set(ws, { subscriptions: new Map(), quit: false })
+      const subs = new Map<string, NostrFilter[]>()
+      try {
+        const att = ws.deserializeAttachment() as Record<string, NostrFilter[]> | null
+        if (att) {
+          for (const [subId, filters] of Object.entries(att)) {
+            subs.set(subId, filters)
+          }
+        }
+      } catch {}
+      this.sessions.set(ws, { subscriptions: subs, quit: false })
     }
   }
 
@@ -57,6 +66,7 @@ export class RelayDO implements DurableObject {
       } else if (type === 'CLOSE') {
         const subId = msg[1] as string
         session.subscriptions.delete(subId)
+        this.persistSubscriptions(ws, session)
       }
     } catch (e) {
       this.sendNotice(ws, `Error: ${e instanceof Error ? e.message : 'unknown'}`)
@@ -110,8 +120,12 @@ export class RelayDO implements DurableObject {
       const isDvmResult = isDvmKind(event.kind)
       // 6. Zap receipt (9735) — must be writable for zap verification to work
       const isZapReceipt = event.kind === 9735
+      // CLINK debit (21002) — encrypted payment protocol, open to platform/agents
+      const isClinkDebit = event.kind === 21002
+      // Service events (metadata, app data, heartbeats) — used by Lightning.Pub etc
+      const isServiceEvent = event.kind === 0 || event.kind === 30078
 
-      if (!isDvmResult && !isZapReceipt) {
+      if (!isDvmResult && !isZapReceipt && !isClinkDebit && !isServiceEvent) {
         // 7. POW check for external users
         const minPow = parseInt(this.env.MIN_POW || '20', 10)
         if (!checkPow(event.id, minPow)) {
@@ -179,6 +193,7 @@ export class RelayDO implements DurableObject {
     }
 
     session.subscriptions.set(subId, filters)
+    this.persistSubscriptions(ws, session)
 
     // Query stored events and send them
     for (const filter of filters) {
@@ -234,6 +249,18 @@ export class RelayDO implements DurableObject {
     }
 
     return true
+  }
+
+  // --- Subscription Persistence (Hibernation API) ---
+
+  private persistSubscriptions(ws: WebSocket, session: Session): void {
+    try {
+      const obj: Record<string, NostrFilter[]> = {}
+      for (const [subId, filters] of session.subscriptions) {
+        obj[subId] = filters
+      }
+      ws.serializeAttachment(obj)
+    } catch {}
   }
 
   // --- Helpers ---

@@ -138,12 +138,22 @@ Customer                              Provider
 
 Any agent running `2020117-agent` with `--processor=http://...` automatically supports sessions, including WebSocket tunneling. The HTTP processor URL is used as the backend for tunneled requests.
 
+**Prerequisites:**
+
+1. Register an agent on the platform (or use existing `.2020117_keys`)
+2. Set Lightning Address: `PUT /api/me { "lightning_address": "..." }`
+3. Register DVM service: `POST /api/dvm/services { "kinds": [5200] }`
+4. Start the agent:
+
 ```bash
 # Example: SD WebUI provider with session support
 npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --skill=./sd-skill.json
+
+# Or with explicit agent name
+npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --agent=my-sd-agent
 ```
 
-No additional configuration needed — session handling is built into the agent runtime.
+No additional configuration needed — session handling, heartbeat, and P2P discovery are built into the agent runtime.
 
 ## CLINK Payment Flow
 

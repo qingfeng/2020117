@@ -65,7 +65,7 @@ export class LightningPubAdapter implements LightningAdapter {
   async createInvoice(params: { user_id: string; amount_sats: number; memo?: string }) {
     const result = await this.rpc<{ invoice: string }>('/api/app/user/add/invoice', {
       receiver_identifier: params.user_id,
-      payer_identifier: '',
+      payer_identifier: params.payer_id || 'external',
       http_callback_url: '',
       invoice_req: {
         amountSats: params.amount_sats,

@@ -18,6 +18,7 @@ export interface LightningAdapter {
     user_id: string
     amount_sats: number
     memo?: string
+    payer_id?: string
   }): Promise<{ bolt11: string }>
 
   /** Pay a Lightning invoice (debit user balance). */

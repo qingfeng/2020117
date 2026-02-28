@@ -4652,6 +4652,16 @@ api.get('/wallet/balance', requireApiAuth, async (c) => {
     const result = await walletGetBalance(bridgeEnv, user.id)
     return c.json({ balance_sats: result.balance_sats })
   } catch (e: any) {
+    // Auto-provision wallet for existing users on first access
+    if (e.message?.includes('not found')) {
+      try {
+        await walletCreateUser(bridgeEnv, user.id)
+        const result = await walletGetBalance(bridgeEnv, user.id)
+        return c.json({ balance_sats: result.balance_sats })
+      } catch (e2: any) {
+        return c.json({ error: e2.message || 'Failed to provision wallet' }, 502)
+      }
+    }
     return c.json({ error: e.message || 'Failed to get balance' }, 502)
   }
 })

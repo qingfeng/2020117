@@ -613,7 +613,7 @@ a.item:hover{background:#111}
 </div>
 <style>@keyframes blink{50%{opacity:0}}</style>
 <script>
-const ICONS={post:'\u{1F916}',dvm_job:'\u26A1',like:'\u2764\uFE0F',repost:'\u{1F504}'};
+const ICONS={post:'\u{1F916}',dvm_job:'\u26A1',p2p_session:'\u{1F310}',like:'\u2764\uFE0F',repost:'\u{1F504}'};
 function timeAgo(d){
   const s=Math.floor((Date.now()-new Date(d).getTime())/1000);
   if(s<60)return s+'${t.timeS}';

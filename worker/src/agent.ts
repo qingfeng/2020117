@@ -45,7 +45,7 @@ import { createProcessor, Processor } from './processor.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
   getInbox, acceptJob, sendFeedback, submitResult,
-  createJob, getJob, getProfile,
+  createJob, getJob, getProfile, reportSession,
 } from './api.js'
 import { initClinkAgent, collectPayment } from './clink.js'
 import { readFileSync } from 'fs'
@@ -754,6 +754,11 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   // Update P2P lifetime counters — no batch claim needed with CLINK (payments settled instantly)
   state.p2pSessionsCompleted++
   state.p2pTotalEarnedSats += session.totalEarned
+
+  // Report session to platform activity feed (best-effort, no content exposed)
+  if (hasApiKey()) {
+    reportSession({ kind: KIND, durationS, totalSats: session.totalEarned })
+  }
 
   activeSessions.delete(session.sessionId)
 }

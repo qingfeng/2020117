@@ -368,3 +368,23 @@ export async function proxyDebit(opts: {
     amount_sats: opts.amountSats,
   })
 }
+
+/**
+ * Report a completed P2P session to the platform for the activity feed.
+ * Content stays private — only metadata (kind, duration, sats) is sent.
+ */
+export async function reportSession(opts: {
+  kind: number
+  durationS: number
+  totalSats: number
+}): Promise<void> {
+  try {
+    await apiPost('/api/dvm/session-report', {
+      kind: opts.kind,
+      duration_s: opts.durationS,
+      total_sats: opts.totalSats,
+    })
+  } catch {
+    // Best-effort — don't break session cleanup
+  }
+}

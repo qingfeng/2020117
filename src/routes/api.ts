@@ -443,12 +443,15 @@ api.get('/activity', async (c) => {
       id: dvmJobs.id,
       kind: dvmJobs.kind,
       status: dvmJobs.status,
+      role: dvmJobs.role,
       input: dvmJobs.input,
       output: dvmJobs.output,
       result: dvmJobs.result,
       providerPubkey: dvmJobs.providerPubkey,
       bidMsats: dvmJobs.bidMsats,
       priceMsats: dvmJobs.priceMsats,
+      paidMsats: dvmJobs.paidMsats,
+      params: dvmJobs.params,
       createdAt: dvmJobs.createdAt,
       updatedAt: dvmJobs.updatedAt,
       authorUsername: users.username,
@@ -456,7 +459,10 @@ api.get('/activity', async (c) => {
     })
       .from(dvmJobs)
       .leftJoin(users, eq(dvmJobs.userId, users.id))
-      .where(eq(dvmJobs.role, 'customer'))
+      .where(or(
+        eq(dvmJobs.role, 'customer'),
+        and(eq(dvmJobs.role, 'provider'), eq(dvmJobs.paymentMethod, 'clink'))
+      ))
       .orderBy(desc(dvmJobs.updatedAt))
       .limit(fetchLimit),
     db.select({
@@ -523,6 +529,27 @@ api.get('/activity', async (c) => {
 
   for (const j of recentJobs) {
     const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+
+    // P2P session completion (provider-reported, no content exposed)
+    const params = j.params ? JSON.parse(j.params) : null
+    if (j.role === 'provider' && params?.channel === 'p2p') {
+      const durationS = params.duration_s || 0
+      const durationMin = Math.ceil(durationS / 60)
+      const sats = j.paidMsats ? Math.round(j.paidMsats / 1000) : 0
+      activities.push({
+        type: 'p2p_session',
+        actor: j.authorDisplayName || j.authorUsername || 'unknown',
+        actor_username: j.authorUsername || null,
+        action: `completed a P2P session (${kindLabel})`,
+        snippet: `${durationMin}min, ${sats} sats`,
+        amount_sats: sats,
+        job_id: j.id,
+        job_status: 'completed',
+        time: j.updatedAt,
+      })
+      continue
+    }
+
     const resultText = j.result || j.output
     const providerInfo = j.providerPubkey ? providerMap[j.providerPubkey] : null
     const providerName = providerInfo?.displayName || providerInfo?.username || null
@@ -3791,6 +3818,47 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
   }
 
   return c.json({ ok: true, event_id: event.id })
+})
+
+// POST /api/dvm/session-report — P2P session 结算上报（Provider 调用）
+api.post('/dvm/session-report', requireApiAuth, async (c) => {
+  const db = c.get('db')
+  const user = c.get('user')!
+  const body = await c.req.json<{ kind: number; duration_s: number; total_sats: number }>()
+
+  if (!body.kind || body.duration_s == null || body.total_sats == null) {
+    return c.json({ error: 'kind, duration_s, and total_sats required' }, 400)
+  }
+
+  const now = new Date()
+  const jobId = generateId()
+
+  await db.insert(dvmJobs).values({
+    id: jobId,
+    userId: user.id,
+    role: 'provider',
+    kind: body.kind,
+    status: 'completed',
+    input: null,
+    result: null,
+    paidMsats: body.total_sats * 1000,
+    paymentMethod: 'clink',
+    params: JSON.stringify({ channel: 'p2p', duration_s: body.duration_s }),
+    providerPubkey: user.nostrPubkey,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Update provider total earned
+  const svc = await db.select({ id: dvmServices.id, totalEarnedMsats: dvmServices.totalEarnedMsats })
+    .from(dvmServices).where(eq(dvmServices.userId, user.id)).limit(1)
+  if (svc.length > 0) {
+    await db.update(dvmServices)
+      .set({ totalEarnedMsats: (svc[0].totalEarnedMsats || 0) + body.total_sats * 1000 })
+      .where(eq(dvmServices.id, svc[0].id))
+  }
+
+  return c.json({ ok: true, job_id: jobId })
 })
 
 // GET /api/agents/online — 在线 Agent 列表

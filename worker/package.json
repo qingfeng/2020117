@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + CLINK Lightning payments",
   "type": "module",
   "bin": {

@@ -85,6 +85,20 @@ export async function* streamFromProvider(opts: P2PStreamOptions): AsyncGenerato
     const peer = await node.waitForPeer(30_000)
     console.log(`[${tag}] Connected to provider: ${peer.peerId.slice(0, 12)}...`)
 
+    // Query provider's skill manifest for pricing before committing
+    const skill = await queryProviderSkill(node, peer.socket, kind)
+    if (skill) {
+      const pricing = skill.pricing as Record<string, unknown> | undefined
+      const jobPrice = pricing?.sats_per_job ?? pricing?.[String(kind)]
+      if (jobPrice !== undefined) {
+        console.log(`[${tag}] Provider pricing: ${jobPrice} sats/job`)
+        if (typeof jobPrice === 'number' && jobPrice > budgetSats) {
+          throw new Error(`Provider price ${jobPrice} sats exceeds budget ${budgetSats} sats`)
+        }
+      }
+      if (skill.name) console.log(`[${tag}] Provider: ${skill.name}`)
+    }
+
     // Channel: message handler pushes chunks, generator consumes them
     const chunks: string[] = []
     let finished = false

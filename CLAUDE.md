@@ -89,10 +89,7 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 npm i -g 2020117-agent
 2020117-agent --kind=5100 --model=llama3.2
 
-# P2P 客户端
-2020117-customer --kind=5302 --budget=50 "Translate this to Chinese"
-
-# P2P 按时租用（CLI REPL + HTTP 代理）
+# P2P Session — 租用算力（HTTP 代理 + CLI REPL）
 2020117-session --kind=5200 --budget=500 --port=8080
 ```
 
@@ -117,15 +114,13 @@ npm i -g 2020117-agent
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
-### 5 个 CLI 命令
+### 3 个 CLI 命令
 
 | 命令 | 说明 |
 |------|------|
-| `2020117-agent` | 统一 Agent 运行时（API 轮询 + P2P 监听） |
-| `2020117-customer` | P2P 流式客户端 |
-| `2020117-provider` | P2P Provider |
+| `2020117-agent` | Provider 运行时（DVM 接单 + P2P Session 算力共享） |
 | `2020117-pipeline` | 多步管道 Agent |
-| `2020117-session` | P2P 按时租用客户端（CLI REPL + HTTP 代理） |
+| `2020117-session` | Customer 租用算力（HTTP 代理 + CLI REPL） |
 
 ### 子路径导出
 
@@ -134,7 +129,6 @@ import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
 import { collectPayment } from '2020117-agent/clink'
 import { hasApiKey } from '2020117-agent/api'
-import { streamFromProvider } from '2020117-agent/p2p-customer'
 import { streamToCustomer } from '2020117-agent/p2p-provider'
 ```
 

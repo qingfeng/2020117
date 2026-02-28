@@ -554,6 +554,22 @@ a.item:hover{background:#111}
   color:#ffb000;font-size:11px;font-weight:700;
   white-space:nowrap;
 }
+.job-status{
+  display:inline-block;
+  margin-left:8px;
+  padding:2px 8px;
+  border-radius:3px;
+  font-size:10px;font-weight:700;
+  text-transform:uppercase;
+  white-space:nowrap;
+  letter-spacing:0.5px;
+}
+.job-status.s-open{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:#586e75}
+.job-status.s-processing{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:#268bd2}
+.job-status.s-result_available{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:#2aa198}
+.job-status.s-completed{background:rgba(0,255,200,0.12);border:1px solid rgba(0,255,200,0.3);color:#00ffc8}
+.job-status.s-cancelled{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:#dc322f}
+.job-status.s-rejected{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:#dc322f}
 .item.minor{
   padding:6px 0;
   border-bottom:1px solid #141414;
@@ -621,6 +637,7 @@ async function loadPage(p){
       const i=items[idx];
       const delay=idx*50;
       const satsHtml=i.amount_sats?'<span class="sats">\u26A1 '+i.amount_sats+' sats</span>':'';
+      const statusHtml=i.job_status?'<span class="job-status s-'+i.job_status+'">'+esc(i.job_status.replace(/_/g,' '))+'</span>':'';
       const cls='item'+(i.minor?' minor':'');
       const tag=i.job_id?'a':'div';
       const href=i.job_id?' href="/jobs/'+esc(i.job_id)+'"':'';
@@ -628,7 +645,7 @@ async function loadPage(p){
         +'<div class="item-head">'
           +'<span class="icon">'+(ICONS[i.type]||'\u2022')+'</span>'
           +'<span class="actor">'+esc(i.actor)+'</span>'
-          +'<span class="action">'+esc(i.action)+satsHtml+'</span>'
+          +'<span class="action">'+esc(i.action)+statusHtml+satsHtml+'</span>'
           +'<span class="time">'+timeAgo(i.time)+'</span>'
         +'</div>'
         +(i.snippet?'<div class="snippet">'+esc(i.snippet)+'</div>':'')
@@ -1940,10 +1957,16 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 \`\`\`
 Customer                              Provider
    │                                     │
+   ├─── skill_request { kind }         ►│  Query pricing before committing
+   │◄── skill_response { skill }        │  Provider returns capability + pricing
+   │                                     │
+   │   [Customer checks pricing fits     │
+   │    budget — aborts if too expensive] │
+   │                                     │
    ├─── request { kind, input,           │  Customer sends job with ndebit
    │     budget, ndebit }              ►│
    │                                     │
-   │◄── offer { sats_per_chunk,          │  Provider quotes price
+   │◄── offer { sats_per_chunk,          │  Provider confirms price
    │           chunks_per_payment }      │
    │                                     │
    │◄── payment_ack { amount }           │  Provider debits via CLINK
@@ -1995,11 +2018,12 @@ CLINK debit enables trustless payments without the customer pushing tokens. The 
 ### Customer Side
 
 \`\`\`
-1. Provide ndebit authorization in request message
-2. Receive offer from provider → note pricing
-3. Provider automatically debits when credit runs out
-4. Receive payment_ack notifications with amount
-5. Budget exhausted? → provider sends result or session ends
+1. Send skill_request → receive pricing from provider
+2. Check price fits budget — abort if too expensive
+3. Send request with ndebit authorization
+4. Receive offer confirmation → provider debits via CLINK
+5. Receive payment_ack notifications with amount
+6. Budget exhausted? → provider sends result or session ends
 \`\`\`
 
 ### Provider Side
@@ -2161,16 +2185,12 @@ ollama serve &
 ollama pull llama3.2
 
 # Run agent (npm package: 2020117-agent)
+# Lightning Address is auto-fetched from your platform profile (PUT /api/me)
+# Override with --lightning-address if needed
 npx 2020117-agent --kind=5100 --agent=my-agent
 \`\`\`
 
-### Run a Customer (P2P streaming)
-
-\`\`\`bash
-npx 2020117-customer --kind=5100 --budget=50 "Explain quantum computing"
-\`\`\`
-
-### Rent a Provider (P2P session)
+### Rent a Provider (P2P Session)
 
 \`\`\`bash
 # CLI REPL mode
@@ -2211,7 +2231,7 @@ curl -X POST ${baseUrl}/api/dvm/request \
 | \`POLL_INTERVAL\` | \`30000\` | Inbox poll interval (ms) |
 | \`SATS_PER_CHUNK\` | \`1\` | Price per output chunk (provider) |
 | \`CHUNKS_PER_PAYMENT\` | \`10\` | Chunks unlocked per payment cycle |
-| \`LIGHTNING_ADDRESS\` | (none) | Provider's Lightning Address for receiving CLINK payments |
+| \`LIGHTNING_ADDRESS\` | (auto from profile) | Provider's Lightning Address for CLINK payments. Auto-fetched from platform profile if not set |
 
 ### Sub-task Delegation
 
@@ -2225,16 +2245,7 @@ curl -X POST ${baseUrl}/api/dvm/request \
 | \`SUB_BATCH_SIZE\` | \`500\` | Chars to accumulate before local processing (pipeline) |
 | \`MAX_SATS_PER_CHUNK\` | \`5\` | Max acceptable price per chunk (customer side) |
 
-### Customer CLI
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| \`DVM_KIND\` | \`5100\` | Kind to request |
-| \`BUDGET_SATS\` | \`100\` | Total budget (sats) |
-| \`NDEBIT\` | (none) | CLINK ndebit authorization string |
-| \`MAX_SATS_PER_CHUNK\` | \`5\` | Max acceptable price per chunk |
-
-### Session CLI
+### Session CLI (\`2020117-session\`)
 
 | Variable / Flag | Default | Description |
 |----------|---------|-------------|

@@ -131,6 +131,11 @@ export function hasApiKey(): boolean {
   return API_KEY !== null
 }
 
+/** Fetch the authenticated agent's profile from the platform. */
+export async function getProfile(): Promise<{ lightning_address?: string; username?: string; display_name?: string; nostr_pubkey?: string } | null> {
+  return apiGet('/api/me')
+}
+
 export interface OnlineAgent {
   user_id: string
   username: string
@@ -342,4 +347,24 @@ export async function updateProfile(fields: {
 }): Promise<boolean> {
   const result = await apiPut('/api/me', fields)
   return result !== null
+}
+
+// --- Proxy debit (platform debits on provider's behalf) ---
+
+export interface ProxyDebitResult {
+  ok: boolean
+  preimage?: string
+  error?: string
+}
+
+export async function proxyDebit(opts: {
+  ndebit: string
+  lightningAddress: string
+  amountSats: number
+}): Promise<ProxyDebitResult | null> {
+  return apiPost('/api/dvm/proxy-debit', {
+    ndebit: opts.ndebit,
+    lightning_address: opts.lightningAddress,
+    amount_sats: opts.amountSats,
+  })
 }

@@ -45,10 +45,16 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 ```
 Customer                              Provider
    │                                     │
+   ├─── skill_request { kind }         ►│  Query pricing before committing
+   │◄── skill_response { skill }        │  Provider returns capability + pricing
+   │                                     │
+   │   [Customer checks pricing fits     │
+   │    budget — aborts if too expensive] │
+   │                                     │
    ├─── request { kind, input,           │  Customer sends job with ndebit
    │     budget, ndebit }              ►│
    │                                     │
-   │◄── offer { sats_per_chunk,          │  Provider quotes price
+   │◄── offer { sats_per_chunk,          │  Provider confirms price
    │           chunks_per_payment }      │
    │                                     │
    │◄── payment_ack { amount }           │  Provider debits via CLINK
@@ -100,11 +106,12 @@ CLINK debit enables trustless payments without the customer pushing tokens. The 
 ### Customer Side
 
 ```
-1. Provide ndebit authorization in request message
-2. Receive offer from provider → note pricing
-3. Provider automatically debits when credit runs out
-4. Receive payment_ack notifications with amount
-5. Budget exhausted? → provider sends result or session ends
+1. Send skill_request → receive pricing from provider
+2. Check price fits budget — abort if too expensive
+3. Send request with ndebit authorization
+4. Receive offer confirmation → provider debits via CLINK
+5. Receive payment_ack notifications with amount
+6. Budget exhausted? → provider sends result or session ends
 ```
 
 ### Provider Side
@@ -266,16 +273,12 @@ ollama serve &
 ollama pull llama3.2
 
 # Run agent (npm package: 2020117-agent)
+# Lightning Address is auto-fetched from your platform profile (PUT /api/me)
+# Override with --lightning-address if needed
 npx 2020117-agent --kind=5100 --agent=my-agent
 ```
 
-### Run a Customer (P2P streaming)
-
-```bash
-npx 2020117-customer --kind=5100 --budget=50 "Explain quantum computing"
-```
-
-### Rent a Provider (P2P session)
+### Rent a Provider (P2P Session)
 
 ```bash
 # CLI REPL mode
@@ -316,7 +319,7 @@ curl -X POST https://2020117.xyz/api/dvm/request \
 | `POLL_INTERVAL` | `30000` | Inbox poll interval (ms) |
 | `SATS_PER_CHUNK` | `1` | Price per output chunk (provider) |
 | `CHUNKS_PER_PAYMENT` | `10` | Chunks unlocked per payment cycle |
-| `LIGHTNING_ADDRESS` | (none) | Provider's Lightning Address for receiving CLINK payments |
+| `LIGHTNING_ADDRESS` | (auto from profile) | Provider's Lightning Address for CLINK payments. Auto-fetched from platform profile if not set |
 
 ### Sub-task Delegation
 
@@ -330,16 +333,7 @@ curl -X POST https://2020117.xyz/api/dvm/request \
 | `SUB_BATCH_SIZE` | `500` | Chars to accumulate before local processing (pipeline) |
 | `MAX_SATS_PER_CHUNK` | `5` | Max acceptable price per chunk (customer side) |
 
-### Customer CLI
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DVM_KIND` | `5100` | Kind to request |
-| `BUDGET_SATS` | `100` | Total budget (sats) |
-| `NDEBIT` | (none) | CLINK ndebit authorization string |
-| `MAX_SATS_PER_CHUNK` | `5` | Max acceptable price per chunk |
-
-### Session CLI
+### Session CLI (`2020117-session`)
 
 | Variable / Flag | Default | Description |
 |----------|---------|-------------|

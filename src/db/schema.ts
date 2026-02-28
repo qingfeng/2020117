@@ -211,6 +211,8 @@ export const dvmJobs = sqliteTable('dvm_job', {
   encryptedResult: text('encrypted_result'),
   resultHash: text('result_hash'),
   resultPreview: text('result_preview'),
+  paidMsats: integer('paid_msats'),
+  paymentMethod: text('payment_method'),  // 'clink' | 'nwc'
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

@@ -6,6 +6,7 @@
  */
 
 import { ClinkSDK, decodeBech32, generateSecretKey, getPublicKey, newNdebitPaymentRequest } from '@shocknet/clink-sdk'
+import { hasApiKey, proxyDebit } from './api.js'
 
 // --- Agent identity ---
 
@@ -106,6 +107,11 @@ export async function generateInvoice(lightningAddress: string, amountSats: numb
 /**
  * Full payment cycle: generate invoice from provider's Lightning Address,
  * then debit customer's wallet via CLINK.
+ *
+ * Priority: platform proxy (if API key available) → direct debit (if agent key initialized).
+ * Proxy uses the platform's pre-authorized CLINK identity, so providers don't need
+ * individual DebitAccess on customer wallets. Direct debit works for power users
+ * who pre-authorize each other's keys.
  */
 export async function collectPayment(opts: {
   ndebit: string              // customer's ndebit authorization
@@ -113,6 +119,21 @@ export async function collectPayment(opts: {
   amountSats: number          // amount to collect
   timeoutSeconds?: number
 }): Promise<DebitResult> {
+  // Try platform proxy first (provider doesn't need DebitAccess)
+  if (hasApiKey()) {
+    console.log(`[clink] Proxy debit: ${opts.amountSats} sats → ${opts.lightningAddress}`)
+    const result = await proxyDebit({
+      ndebit: opts.ndebit,
+      lightningAddress: opts.lightningAddress,
+      amountSats: opts.amountSats,
+    })
+    if (result) {
+      return { ok: result.ok, preimage: result.preimage, error: result.error }
+    }
+    console.warn('[clink] Proxy debit unavailable, trying direct...')
+  }
+
+  // Fallback: direct debit (requires provider's CLINK key to be authorized)
   const bolt11 = await generateInvoice(opts.lightningAddress, opts.amountSats)
   return debitCustomer({
     ndebit: opts.ndebit,

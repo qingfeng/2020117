@@ -495,7 +495,7 @@ api.get('/activity', async (c) => {
     return clean.length > max ? clean.slice(0, max) + '...' : clean || null
   }
 
-  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; minor?: boolean; time: Date }[] = []
+  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; job_status?: string | null; minor?: boolean; time: Date }[] = []
 
   for (const t of recentTopics) {
     const text = t.title ? `${t.title} — ${stripHtml(t.content || '')}` : (t.content || '')
@@ -540,6 +540,7 @@ api.get('/activity', async (c) => {
       result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null,
       amount_sats: amountSats,
       job_id: j.id,
+      job_status: j.status,
       time: j.updatedAt,
     })
   }
@@ -2548,6 +2549,8 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
     escrow: isEscrow,
     bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : null,
     price_sats: j.priceMsats ? Math.floor(j.priceMsats / 1000) : null,
+    paid_sats: j.paidMsats ? Math.floor(j.paidMsats / 1000) : null,
+    payment_method: j.paymentMethod || null,
     customer_pubkey: j.customerPubkey,
     provider_pubkey: j.providerPubkey,
     request_event_id: j.requestEventId,
@@ -3634,10 +3637,35 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
     }
   }
 
-  // Mark customer job as completed
+  // Mark customer job as completed with payment info
   await db.update(dvmJobs)
-    .set({ status: 'completed', updatedAt: new Date() })
+    .set({
+      status: 'completed',
+      paidMsats: paymentResult.paid_sats ? paymentResult.paid_sats * 1000 : null,
+      paymentMethod: paymentResult.method || null,
+      updatedAt: new Date(),
+    })
     .where(eq(dvmJobs.id, jobId))
+
+  // Update provider's totalEarnedMsats
+  if (paymentResult.paid_sats && job[0].requestEventId) {
+    const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
+      .where(and(
+        eq(dvmJobs.requestEventId, job[0].requestEventId),
+        eq(dvmJobs.role, 'provider'),
+      ))
+      .limit(1)
+    if (providerJob.length > 0) {
+      const providerSvc = await db.select({ id: dvmServices.id, totalEarnedMsats: dvmServices.totalEarnedMsats })
+        .from(dvmServices).where(eq(dvmServices.userId, providerJob[0].userId)).limit(1)
+      if (providerSvc.length > 0) {
+        await db.update(dvmServices).set({
+          totalEarnedMsats: (providerSvc[0].totalEarnedMsats || 0) + providerSats * 1000,
+          updatedAt: new Date(),
+        }).where(eq(dvmServices.id, providerSvc[0].id))
+      }
+    }
+  }
 
   // Kind 1 note + approval
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
@@ -4489,6 +4517,42 @@ api.post('/dvm/swarm/:id/select', requireApiAuth, async (c) => {
   }).where(eq(dvmJobs.id, swarm[0].jobId))
 
   return c.json({ ok: true, winner: body.submission_id })
+})
+
+// POST /api/dvm/proxy-debit — Provider requests platform to debit customer's wallet
+// Platform uses its authorized CLINK identity (platform key) to execute the debit,
+// so providers don't need individual DebitAccess authorization on customer wallets.
+api.post('/dvm/proxy-debit', requireApiAuth, async (c) => {
+  const masterKey = c.env.NOSTR_MASTER_KEY
+  if (!masterKey) return c.json({ error: 'Platform CLINK not configured' }, 500)
+
+  const body = await c.req.json<{
+    ndebit: string
+    lightning_address: string
+    amount_sats: number
+  }>()
+
+  if (!body.ndebit || !body.lightning_address || !body.amount_sats) {
+    return c.json({ error: 'ndebit, lightning_address, and amount_sats required' }, 400)
+  }
+  if (body.amount_sats <= 0 || body.amount_sats > 100000) {
+    return c.json({ error: 'amount_sats must be 1-100000' }, 400)
+  }
+
+  try {
+    const result = await debitForPayment({
+      ndebit: body.ndebit,
+      lightningAddress: body.lightning_address,
+      amountSats: body.amount_sats,
+      masterKey,
+    })
+    if (result.ok) {
+      return c.json({ ok: true, preimage: result.preimage })
+    }
+    return c.json({ ok: false, error: result.error || 'Debit rejected' }, 402)
+  } catch (e: any) {
+    return c.json({ ok: false, error: e.message || 'Debit failed' }, 502)
+  }
 })
 
 export default api

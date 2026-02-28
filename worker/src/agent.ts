@@ -49,7 +49,7 @@ import { createProcessor, Processor } from './processor.js'
 import {
   hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
   getInbox, acceptJob, sendFeedback, submitResult,
-  createJob, getJob,
+  createJob, getJob, getProfile,
 } from './api.js'
 import { initClinkAgent, collectPayment } from './clink.js'
 import { readFileSync } from 'fs'
@@ -65,7 +65,7 @@ const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 const PAYMENT_TIMEOUT = Number(process.env.PAYMENT_TIMEOUT) || 30_000
 
 // --- CLINK payment config ---
-const LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
+let LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
 
 // --- Sub-task delegation config ---
 const SUB_KIND = process.env.SUB_KIND ? Number(process.env.SUB_KIND) : null
@@ -163,19 +163,28 @@ async function main() {
     console.log(`[${label}] Skill: ${state.skill.name} v${state.skill.version} (${(state.skill.features as string[]).join(', ')})`)
   }
 
-  // 2. Initialize CLINK agent identity (for P2P session debit)
+  // 2. Auto-fetch Lightning Address from platform if not set via CLI/env
+  if (!LIGHTNING_ADDRESS && hasApiKey()) {
+    const profile = await getProfile()
+    if (profile?.lightning_address) {
+      LIGHTNING_ADDRESS = profile.lightning_address
+      console.log(`[${label}] Lightning Address loaded from platform: ${LIGHTNING_ADDRESS}`)
+    }
+  }
+
+  // 3. Initialize CLINK agent identity (for P2P session debit)
   if (LIGHTNING_ADDRESS) {
     const { pubkey } = initClinkAgent()
     console.log(`[${label}] CLINK: ${LIGHTNING_ADDRESS} (agent pubkey: ${pubkey.slice(0, 16)}...)`)
   }
 
-  // 3. Platform registration + heartbeat
+  // 4. Platform registration + heartbeat
   await setupPlatform(label)
 
-  // 4. Async inbox poller
+  // 5. Async inbox poller
   startInboxPoller(label)
 
-  // 5. P2P swarm listener
+  // 6. P2P swarm listener
   await startSwarmListener(label)
 
   // 6. Graceful shutdown
@@ -773,14 +782,14 @@ async function startSwarmListener(label: string) {
 
       const job: P2PJobState = {
         socket,
-        credit: 0,
+        credit: CHUNKS_PER_PAYMENT,  // start with free credit; debit after delivery
         ndebit: msg.ndebit,
         totalEarned: 0,
         stopped: false,
       }
       p2pJobs.set(msg.id, job)
 
-      // Send offer
+      // Send offer (price quote — no payment yet)
       node.send(socket, {
         type: 'offer',
         id: msg.id,
@@ -788,24 +797,23 @@ async function startSwarmListener(label: string) {
         chunks_per_payment: CHUNKS_PER_PAYMENT,
       })
 
-      // Debit first payment cycle via CLINK
-      const paid = await collectP2PPayment({
-        job, node, jobId: msg.id,
-        satsPerChunk: SATS_PER_CHUNK,
-        chunksPerPayment: CHUNKS_PER_PAYMENT,
-        lightningAddress: LIGHTNING_ADDRESS,
-        label,
-      })
-      if (!paid) {
-        console.log(`[${label}] P2P job ${msg.id}: first debit failed, aborting`)
-        p2pJobs.delete(msg.id)
-        releaseSlot()
-        return
-      }
-
-      // Start generating
+      // Generate first, pay after delivery
       node.send(socket, { type: 'accepted', id: msg.id })
       await runP2PGeneration(node, job, msg, label)
+
+      // Debit after result delivered
+      if (!job.stopped) {
+        const paid = await collectP2PPayment({
+          job, node, jobId: msg.id,
+          satsPerChunk: SATS_PER_CHUNK,
+          chunksPerPayment: CHUNKS_PER_PAYMENT,
+          lightningAddress: LIGHTNING_ADDRESS,
+          label,
+        })
+        if (!paid) {
+          console.log(`[${label}] P2P job ${msg.id}: post-delivery debit failed`)
+        }
+      }
     }
 
     if (msg.type === 'stop') {

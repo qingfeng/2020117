@@ -15,6 +15,8 @@ export type Bindings = {
   RELAY_SERVICE?: Fetcher
   PLATFORM_FEE_PERCENT?: string
   PLATFORM_LIGHTNING_ADDRESS?: string
+  LIGHTNING_PUB_PUBKEY?: string
+  LIGHTNING_BRIDGE_PUBKEY?: string
 }
 
 export type Variables = {

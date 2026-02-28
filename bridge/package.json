@@ -1,0 +1,24 @@
+{
+  "name": "2020117-bridge",
+  "version": "0.1.0",
+  "description": "Lightning Bridge — relay-based wallet RPC (Kind 21120)",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "2020117-bridge": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.13.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.3"
+  }
+}

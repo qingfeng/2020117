@@ -120,12 +120,12 @@ export class RelayDO implements DurableObject {
       const isDvmResult = isDvmKind(event.kind)
       // 6. Zap receipt (9735) — must be writable for zap verification to work
       const isZapReceipt = event.kind === 9735
-      // CLINK debit (21002) — encrypted payment protocol, open to platform/agents
-      const isClinkDebit = event.kind === 21002
+      // Encrypted protocol kinds — open to platform/agents (no POW needed)
+      const isProtocolKind = event.kind === 21002 || event.kind === 21000 || event.kind === 21120
       // Service events (metadata, app data, heartbeats) — used by Lightning.Pub etc
       const isServiceEvent = event.kind === 0 || event.kind === 30078
 
-      if (!isDvmResult && !isZapReceipt && !isClinkDebit && !isServiceEvent) {
+      if (!isDvmResult && !isZapReceipt && !isProtocolKind && !isServiceEvent) {
         // 7. POW check for external users
         const minPow = parseInt(this.env.MIN_POW || '20', 10)
         if (!checkPow(event.id, minPow)) {

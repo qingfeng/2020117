@@ -24,6 +24,9 @@ custom_domain = true
 # NOSTR_RELAYS and NOSTR_MASTER_KEY set via: wrangler secret put
 # NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band,wss://nostr-01.yakihonne.com,wss://nostr-02.yakihonne.com"
 
+# Lightning Bridge wallet RPC (hex pubkey of the bridge instance)
+# LIGHTNING_BRIDGE_PUBKEY set via: wrangler secret put
+
 # Cron: poll Nostr communities, DVM jobs (every 1 minute)
 [triggers]
 crons = ["* * * * *"]

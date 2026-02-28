@@ -16,10 +16,12 @@
   "dependencies": {
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
+    "@scure/base": "^2.0.0",
     "@shocknet/clink-sdk": "^1.5.4",
     "bech32": "^2.0.0",
     "hono": "^4.11.7",
-    "nanoid": "^5.1.6"
+    "nanoid": "^5.1.6",
+    "nostr-tools": "^2.23.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260203.0",

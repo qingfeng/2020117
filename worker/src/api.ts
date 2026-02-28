@@ -18,6 +18,7 @@ interface KeyEntry {
   api_key: string
   user_id?: string
   username?: string
+  ndebit?: string
 }
 
 function loadApiKey(): string | null {
@@ -51,6 +52,27 @@ export function loadAgentName(): string | null {
       const keys = JSON.parse(raw) as Record<string, KeyEntry>
       const firstName = Object.keys(keys)[0]
       if (firstName) return firstName
+    } catch {
+      // try next
+    }
+  }
+  return null
+}
+
+/** Returns the ndebit from env or .2020117_keys file */
+export function loadNdebit(): string | null {
+  if (process.env.CLINK_NDEBIT) return process.env.CLINK_NDEBIT
+
+  const agentName = process.env.AGENT_NAME || process.env.AGENT
+  for (const dir of [process.cwd(), homedir()]) {
+    try {
+      const raw = readFileSync(join(dir, '.2020117_keys'), 'utf-8')
+      const keys = JSON.parse(raw) as Record<string, KeyEntry>
+      if (agentName && keys[agentName]?.ndebit) return keys[agentName].ndebit
+      if (!agentName) {
+        const first = Object.values(keys)[0]
+        if (first?.ndebit) return first.ndebit
+      }
     } catch {
       // try next
     }

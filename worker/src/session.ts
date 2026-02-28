@@ -32,19 +32,22 @@ for (const arg of process.argv.slice(2)) {
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
+import { loadNdebit } from './api.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Socket } from 'net'
 import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
+// Polyfill global WebSocket for Node.js < 22 (needed by @shocknet/clink-sdk)
+if (!globalThis.WebSocket) (globalThis as any).WebSocket = WsWebSocket
 
 // --- Config ---
 
 const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
-const NDEBIT = process.env.CLINK_NDEBIT || ''
+const NDEBIT = process.env.CLINK_NDEBIT || loadNdebit() || ''
 const TICK_INTERVAL_MS = 60_000
 const HTTP_TIMEOUT_MS = 60_000
 

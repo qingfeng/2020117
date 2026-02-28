@@ -50,6 +50,8 @@ import {
 import { initClinkAgent, collectPayment } from './clink.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
+// Polyfill global WebSocket for Node.js < 22 (needed by @shocknet/clink-sdk)
+if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 // --- Config from env ---
 

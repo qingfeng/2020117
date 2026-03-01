@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu/Lightning payments",
   "type": "module",
   "bin": {

@@ -77,8 +77,8 @@ async function nwcRequest(parsed: NwcParsed, method: string, params: Record<stri
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       try { ws.close() } catch {}
-      reject(new Error(`NWC ${method} timeout (15s)`))
-    }, 15000)
+      reject(new Error(`NWC ${method} timeout (30s)`))
+    }, 30000)
 
     const ws = new WebSocket(relayUrl)
 

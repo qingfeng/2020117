@@ -48,7 +48,7 @@ const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
 const CASHU_TOKEN = process.env.CASHU_TOKEN || ''
-const MINT_URL = process.env.CASHU_MINT_URL || 'https://mint.minibits.cash/Bitcoin'
+const MINT_URL = process.env.CASHU_MINT_URL || 'https://8333.space:3338'
 
 // Mutable Cashu wallet state (loaded from CASHU_TOKEN at startup)
 let cashuState: { mintUrl: string; proofs: Proof[] } | null = null
@@ -777,16 +777,17 @@ async function main() {
     }
   } else if (hasApiKey()) {
     // Auto-mint Cashu tokens via NWC wallet
-    log(`No Cashu token provided — auto-minting ${BUDGET} sats from ${MINT_URL}`)
     const balance = await walletGetBalance()
-    log(`Wallet balance: ${balance} sats`)
-    if (balance < BUDGET) {
-      warn(`Wallet balance (${balance} sats) < budget (${BUDGET} sats). Proceeding anyway.`)
+    if (balance <= 0) {
+      warn('Wallet balance is 0. Cannot auto-mint Cashu tokens.')
+      await node.destroy()
+      process.exit(1)
     }
+    const mintAmount = Math.min(balance, BUDGET)
+    log(`Wallet balance: ${balance} sats — minting ${mintAmount} sats from ${MINT_URL}`)
     try {
       // 1. Request mint quote (Lightning invoice)
-      log('Requesting mint quote...')
-      const { quote, invoice } = await createMintQuote(MINT_URL, BUDGET)
+      const { quote, invoice } = await createMintQuote(MINT_URL, mintAmount)
       log(`Mint quote: ${quote} (invoice: ${invoice.slice(0, 30)}...)`)
 
       // 2. Pay the invoice via platform NWC wallet
@@ -799,7 +800,7 @@ async function main() {
 
       // 3. Claim minted proofs
       log('Claiming minted tokens...')
-      const token = await claimMintQuote(MINT_URL, BUDGET, quote)
+      const token = await claimMintQuote(MINT_URL, mintAmount, quote)
       const { mint, proofs } = decodeCashuToken(token)
       cashuState = { mintUrl: mint, proofs }
       paymentMethod = 'cashu'
@@ -807,8 +808,8 @@ async function main() {
       log(`Minted ${totalMinted} sats Cashu token — using Cashu payment mode`)
     } catch (e: any) {
       warn(`Auto-mint failed: ${e.message}`)
-      warn('Falling back to invoice payment mode')
-      paymentMethod = 'invoice'
+      await node.destroy()
+      process.exit(1)
     }
   } else {
     warn('No payment method available.')

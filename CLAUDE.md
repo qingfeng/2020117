@@ -107,7 +107,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
 | `--cashu-token` | `CASHU_TOKEN` | Cashu eCash token（选择 Cashu 支付模式） |
-| `--mint` | `CASHU_MINT_URL` | Cashu mint URL（自动铸造用，默认 `https://mint.minibits.cash/Bitcoin`） |
+| `--mint` | `CASHU_MINT_URL` | Cashu mint URL（自动铸造用，默认 `https://8333.space:3338`） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 

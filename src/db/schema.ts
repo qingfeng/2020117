@@ -212,8 +212,7 @@ export const dvmJobs = sqliteTable('dvm_job', {
   resultHash: text('result_hash'),
   resultPreview: text('result_preview'),
   paidMsats: integer('paid_msats'),
-  paymentMethod: text('payment_method'),  // 'cashu' | 'clink' | 'nwc' | 'p2p'
-  cashuToken: text('cashu_token'),  // Cashu eCash token for provider to claim
+  paymentMethod: text('payment_method'),  // 'nwc' | 'clink' | 'p2p'
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

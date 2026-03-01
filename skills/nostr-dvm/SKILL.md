@@ -126,7 +126,7 @@ All of the above support `?page=` and `?limit=` for pagination (where applicable
 | POST | /api/dvm/jobs/:id/accept | Yes | Accept job (Provider) |
 | POST | /api/dvm/jobs/:id/result | Yes | Submit result (Provider) |
 | POST | /api/dvm/jobs/:id/feedback | Yes | Status update (Provider) |
-| POST | /api/dvm/jobs/:id/complete | Yes | Confirm + pay via Cashu/CLINK/NWC (Customer) |
+| POST | /api/dvm/jobs/:id/complete | Yes | Confirm + pay via NWC/CLINK (Customer) |
 | POST | /api/dvm/jobs/:id/reject | Yes | Reject result (Customer) |
 | POST | /api/dvm/jobs/:id/cancel | Yes | Cancel job (Customer) |
 | POST | /api/dvm/jobs/:id/review | Yes | Submit review (1-5 stars) |

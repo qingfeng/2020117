@@ -292,9 +292,9 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 
 平台不托管资金。两个支付场景，各自独立：
 
-### 1. DVM 任务支付（三路支付）
+### 1. DVM 任务支付（NWC / CLINK）
 
-Customer 完成任务时付款给 Provider，支持三种支付方式（优先级从高到低）：
+Customer 完成任务时通过平台钱包付款给 Provider：
 
 ```
 Customer 发布任务 (bid_sats=100)
@@ -305,10 +305,9 @@ Provider 接单 + 提交结果
   → Customer job 状态变为 result_available
 
 Customer 确认 (POST /api/dvm/jobs/:id/complete)
-  1. 请求体带 cashu_token → Cashu 路径（验证 token 金额 → 存入 provider job → 完成）
-  2. 用户绑了 CLINK ndebit → CLINK 路径（LNURL-pay → Kind 21002 debit）
-  3. 用户绑了 NWC → NWC 路径（NIP-47 pay_invoice）
-  → 平台费 + Provider 费分两笔扣款（CLINK/NWC 路径）
+  1. 用户绑了 NWC → NWC 路径（NIP-47 pay_invoice）← 优先
+  2. 用户绑了 CLINK ndebit → CLINK 路径（LNURL-pay → Kind 21002 debit）← 兜底
+  → 平台费 + Provider 费分两笔扣款
 
 bid_sats=0：无支付，流程不变
 ```

@@ -460,7 +460,7 @@ api.get('/activity', async (c) => {
       .leftJoin(users, eq(dvmJobs.userId, users.id))
       .where(or(
         eq(dvmJobs.role, 'customer'),
-        and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink', 'cashu']))
+        and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink']))
       ))
       .orderBy(desc(dvmJobs.updatedAt))
       .limit(fetchLimit),
@@ -2576,7 +2576,6 @@ api.get('/dvm/jobs/:id', requireApiAuth, async (c) => {
     price_sats: j.priceMsats ? Math.floor(j.priceMsats / 1000) : null,
     paid_sats: j.paidMsats ? Math.floor(j.paidMsats / 1000) : null,
     payment_method: j.paymentMethod || null,
-    ...(j.role === 'provider' && j.cashuToken ? { cashu_token: j.cashuToken } : {}),
     customer_pubkey: j.customerPubkey,
     provider_pubkey: j.providerPubkey,
     request_event_id: j.requestEventId,
@@ -3502,13 +3501,11 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
 })
 
 
-// POST /api/dvm/jobs/:id/complete — Customer confirms result, pay provider via Cashu / CLINK / NWC
+// POST /api/dvm/jobs/:id/complete — Customer confirms result, pay provider via NWC or CLINK
 api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   const db = c.get('db')
   const user = c.get('user')!
   const jobId = c.req.param('id')
-
-  const body = await c.req.json().catch(() => ({})) as { cashu_token?: string }
 
   const job = await db.select().from(dvmJobs)
     .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.userId, user.id), eq(dvmJobs.role, 'customer')))
@@ -3529,87 +3526,41 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   const feeSats = (feePercent > 0 && platformAddress) ? Math.max(1, Math.floor(totalPaymentSats * feePercent / 100)) : 0
   const providerSats = totalPaymentSats - feeSats
 
-  // Payment via Cashu / CLINK / NWC (if amount > 0)
-  let paymentResult: { preimage?: string; paid_sats?: number; fee_sats?: number; method?: string; cashu_token?: string } = {}
+  // Payment via NWC or CLINK (if amount > 0)
+  let paymentResult: { preimage?: string; paid_sats?: number; fee_sats?: number; method?: string } = {}
 
   if (totalPaymentSats > 0) {
-    const hasCashu = !!body.cashu_token
-    const hasClink = user.clinkNdebitEnabled && user.clinkNdebitEncrypted && user.clinkNdebitIv && c.env.NOSTR_MASTER_KEY
     const hasNwc = user.nwcEnabled && user.nwcEncrypted && user.nwcIv && c.env.NOSTR_MASTER_KEY
+    const hasClink = user.clinkNdebitEnabled && user.clinkNdebitEncrypted && user.clinkNdebitIv && c.env.NOSTR_MASTER_KEY
 
-    if (!hasCashu && !hasClink && !hasNwc) {
-      return c.json({ error: 'No payment method available. Either send cashu_token in request body, or connect a wallet via PUT /api/me (clink_ndebit or nwc_connection_string).' }, 400)
+    if (!hasNwc && !hasClink) {
+      return c.json({ error: 'No payment method configured. Connect a wallet via PUT /api/me (nwc_connection_string or clink_ndebit).' }, 400)
     }
 
-    // Resolve provider Lightning Address (needed for CLINK/NWC paths)
+    // Resolve provider Lightning Address
     let providerLightningAddress: string | null = null
-    if (!hasCashu) {
-      if (job[0].requestEventId) {
-        const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
-          .where(and(
-            eq(dvmJobs.requestEventId, job[0].requestEventId),
-            eq(dvmJobs.role, 'provider'),
-            eq(dvmJobs.status, 'completed'),
-          ))
-          .limit(1)
-        if (providerJob.length > 0) {
-          const providerUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
-            .where(eq(users.id, providerJob[0].userId)).limit(1)
-          if (providerUser.length > 0) providerLightningAddress = providerUser[0].lightningAddress
-        }
-      }
-      if (!providerLightningAddress && job[0].providerPubkey) {
-        const localUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
-          .where(eq(users.nostrPubkey, job[0].providerPubkey)).limit(1)
-        if (localUser.length > 0) providerLightningAddress = localUser[0].lightningAddress
+    if (job[0].requestEventId) {
+      const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
+        .where(and(
+          eq(dvmJobs.requestEventId, job[0].requestEventId),
+          eq(dvmJobs.role, 'provider'),
+          eq(dvmJobs.status, 'completed'),
+        ))
+        .limit(1)
+      if (providerJob.length > 0) {
+        const providerUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
+          .where(eq(users.id, providerJob[0].userId)).limit(1)
+        if (providerUser.length > 0) providerLightningAddress = providerUser[0].lightningAddress
       }
     }
+    if (!providerLightningAddress && job[0].providerPubkey) {
+      const localUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
+        .where(eq(users.nostrPubkey, job[0].providerPubkey)).limit(1)
+      if (localUser.length > 0) providerLightningAddress = localUser[0].lightningAddress
+    }
 
-    // --- Path 1: Cashu token ---
-    if (hasCashu) {
-      try {
-        const { getDecodedToken } = await import('@cashu/cashu-ts')
-        const decoded = getDecodedToken(body.cashu_token!)
-        const tokenSats = decoded.proofs.reduce((sum: number, p: { amount: number }) => sum + p.amount, 0)
-        if (tokenSats < totalPaymentSats) {
-          return c.json({ error: `Cashu token too small: ${tokenSats} sats < required ${totalPaymentSats} sats` }, 400)
-        }
-        // Store token on job — provider claims it from job detail
-        paymentResult = { paid_sats: totalPaymentSats, fee_sats: 0, method: 'cashu', cashu_token: body.cashu_token }
-      } catch (e) {
-        return c.json({ error: 'Invalid Cashu token', detail: e instanceof Error ? e.message : 'unknown' }, 400)
-      }
-
-    // --- Path 2: CLINK ndebit ---
-    } else if (hasClink) {
-      if (!providerLightningAddress) {
-        return c.json({ error: 'Cannot pay via CLINK: provider has no Lightning Address' }, 400)
-      }
-
-      const ndebit = await decryptNdebit(user.clinkNdebitEncrypted!, user.clinkNdebitIv!, c.env.NOSTR_MASTER_KEY!)
-
-      // Pay platform fee
-      if (feeSats > 0) {
-        try {
-          const feeResult = await debitForPayment({ ndebit, lightningAddress: platformAddress, amountSats: feeSats, masterKey: c.env.NOSTR_MASTER_KEY! })
-          if (!feeResult.ok) throw new Error(feeResult.error || 'Debit rejected')
-          console.log(`[DVM] Platform fee (CLINK): ${feeSats} sats → ${platformAddress}`)
-        } catch (e) {
-          return c.json({ error: 'Platform fee payment failed (CLINK)', detail: e instanceof Error ? e.message : 'Unknown error' }, 502)
-        }
-      }
-
-      // Pay provider
-      try {
-        const result = await debitForPayment({ ndebit, lightningAddress: providerLightningAddress, amountSats: providerSats, masterKey: c.env.NOSTR_MASTER_KEY! })
-        if (!result.ok) throw new Error(result.error || 'Debit rejected')
-        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'clink' }
-      } catch (e) {
-        return c.json({ error: 'CLINK debit payment failed', detail: e instanceof Error ? e.message : 'Unknown error' }, 502)
-      }
-
-    // --- Path 3: NWC ---
-    } else {
+    // --- Path 1: NWC (preferred) ---
+    if (hasNwc) {
       if (!job[0].bolt11 && !providerLightningAddress) {
         return c.json({ error: 'Cannot pay: provider has no Lightning invoice or Lightning Address' }, 400)
       }
@@ -3643,6 +3594,34 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
           return c.json({ error: 'NWC payment to Lightning Address failed', detail: e instanceof Error ? e.message : 'Unknown error' }, 502)
         }
       }
+
+    // --- Path 2: CLINK ndebit (fallback) ---
+    } else {
+      if (!providerLightningAddress) {
+        return c.json({ error: 'Cannot pay via CLINK: provider has no Lightning Address' }, 400)
+      }
+
+      const ndebit = await decryptNdebit(user.clinkNdebitEncrypted!, user.clinkNdebitIv!, c.env.NOSTR_MASTER_KEY!)
+
+      // Pay platform fee
+      if (feeSats > 0) {
+        try {
+          const feeResult = await debitForPayment({ ndebit, lightningAddress: platformAddress, amountSats: feeSats, masterKey: c.env.NOSTR_MASTER_KEY! })
+          if (!feeResult.ok) throw new Error(feeResult.error || 'Debit rejected')
+          console.log(`[DVM] Platform fee (CLINK): ${feeSats} sats → ${platformAddress}`)
+        } catch (e) {
+          return c.json({ error: 'Platform fee payment failed (CLINK)', detail: e instanceof Error ? e.message : 'Unknown error' }, 502)
+        }
+      }
+
+      // Pay provider
+      try {
+        const result = await debitForPayment({ ndebit, lightningAddress: providerLightningAddress, amountSats: providerSats, masterKey: c.env.NOSTR_MASTER_KEY! })
+        if (!result.ok) throw new Error(result.error || 'Debit rejected')
+        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'clink' }
+      } catch (e) {
+        return c.json({ error: 'CLINK debit payment failed', detail: e instanceof Error ? e.message : 'Unknown error' }, 502)
+      }
     }
   }
 
@@ -3655,16 +3634,6 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       updatedAt: new Date(),
     })
     .where(eq(dvmJobs.id, jobId))
-
-  // For Cashu payments, store the token on the provider's job for claiming
-  if (paymentResult.cashu_token && job[0].requestEventId) {
-    await db.update(dvmJobs)
-      .set({ cashuToken: paymentResult.cashu_token, updatedAt: new Date() })
-      .where(and(
-        eq(dvmJobs.requestEventId, job[0].requestEventId),
-        eq(dvmJobs.role, 'provider'),
-      ))
-  }
 
   // Update provider's totalEarnedMsats
   if (paymentResult.paid_sats && job[0].requestEventId) {

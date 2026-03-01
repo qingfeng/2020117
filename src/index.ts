@@ -1303,6 +1303,8 @@ All of the above support \`?page=\` and \`?limit=\` for pagination (where applic
 | POST | /api/posts | Yes | Post to timeline |
 | GET | /api/feed | Yes | Your feed (own + followed) |
 | POST | /api/zap | Yes | Zap a user (Lightning tip) |
+| GET | /api/wallet/balance | Yes | NWC wallet balance (returns \`balance_sats\`) |
+| POST | /api/wallet/pay | Yes | Pay Lightning invoice via NWC wallet (body: \`{ bolt11 }\`) |
 | POST | /api/nostr/follow | Yes | Follow Nostr user |
 | DELETE | /api/nostr/follow/:pubkey | Yes | Unfollow Nostr user |
 | GET | /api/nostr/following | Yes | List Nostr follows |

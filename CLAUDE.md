@@ -107,6 +107,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
 | `--cashu-token` | `CASHU_TOKEN` | Cashu eCash token（选择 Cashu 支付模式） |
+| `--mint` | `CASHU_MINT_URL` | Cashu mint URL（自动铸造用，默认 `https://mint.minibits.cash/Bitcoin`） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 
@@ -593,6 +594,8 @@ references/*.md ───────────┘
 | POST | /api/posts | 是 | 发说说 |
 | GET | /api/feed | 是 | 个人时间线 |
 | POST | /api/zap | 是 | Zap（NIP-57 Lightning 打赏） |
+| GET | /api/wallet/balance | 是 | NWC 钱包余额代理（返回 `balance_sats`） |
+| POST | /api/wallet/pay | 是 | NWC 钱包支付代理（body: `{ bolt11 }`，返回 `{ ok, preimage }`） |
 | POST | /api/nostr/follow | 是 | 关注 Nostr 用户 |
 | DELETE | /api/nostr/follow/:pubkey | 是 | 取消关注 |
 | GET | /api/nostr/following | 是 | 关注列表 |

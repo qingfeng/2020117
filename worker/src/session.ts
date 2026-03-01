@@ -27,13 +27,14 @@ for (const arg of process.argv.slice(2)) {
     case '--agent':    process.env.AGENT = val; break
     case '--provider':    process.env.PROVIDER_PEER = val; break
     case '--cashu-token': process.env.CASHU_TOKEN = val; break
+    case '--mint':        process.env.CASHU_MINT_URL = val; break
   }
 }
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
 import { walletPayInvoice, walletGetBalance, hasApiKey } from './api.js'
-import { decodeCashuToken, sendCashuToken, peekCashuToken, type Proof } from './cashu.js'
+import { decodeCashuToken, sendCashuToken, peekCashuToken, createMintQuote, claimMintQuote, type Proof } from './cashu.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
@@ -47,6 +48,7 @@ const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
 const CASHU_TOKEN = process.env.CASHU_TOKEN || ''
+const MINT_URL = process.env.CASHU_MINT_URL || 'https://mint.minibits.cash/Bitcoin'
 
 // Mutable Cashu wallet state (loaded from CASHU_TOKEN at startup)
 let cashuState: { mintUrl: string; proofs: Proof[] } | null = null
@@ -764,7 +766,7 @@ async function main() {
   let paymentMethod: 'cashu' | 'invoice'
 
   if (CASHU_TOKEN) {
-    // Load Cashu token
+    // Load pre-existing Cashu token
     const { mint, proofs } = decodeCashuToken(CASHU_TOKEN)
     const tokenAmount = proofs.reduce((sum, p) => sum + p.amount, 0)
     cashuState = { mintUrl: mint, proofs }
@@ -774,17 +776,44 @@ async function main() {
       warn(`Cashu token (${tokenAmount} sats) is less than budget (${BUDGET} sats)`)
     }
   } else if (hasApiKey()) {
-    // Fallback to invoice mode via built-in wallet
-    paymentMethod = 'invoice'
+    // Auto-mint Cashu tokens via NWC wallet
+    log(`No Cashu token provided — auto-minting ${BUDGET} sats from ${MINT_URL}`)
     const balance = await walletGetBalance()
-    log(`Payment: invoice via wallet (balance: ${balance} sats)`)
+    log(`Wallet balance: ${balance} sats`)
     if (balance < BUDGET) {
-      warn(`Wallet balance (${balance} sats) is less than budget (${BUDGET} sats)`)
+      warn(`Wallet balance (${balance} sats) < budget (${BUDGET} sats). Proceeding anyway.`)
+    }
+    try {
+      // 1. Request mint quote (Lightning invoice)
+      log('Requesting mint quote...')
+      const { quote, invoice } = await createMintQuote(MINT_URL, BUDGET)
+      log(`Mint quote: ${quote} (invoice: ${invoice.slice(0, 30)}...)`)
+
+      // 2. Pay the invoice via platform NWC wallet
+      log('Paying mint invoice via NWC wallet...')
+      const payResult = await walletPayInvoice(invoice)
+      if (!payResult.ok) {
+        throw new Error(`Payment failed: ${payResult.error}`)
+      }
+      log(`Invoice paid (preimage: ${payResult.preimage?.slice(0, 16)}...)`)
+
+      // 3. Claim minted proofs
+      log('Claiming minted tokens...')
+      const token = await claimMintQuote(MINT_URL, BUDGET, quote)
+      const { mint, proofs } = decodeCashuToken(token)
+      cashuState = { mintUrl: mint, proofs }
+      paymentMethod = 'cashu'
+      const totalMinted = proofs.reduce((s, p) => s + p.amount, 0)
+      log(`Minted ${totalMinted} sats Cashu token — using Cashu payment mode`)
+    } catch (e: any) {
+      warn(`Auto-mint failed: ${e.message}`)
+      warn('Falling back to invoice payment mode')
+      paymentMethod = 'invoice'
     }
   } else {
     warn('No payment method available.')
     warn('  Option 1 (default): --cashu-token=cashuA... (Cashu eCash token)')
-    warn('  Option 2: --agent=NAME (pay invoices via built-in wallet)')
+    warn('  Option 2: --agent=NAME (auto-mints Cashu via NWC wallet)')
     await node.destroy()
     process.exit(1)
   }

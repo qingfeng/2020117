@@ -354,7 +354,7 @@ export async function updateProfile(fields: {
 export async function walletPayInvoice(bolt11: string): Promise<{ ok: boolean; preimage?: string; amount_sats?: number; error?: string }> {
   if (!API_KEY) return { ok: false, error: 'No API key' }
   try {
-    const resp = await fetch(`${BASE_URL}/api/wallet/send`, {
+    const resp = await fetch(`${BASE_URL}/api/wallet/pay`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
       body: JSON.stringify({ bolt11 }),

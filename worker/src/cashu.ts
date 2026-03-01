@@ -78,3 +78,43 @@ export function encodeCashuToken(mintUrl: string, proofs: Proof[]): string {
   return getEncodedTokenV4({ mint: mintUrl, proofs })
 }
 
+/**
+ * Request a mint quote — returns a Lightning invoice to pay for minting tokens.
+ */
+export async function createMintQuote(
+  mintUrl: string,
+  amountSats: number,
+): Promise<{ quote: string; invoice: string }> {
+  const wallet = await getWallet(mintUrl)
+  const quoteRes = await wallet.createMintQuote(amountSats)
+  return { quote: quoteRes.quote, invoice: quoteRes.request }
+}
+
+/**
+ * Claim a paid mint quote — polls for payment, then mints proofs and returns an encoded token.
+ * Throws if the quote is not paid within the timeout.
+ */
+export async function claimMintQuote(
+  mintUrl: string,
+  amountSats: number,
+  quoteId: string,
+  timeoutMs = 60_000,
+): Promise<string> {
+  const wallet = await getWallet(mintUrl)
+
+  // Poll until paid or timeout
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const check = await wallet.checkMintQuote(quoteId)
+    if (check.state === 'PAID') {
+      const proofs = await wallet.mintProofs(amountSats, quoteId)
+      return getEncodedTokenV4({ mint: mintUrl, proofs })
+    }
+    if (check.state === 'ISSUED') {
+      throw new Error('Mint quote already issued')
+    }
+    await new Promise(r => setTimeout(r, 2000))
+  }
+  throw new Error('Mint quote payment timeout')
+}
+

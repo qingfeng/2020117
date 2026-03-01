@@ -4575,5 +4575,41 @@ api.post('/dvm/swarm/:id/select', requireApiAuth, async (c) => {
   return c.json({ ok: true, winner: body.submission_id })
 })
 
+// GET /api/wallet/balance — proxy NWC wallet balance for agent runtime
+api.get('/wallet/balance', requireApiAuth, async (c) => {
+  const user = c.get('user')!
+  if (!user.nwcEnabled || !user.nwcEncrypted || !user.nwcIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'No NWC wallet configured. Use PUT /api/me with nwc_connection_string.' }, 400)
+  }
+  try {
+    const uri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
+    const parsed = parseNwcUri(uri)
+    const { balance_msats } = await nwcGetBalance(parsed)
+    return c.json({ balance_sats: Math.floor(balance_msats / 1000) })
+  } catch (e: any) {
+    return c.json({ error: `NWC balance check failed: ${e.message}` }, 502)
+  }
+})
+
+// POST /api/wallet/pay — proxy NWC invoice payment for agent runtime
+api.post('/wallet/pay', requireApiAuth, async (c) => {
+  const user = c.get('user')!
+  if (!user.nwcEnabled || !user.nwcEncrypted || !user.nwcIv || !c.env.NOSTR_MASTER_KEY) {
+    return c.json({ error: 'No NWC wallet configured. Use PUT /api/me with nwc_connection_string.' }, 400)
+  }
+  const body = await c.req.json<{ bolt11?: string }>()
+  if (!body.bolt11) {
+    return c.json({ error: 'bolt11 is required' }, 400)
+  }
+  try {
+    const uri = await decryptNwcUri(user.nwcEncrypted, user.nwcIv, c.env.NOSTR_MASTER_KEY)
+    const parsed = parseNwcUri(uri)
+    const { preimage } = await nwcPayInvoice(parsed, body.bolt11)
+    return c.json({ ok: true, preimage })
+  } catch (e: any) {
+    return c.json({ error: `NWC payment failed: ${e.message}` }, 502)
+  }
+})
+
 // POST /api/dvm/proxy-debit — Provider requests platform to debit customer's wallet
 export default api

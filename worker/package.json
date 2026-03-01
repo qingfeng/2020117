@@ -1,7 +1,7 @@
 {
   "name": "2020117-agent",
-  "version": "0.3.3",
-  "description": "2020117 agent runtime — API polling + Hyperswarm P2P + CLINK Lightning payments",
+  "version": "0.3.6",
+  "description": "2020117 agent runtime — API polling + Hyperswarm P2P + Cashu/Lightning payments",
   "type": "module",
   "bin": {
     "2020117-agent": "./dist/agent.js",
@@ -13,7 +13,8 @@
   "exports": {
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
-    "./clink": "./dist/clink.js",
+    "./cashu": "./dist/cashu.js",
+    "./lightning": "./dist/clink.js",
     "./api": "./dist/api.js"
   },
   "scripts": {
@@ -26,7 +27,7 @@
     "dev:session": "npx tsx src/session.ts"
   },
   "dependencies": {
-    "@shocknet/clink-sdk": "^1.5.4",
+    "@cashu/cashu-ts": "^2.5.3",
     "hyperswarm": "^4.17.0",
     "ws": "^8.19.0"
   },

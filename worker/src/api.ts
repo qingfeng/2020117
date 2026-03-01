@@ -18,7 +18,6 @@ interface KeyEntry {
   api_key: string
   user_id?: string
   username?: string
-  ndebit?: string
 }
 
 function loadApiKey(): string | null {
@@ -52,27 +51,6 @@ export function loadAgentName(): string | null {
       const keys = JSON.parse(raw) as Record<string, KeyEntry>
       const firstName = Object.keys(keys)[0]
       if (firstName) return firstName
-    } catch {
-      // try next
-    }
-  }
-  return null
-}
-
-/** Returns the ndebit from env or .2020117_keys file */
-export function loadNdebit(): string | null {
-  if (process.env.CLINK_NDEBIT) return process.env.CLINK_NDEBIT
-
-  const agentName = process.env.AGENT_NAME || process.env.AGENT
-  for (const dir of [process.cwd(), homedir()]) {
-    try {
-      const raw = readFileSync(join(dir, '.2020117_keys'), 'utf-8')
-      const keys = JSON.parse(raw) as Record<string, KeyEntry>
-      if (agentName && keys[agentName]?.ndebit) return keys[agentName].ndebit
-      if (!agentName) {
-        const first = Object.values(keys)[0]
-        if (first?.ndebit) return first.ndebit
-      }
     } catch {
       // try next
     }
@@ -371,24 +349,27 @@ export async function updateProfile(fields: {
   return result !== null
 }
 
-// --- Proxy debit (platform debits on provider's behalf) ---
+// --- Wallet API (built-in Lightning wallet) ---
 
-export interface ProxyDebitResult {
-  ok: boolean
-  preimage?: string
-  error?: string
+export async function walletPayInvoice(bolt11: string): Promise<{ ok: boolean; preimage?: string; amount_sats?: number; error?: string }> {
+  if (!API_KEY) return { ok: false, error: 'No API key' }
+  try {
+    const resp = await fetch(`${BASE_URL}/api/wallet/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+      body: JSON.stringify({ bolt11 }),
+    })
+    const data = await resp.json() as any
+    if (!resp.ok) return { ok: false, error: data.error || `HTTP ${resp.status}` }
+    return { ok: true, preimage: data.preimage, amount_sats: data.amount_sats }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
 }
 
-export async function proxyDebit(opts: {
-  ndebit: string
-  lightningAddress: string
-  amountSats: number
-}): Promise<ProxyDebitResult | null> {
-  return apiPost('/api/dvm/proxy-debit', {
-    ndebit: opts.ndebit,
-    lightning_address: opts.lightningAddress,
-    amount_sats: opts.amountSats,
-  })
+export async function walletGetBalance(): Promise<number> {
+  const data = await apiGet<{ balance_sats: number }>('/api/wallet/balance')
+  return data?.balance_sats ?? 0
 }
 
 /**

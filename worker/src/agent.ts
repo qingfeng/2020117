@@ -2,7 +2,7 @@
 /**
  * Unified Agent Runtime — runs as a long-lived daemon that handles:
  *   1. Async platform tasks (inbox polling → accept → process → submit result)
- *   2. P2P sessions (Hyperswarm + CLINK per-minute billing)
+ *   2. P2P sessions (Hyperswarm + Lightning invoice per-minute billing)
  *
  * Both channels share a single capacity counter so the agent never overloads.
  *
@@ -47,10 +47,11 @@ import {
   getInbox, acceptJob, sendFeedback, submitResult,
   createJob, getJob, getProfile, reportSession,
 } from './api.js'
-import { initClinkAgent, collectPayment } from './clink.js'
+import { generateInvoice } from './clink.js'
+import { receiveCashuToken } from './cashu.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
-// Polyfill global WebSocket for Node.js < 22 (needed by @shocknet/clink-sdk)
+// Polyfill global WebSocket for Node.js < 22 (needed by ws tunnel)
 if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 // --- Config from env ---
@@ -61,7 +62,7 @@ const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 
-// --- CLINK payment config ---
+// --- Lightning payment config ---
 let LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
 
 // --- Sub-task delegation config ---
@@ -165,13 +166,7 @@ async function main() {
     }
   }
 
-  // 3. Initialize CLINK agent identity (for P2P session debit)
-  if (LIGHTNING_ADDRESS) {
-    const { pubkey } = initClinkAgent()
-    console.log(`[${label}] CLINK: ${LIGHTNING_ADDRESS} (agent pubkey: ${pubkey.slice(0, 16)}...)`)
-  }
-
-  // 4. Platform registration + heartbeat
+  // 3. Platform registration + heartbeat
   await setupPlatform(label)
 
   // 5. Async inbox poller
@@ -355,15 +350,46 @@ interface SessionState {
   peerId: string
   sessionId: string
   satsPerMinute: number
-  ndebit: string             // customer's ndebit1... authorization
+  paymentMethod: 'cashu' | 'invoice'
   totalEarned: number
   startedAt: number
-  lastDebitAt: number
-  debitTimer: ReturnType<typeof setInterval> | null
+  lastPaidAt: number
+  billingTimer: ReturnType<typeof setInterval> | null
   timeoutTimer: ReturnType<typeof setTimeout> | null
 }
 
 const activeSessions = new Map<string, SessionState>()
+
+/** Send a billing tick to the customer — Cashu: request amount, Invoice: send bolt11 */
+async function sendBillingTick(node: SwarmNode, session: SessionState, amount: number, label: string) {
+  const tickId = randomBytes(4).toString('hex')
+
+  if (session.paymentMethod === 'invoice') {
+    try {
+      const bolt11 = await generateInvoice(LIGHTNING_ADDRESS, amount)
+      node.send(session.socket, {
+        type: 'session_tick',
+        id: tickId,
+        session_id: session.sessionId,
+        bolt11,
+        amount,
+      })
+      console.log(`[${label}] Session ${session.sessionId}: sent invoice (${amount} sats)`)
+    } catch (e: any) {
+      console.log(`[${label}] Session ${session.sessionId}: invoice error (${e.message}) — ending session`)
+      endSession(node, session, label)
+    }
+  } else {
+    // Cashu: just request the amount, customer sends token
+    node.send(session.socket, {
+      type: 'session_tick',
+      id: tickId,
+      session_id: session.sessionId,
+      amount,
+    })
+    console.log(`[${label}] Session ${session.sessionId}: requested payment (${amount} sats)`)
+  }
+}
 
 // Backend WebSocket connections for WS tunnel (keyed by ws_id)
 const backendWebSockets = new Map<string, { ws: WebSocket; peerId: string }>()
@@ -389,14 +415,11 @@ async function startSwarmListener(label: string) {
     // --- Session protocol ---
 
     if (msg.type === 'session_start') {
-      if (!LIGHTNING_ADDRESS) {
-        console.warn(`[${label}] Session rejected: no --lightning-address configured`)
-        node.send(socket, { type: 'error', id: msg.id, message: 'Provider has no Lightning Address configured' })
-        return
-      }
+      // Negotiate payment method: cashu (default) or invoice (requires Lightning Address)
+      const paymentMethod = msg.payment_method || 'cashu'
 
-      if (!msg.ndebit) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'session_start requires ndebit authorization' })
+      if (paymentMethod === 'invoice' && !LIGHTNING_ADDRESS) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Invoice payment requires provider Lightning Address' })
         return
       }
 
@@ -406,103 +429,69 @@ async function startSwarmListener(label: string) {
         || msg.sats_per_minute
         || 10
 
-      const BILLING_INTERVAL_MIN = 10
-      const debitAmount = satsPerMinute * BILLING_INTERVAL_MIN
+      const BILLING_INTERVAL_MIN = 1
+      const billingAmount = satsPerMinute * BILLING_INTERVAL_MIN
 
       const sessionId = randomBytes(8).toString('hex')
-      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min, billing every ${BILLING_INTERVAL_MIN}min (${debitAmount} sats)`)
+      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min, payment=${paymentMethod}, billing every ${BILLING_INTERVAL_MIN}min (${billingAmount} sats)`)
 
       const session: SessionState = {
         socket,
         peerId,
         sessionId,
         satsPerMinute,
-        ndebit: msg.ndebit,
+        paymentMethod,
         totalEarned: 0,
         startedAt: Date.now(),
-        lastDebitAt: Date.now(),
-        debitTimer: null,
+        lastPaidAt: Date.now(),
+        billingTimer: null,
         timeoutTimer: null,
       }
 
       activeSessions.set(sessionId, session)
-
-      // Debit first 10 minutes immediately (prepaid model)
-      let firstDebit: Awaited<ReturnType<typeof collectPayment>>
-      try {
-        firstDebit = await collectPayment({
-          ndebit: session.ndebit,
-          lightningAddress: LIGHTNING_ADDRESS,
-          amountSats: debitAmount,
-        })
-      } catch (e: any) {
-        console.warn(`[${label}] Session ${sessionId}: first debit error: ${e.message}`)
-        node.send(socket, { type: 'error', id: msg.id, message: `Payment error: ${e.message}` })
-        activeSessions.delete(sessionId)
-        return
-      }
-
-      if (!firstDebit.ok) {
-        console.warn(`[${label}] Session ${sessionId}: first debit failed: ${firstDebit.error}`)
-        node.send(socket, { type: 'error', id: msg.id, message: `Payment failed: ${firstDebit.error}` })
-        activeSessions.delete(sessionId)
-        return
-      }
-
-      session.totalEarned += debitAmount
-      session.lastDebitAt = Date.now()
-      console.log(`[${label}] Session ${sessionId}: first ${BILLING_INTERVAL_MIN}min paid (${debitAmount} sats)`)
 
       node.send(socket, {
         type: 'session_ack',
         id: msg.id,
         session_id: sessionId,
         sats_per_minute: satsPerMinute,
+        payment_method: paymentMethod,
       })
 
-      // Notify customer of the debit
-      node.send(socket, {
-        type: 'session_tick_ack',
-        id: sessionId,
-        session_id: sessionId,
-        amount: debitAmount,
-        balance: msg.budget ? msg.budget - session.totalEarned : undefined,
-      })
+      // Send first billing tick
+      await sendBillingTick(node, session, billingAmount, label)
 
-      // Debit every 10 minutes
-      session.debitTimer = setInterval(async () => {
-        let debit: Awaited<ReturnType<typeof collectPayment>>
-        try {
-          debit = await collectPayment({
-            ndebit: session.ndebit,
-            lightningAddress: LIGHTNING_ADDRESS,
-            amountSats: debitAmount,
-          })
-        } catch (e: any) {
-          console.log(`[${label}] Session ${sessionId}: debit error (${e.message}) — ending session`)
-          endSession(node, session, label)
-          return
-        }
-
-        if (!debit.ok) {
-          console.log(`[${label}] Session ${sessionId}: debit failed (${debit.error}) — ending session`)
-          endSession(node, session, label)
-          return
-        }
-
-        session.totalEarned += debitAmount
-        session.lastDebitAt = Date.now()
-        console.log(`[${label}] Session ${sessionId}: debit OK (+${debitAmount}, total: ${session.totalEarned} sats)`)
-
-        // Notify customer
-        node.send(socket, {
-          type: 'session_tick_ack',
-          id: sessionId,
-          session_id: sessionId,
-          amount: debitAmount,
-          balance: msg.budget ? msg.budget - session.totalEarned : undefined,
-        })
+      // Recurring billing every 10 minutes
+      session.billingTimer = setInterval(() => {
+        sendBillingTick(node, session, billingAmount, label)
       }, BILLING_INTERVAL_MIN * 60_000)
+
+      return
+    }
+
+    // Customer sent payment (Cashu token or Lightning preimage)
+    if (msg.type === 'session_tick_ack') {
+      const session = activeSessions.get(msg.session_id || '')
+      if (!session) return
+
+      if (msg.cashu_token) {
+        // Cashu mode: verify token by swapping at mint
+        try {
+          const { amount } = await receiveCashuToken(msg.cashu_token)
+          session.totalEarned += amount
+          session.lastPaidAt = Date.now()
+          console.log(`[${label}] Session ${session.sessionId}: Cashu payment received (+${amount}, total: ${session.totalEarned} sats)`)
+        } catch (e: any) {
+          console.warn(`[${label}] Session ${session.sessionId}: Cashu token invalid: ${e.message} — ending session`)
+          endSession(node, session, label)
+        }
+      } else if (msg.preimage) {
+        // Invoice mode: preimage proves payment
+        const amount = msg.amount || 0
+        session.totalEarned += amount
+        session.lastPaidAt = Date.now()
+        console.log(`[${label}] Session ${session.sessionId}: invoice payment received (+${amount}, total: ${session.totalEarned} sats)`)
+      }
 
       return
     }
@@ -701,7 +690,7 @@ async function startSwarmListener(label: string) {
 
   })
 
-  // Handle customer disconnect — payments already settled via CLINK
+  // Handle customer disconnect
   node.on('peer-leave', (peerId: string) => {
     const tag = peerId.slice(0, 8)
 
@@ -735,10 +724,10 @@ function findSessionBySocket(socket: any): SessionState | undefined {
 function endSession(node: SwarmNode, session: SessionState, label: string) {
   const durationS = Math.round((Date.now() - session.startedAt) / 1000)
 
-  // Stop debit timer
-  if (session.debitTimer) {
-    clearInterval(session.debitTimer)
-    session.debitTimer = null
+  // Stop billing timer
+  if (session.billingTimer) {
+    clearInterval(session.billingTimer)
+    session.billingTimer = null
   }
 
   if (session.timeoutTimer) {
@@ -768,7 +757,7 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
 
   console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
 
-  // Update P2P lifetime counters — no batch claim needed with CLINK (payments settled instantly)
+  // Update P2P lifetime counters
   state.p2pSessionsCompleted++
   state.p2pTotalEarnedSats += session.totalEarned
 

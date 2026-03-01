@@ -1,65 +1,9 @@
 /**
- * CLINK payment utilities — debit-based Lightning payments for P2P sessions
+ * Lightning payment utilities — invoice generation via LNURL-pay
  *
- * Provider uses ndebit to pull payments from customer's wallet.
- * Invoice generation via LNURL-pay from provider's own Lightning Address.
+ * Provider generates invoices from their own Lightning Address.
+ * Customer pays invoices via built-in wallet (POST /api/wallet/send).
  */
-
-import { ClinkSDK, decodeBech32, generateSecretKey, getPublicKey, newNdebitPaymentRequest } from '@shocknet/clink-sdk'
-import { hasApiKey, proxyDebit } from './api.js'
-
-// --- Agent identity ---
-
-let agentKey: Uint8Array | null = null
-let agentPubkey: string | null = null
-
-export function initClinkAgent(): { privateKey: Uint8Array; pubkey: string } {
-  agentKey = generateSecretKey()
-  agentPubkey = getPublicKey(agentKey)
-  console.log(`[clink] Agent identity: ${agentPubkey.slice(0, 16)}...`)
-  return { privateKey: agentKey, pubkey: agentPubkey }
-}
-
-// --- Debit (pull payment from customer) ---
-
-export interface DebitResult {
-  ok: boolean
-  preimage?: string
-  error?: string
-}
-
-/**
- * Provider calls this to debit customer's wallet via CLINK protocol.
- * Sends a Kind 21002 event to the customer's wallet service via Nostr relay.
- */
-export async function debitCustomer(opts: {
-  ndebit: string           // customer's ndebit1... authorization
-  bolt11: string           // provider-generated invoice (pays provider)
-  timeoutSeconds?: number
-}): Promise<DebitResult> {
-  if (!agentKey) throw new Error('CLINK agent not initialized — call initClinkAgent() first')
-
-  const decoded = decodeBech32(opts.ndebit)
-  if (decoded.type !== 'ndebit') throw new Error(`Invalid ndebit string (got type: ${decoded.type})`)
-
-  const sdk = new ClinkSDK({
-    privateKey: agentKey,
-    relays: [decoded.data.relay],
-    toPubKey: decoded.data.pubkey,
-    defaultTimeoutSeconds: opts.timeoutSeconds ?? 30,
-  })
-
-  const result = await sdk.Ndebit(
-    newNdebitPaymentRequest(opts.bolt11, undefined, decoded.data.pointer),
-  )
-
-  if (result.res === 'ok') {
-    return { ok: true, preimage: (result as any).preimage }
-  }
-  return { ok: false, error: (result as any).error || 'Debit rejected' }
-}
-
-// --- Invoice generation via LNURL-pay ---
 
 /**
  * Resolve a Lightning Address to a bolt11 invoice via LNURL-pay protocol.
@@ -100,44 +44,4 @@ export async function generateInvoice(lightningAddress: string, amountSats: numb
   if (!invoiceData.pr) throw new Error(`No invoice returned: ${invoiceData.reason || 'unknown error'}`)
 
   return invoiceData.pr
-}
-
-// --- Combined: generate invoice + debit ---
-
-/**
- * Full payment cycle: generate invoice from provider's Lightning Address,
- * then debit customer's wallet via CLINK.
- *
- * Priority: platform proxy (if API key available) → direct debit (if agent key initialized).
- * Proxy uses the platform's pre-authorized CLINK identity, so providers don't need
- * individual DebitAccess on customer wallets. Direct debit works for power users
- * who pre-authorize each other's keys.
- */
-export async function collectPayment(opts: {
-  ndebit: string              // customer's ndebit authorization
-  lightningAddress: string    // provider's Lightning Address
-  amountSats: number          // amount to collect
-  timeoutSeconds?: number
-}): Promise<DebitResult> {
-  // Try platform proxy first (provider doesn't need DebitAccess)
-  if (hasApiKey()) {
-    console.log(`[clink] Proxy debit: ${opts.amountSats} sats → ${opts.lightningAddress}`)
-    const result = await proxyDebit({
-      ndebit: opts.ndebit,
-      lightningAddress: opts.lightningAddress,
-      amountSats: opts.amountSats,
-    })
-    if (result) {
-      return { ok: result.ok, preimage: result.preimage, error: result.error }
-    }
-    console.warn('[clink] Proxy debit unavailable, trying direct...')
-  }
-
-  // Fallback: direct debit (requires provider's CLINK key to be authorized)
-  const bolt11 = await generateInvoice(opts.lightningAddress, opts.amountSats)
-  return debitCustomer({
-    ndebit: opts.ndebit,
-    bolt11,
-    timeoutSeconds: opts.timeoutSeconds,
-  })
 }

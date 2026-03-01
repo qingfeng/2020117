@@ -79,7 +79,7 @@ export class LightningPubAdapter implements LightningAdapter {
     const result = await this.rpc<{
       preimage: string
       amount_paid: number
-    }>('/api/app/user/invoice/pay', {
+    }>('/api/app/invoice/pay', {
       user_identifier: params.user_id,
       invoice: params.bolt11,
     })

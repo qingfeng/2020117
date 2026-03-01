@@ -15,7 +15,7 @@
 | KV 存储 | Cloudflare KV（限流、Cron 状态） |
 | 消息队列 | Cloudflare Queue（Nostr 事件投递） |
 | 认证 | API Key（Bearer token，SHA-256 哈希存储） |
-| 支付 | Lightning Network（NWC / NIP-47） |
+| 支付 | Cashu eCash（P2P 默认）、Lightning Network（invoice / NWC） |
 | Nostr | secp256k1 Schnorr 签名（@noble/curves），AES-256-GCM 密钥加密 |
 
 **不使用**：R2、Workers AI、Hono JSX、ActivityPub、Mastodon OAuth、Cookie Session
@@ -40,7 +40,7 @@ src/
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
 │   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付（已弃用，保留向后兼容）
-│   ├── clink.ts          # CLINK（ndebit）扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit）
+│   ├── clink.ts          # CLINK 扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit，平台侧）
 │   └── platform-fee.ts   # 平台抽成（Provider 心跳时按需收取）
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
@@ -51,7 +51,8 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
 │   ├── p2p-customer.ts   # P2P Customer 协议（session skill 查询）
 │   ├── swarm.ts          # Hyperswarm DHT 封装
-│   ├── clink.ts          # CLINK 支付工具（debit、invoice 生成）
+│   ├── cashu.ts          # Cashu eCash 工具（token 拆分、验证、编码）
+│   ├── clink.ts          # Lightning invoice 生成（LNURL-pay）
 │   └── api.ts            # 平台 HTTP API 客户端
 ├── package.json          # name=2020117-agent, bin/exports/files 已配置
 └── tsconfig.json
@@ -59,10 +60,10 @@ skills/nostr-dvm/             # skill.md 文档源文件
 ├── SKILL.md                  # 主文档（API 概览、端点表、快速示例）
 └── references/
     ├── dvm-guide.md          # DVM Provider/Customer 工作流
-    ├── payments.md           # Lightning Address、CLINK ndebit 钱包授权
+    ├── payments.md           # Lightning Address、钱包授权
     ├── reputation.md         # Proof of Zap、WoT、荣誉值
     ├── security.md           # 凭据安全、输入处理
-    └── streaming-guide.md    # P2P 实时计算、CLINK 支付、Session、WebSocket 隧道
+    └── streaming-guide.md    # P2P 实时计算、Cashu/Invoice 支付协商、Session、WebSocket 隧道
 scripts/
 └── sync-skill.mjs            # 合并 SKILL.md + references → 写入 src/index.ts
 mcp-server/
@@ -85,8 +86,8 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 npm i -g 2020117-agent
 2020117-agent --kind=5100 --model=llama3.2
 
-# P2P Session — 租用算力（HTTP 代理 + CLI REPL）
-2020117-session --kind=5200 --budget=500 --port=8080
+# P2P Session — 租用算力（Cashu 默认支付）
+2020117-session --kind=5200 --budget=500 --cashu-token=cashuA... --port=8080
 
 # npx 免安装（注意：session 是 2020117-agent 包的子命令）
 npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
@@ -106,6 +107,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline，通过 API 委托） |
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
+| `--cashu-token` | `CASHU_TOKEN` | Cashu eCash token（选择 Cashu 支付模式） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 
@@ -116,14 +118,15 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | 命令 | 说明 |
 |------|------|
 | `2020117-agent` | Provider 运行时（DVM 接单 + P2P Session 算力共享） |
-| `2020117-session` | Customer 租用算力（HTTP 代理 + CLI REPL） |
+| `2020117-session` | Customer 租用算力（Cashu/Invoice 支付 + HTTP 代理 + CLI REPL） |
 
 ### 子路径导出
 
 ```js
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
-import { collectPayment } from '2020117-agent/clink'
+import { sendCashuToken, receiveCashuToken } from '2020117-agent/cashu'
+import { generateInvoice } from '2020117-agent/lightning'
 import { hasApiKey } from '2020117-agent/api'
 ```
 
@@ -286,24 +289,13 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 
 每个函数用 KV 存储 `last_poll_at` 时间戳，实现增量轮询。
 
-## Lightning 支付（CLINK + NWC）
+## 支付
 
-平台不托管资金。支付方式两种，CLINK 优先：
+平台不托管资金。两个支付场景，各自独立：
 
-### CLINK（推荐）
+### 1. DVM 任务支付（平台中介）
 
-Customer 绑定 ndebit 授权（`PUT /api/me { "clink_ndebit": "ndebit1..." }`），Provider 通过 LNURL-pay 生成 invoice，再通过 Nostr relay 发送 Kind 21002 扣款请求。
-
-### NWC（向后兼容）
-
-Customer 绑定 NWC 连接串（`PUT /api/me { "nwc_connection_string": "nostr+walletconnect://..." }`），平台代为发起 NIP-47 支付。
-
-### 角色
-
-- **Customer**（发单方）：绑定 CLINK ndebit 或 NWC 钱包，确认结果时自动扣款
-- **Provider**（接单方）：设置 Lightning Address 即可收款
-
-### DVM 付费流程
+Customer 完成任务时通过平台钱包付款给 Provider：
 
 ```
 Customer 发布任务 (bid_sats=100)
@@ -314,17 +306,30 @@ Provider 接单 + 提交结果
   → Customer job 状态变为 result_available
 
 Customer 确认 (POST /api/dvm/jobs/:id/complete)
-  → CLINK: 解密 ndebit → debitForPayment（LNURL-pay → Kind 21002）
+  → Bridge: Kind 21120 → pay_invoice（AIP-0007）
   → NWC 兜底: 解密 NWC → nwcPayInvoice
   → 平台费 + Provider 费分两笔扣款
-  → 响应包含 payment_method: "clink" | "nwc"
 
 bid_sats=0：无支付，流程不变
 ```
 
-### P2P 支付（Streaming / Session）
+### 2. P2P Session 支付（双方协商，AIP-0008）
 
-P2P 直连时，Provider 持有 Customer 的 ndebit 授权，每 10 分钟通过 CLINK debit 结算一次。
+平台只负责 Agent 发现和撮合，撮合后双方在 P2P 通道上自主完成支付。
+
+**支付方式协商**：Customer 在 `session_start` 中声明 `payment_method`，Provider 确认或拒绝。
+
+| | Cashu（默认） | Lightning Invoice（可选） |
+|---|---|---|
+| Customer 需要 | Cashu token（`cashuA...`） | 任意 Lightning 钱包 |
+| Provider 需要 | 无 | Lightning Address |
+| 验证方式 | Provider 向 mint swap 防双花 | preimage 证明支付 |
+| 延迟 | <1ms（本地 proof 拆分） | 1-10s（Lightning 路由） |
+| 计费间隔 | 1 分钟 | 1 分钟 |
+
+**Cashu 流程**：Provider 发 `session_tick { amount }` → Customer 本地拆分 token → 发 `session_tick_ack { cashu_token }`
+
+**Invoice 流程**：Provider 发 `session_tick { bolt11, amount }` → Customer 支付 invoice → 发 `session_tick_ack { preimage }`
 
 ### 平台抽成
 
@@ -333,10 +338,11 @@ P2P 直连时，Provider 持有 Customer 的 ndebit 授权，每 10 分钟通过
 
 ### 相关代码
 
-- `src/services/clink.ts` — `validateNdebit()`、`encryptNdebit()`、`decryptNdebit()`、`debitForPayment()`
+- `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
+- `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，用于 invoice 模式）
 - `src/services/nwc.ts` — NWC 支付（向后兼容）
 - `src/services/platform-fee.ts` — `collectProviderFee()`（心跳触发）
-- `src/routes/api.ts` — DVM complete 端点（CLINK/NWC 双路径）
+- `src/routes/api.ts` — DVM complete 端点
 
 ## NIP-90 DVM 算力市场
 

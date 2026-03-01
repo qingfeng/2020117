@@ -53,7 +53,10 @@ export interface SwarmMessage {
   sats_per_minute?: number    // session_start/ack: billing rate
   balance?: number            // session_tick_ack: remaining balance
   duration_s?: number         // session_end: total session duration in seconds
-  ndebit?: string             // session_start: customer's ndebit1... authorization (CLINK)
+  payment_method?: 'cashu' | 'invoice'  // session_start/ack: negotiated payment method
+  bolt11?: string             // session_tick (invoice mode): Lightning invoice
+  preimage?: string           // session_tick_ack (invoice mode): payment proof
+  cashu_token?: string        // session_tick_ack (cashu mode): Cashu token string
   // HTTP proxy fields
   method?: string             // http_request: HTTP method
   path?: string               // http_request: URL path

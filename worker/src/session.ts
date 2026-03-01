@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * P2P Session Client — "rent" a provider's service over Hyperswarm with
- * per-minute CLINK debit payments.
+ * per-minute Lightning invoice payments.
  *
  * Features:
- *   - Provider pulls per-minute payments via CLINK debit (ndebit authorization)
+ *   - Customer pays provider's invoices via built-in wallet
  *   - HTTP proxy server for browser-based access to provider APIs
  *   - Interactive CLI REPL (generate, status, skill, help, quit)
  *
@@ -25,29 +25,31 @@ for (const arg of process.argv.slice(2)) {
     case '--budget':   process.env.BUDGET_SATS = val; break
     case '--port':     process.env.SESSION_PORT = val; break
     case '--agent':    process.env.AGENT = val; break
-    case '--provider': process.env.PROVIDER_PEER = val; break
-    case '--ndebit':   process.env.CLINK_NDEBIT = val; break
+    case '--provider':    process.env.PROVIDER_PEER = val; break
+    case '--cashu-token': process.env.CASHU_TOKEN = val; break
   }
 }
 
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
-import { loadNdebit } from './api.js'
+import { walletPayInvoice, walletGetBalance, hasApiKey } from './api.js'
+import { decodeCashuToken, sendCashuToken, peekCashuToken, type Proof } from './cashu.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Socket } from 'net'
 import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
-// Polyfill global WebSocket for Node.js < 22 (needed by @shocknet/clink-sdk)
-if (!globalThis.WebSocket) (globalThis as any).WebSocket = WsWebSocket
 
 // --- Config ---
 
 const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
-const NDEBIT = process.env.CLINK_NDEBIT || loadNdebit() || ''
+const CASHU_TOKEN = process.env.CASHU_TOKEN || ''
+
+// Mutable Cashu wallet state (loaded from CASHU_TOKEN at startup)
+let cashuState: { mintUrl: string; proofs: Proof[] } | null = null
 const TICK_INTERVAL_MS = 60_000
 const HTTP_TIMEOUT_MS = 60_000
 
@@ -135,7 +137,7 @@ function sendAndWait(msg: SwarmMessage, timeoutMs: number): Promise<SwarmMessage
 // --- 6. Message handler ---
 
 function setupMessageHandler() {
-  state.node!.on('message', (msg: SwarmMessage) => {
+  state.node!.on('message', async (msg: SwarmMessage) => {
     // Handle chunked HTTP responses — reassemble before resolving
     if (msg.type === 'http_response' && msg.chunk_total && msg.chunk_total > 1) {
       const id = msg.id
@@ -190,14 +192,60 @@ function setupMessageHandler() {
         break
       }
 
+      case 'session_tick': {
+        const amount = msg.amount || 0
+        if (state.totalSpent + amount > BUDGET) {
+          log(`Budget exhausted (need ${amount}, remaining ${remainingSats()}) — ending session`)
+          endSession()
+          break
+        }
+
+        if (msg.bolt11) {
+          // Invoice mode: pay bolt11 via wallet
+          log(`Paying invoice: ${amount} sats...`)
+          const payResult = await walletPayInvoice(msg.bolt11)
+          if (payResult.ok) {
+            state.totalSpent += amount
+            log(`Paid ${amount} sats (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
+            state.node!.send(state.socket, {
+              type: 'session_tick_ack',
+              id: msg.id,
+              session_id: state.sessionId,
+              preimage: payResult.preimage,
+              amount,
+            })
+          } else {
+            warn(`Invoice payment failed: ${payResult.error} — ending session`)
+            endSession()
+          }
+        } else if (cashuState) {
+          // Cashu mode: split tokens and send
+          log(`Paying with Cashu: ${amount} sats...`)
+          try {
+            const { token, change } = await sendCashuToken(cashuState.mintUrl, cashuState.proofs, amount)
+            cashuState.proofs = change
+            state.totalSpent += amount
+            log(`Paid ${amount} sats (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
+            state.node!.send(state.socket, {
+              type: 'session_tick_ack',
+              id: msg.id,
+              session_id: state.sessionId,
+              cashu_token: token,
+              amount,
+            })
+          } catch (e: any) {
+            warn(`Cashu payment failed: ${e.message} — ending session`)
+            endSession()
+          }
+        } else {
+          warn('No payment method available — ending session')
+          endSession()
+        }
+        break
+      }
+
       case 'session_tick_ack': {
-        // Provider debited our wallet and is reporting the result
-        if (msg.amount !== undefined) {
-          state.totalSpent += msg.amount
-        }
-        if (msg.balance !== undefined) {
-          log(`Debit: ${msg.amount ?? '?'} sats (balance: ${msg.balance} sats, ${estimatedMinutesLeft()} min left)`)
-        }
+        // Ignore — this is our own ack echoed back
         break
       }
 
@@ -260,10 +308,9 @@ function setupMessageHandler() {
   })
 }
 
-// --- 3. Payment tracking (CLINK — provider pulls, customer monitors) ---
-// With CLINK debit, the provider generates invoices and debits the customer's
-// wallet directly. The customer receives session_tick_ack notifications with
-// updated balance. No tick timer needed on the customer side.
+// --- 3. Payment tracking ---
+// Provider sends session_tick with bolt11 invoice every billing period.
+// Customer pays via built-in wallet and sends session_tick_ack with preimage.
 
 // --- 4. HTTP proxy ---
 
@@ -713,24 +760,43 @@ async function main() {
   log(`Pricing: ${satsPerMinute} sats/min`)
   log(`Budget: ${BUDGET} sats (~${Math.floor(BUDGET / satsPerMinute)} min)`)
 
-  // 4. Verify CLINK ndebit authorization
-  if (!NDEBIT) {
-    warn('No ndebit authorization. Provide --ndebit=ndebit1... or set CLINK_NDEBIT env var.')
-    warn('Get your ndebit from your CLINK-compatible wallet (e.g. ShockWallet → Connections).')
+  // 4. Determine payment method: Cashu (default) or invoice (fallback)
+  let paymentMethod: 'cashu' | 'invoice'
+
+  if (CASHU_TOKEN) {
+    // Load Cashu token
+    const { mint, proofs } = decodeCashuToken(CASHU_TOKEN)
+    const tokenAmount = proofs.reduce((sum, p) => sum + p.amount, 0)
+    cashuState = { mintUrl: mint, proofs }
+    paymentMethod = 'cashu'
+    log(`Payment: Cashu (${tokenAmount} sats from ${mint})`)
+    if (tokenAmount < BUDGET) {
+      warn(`Cashu token (${tokenAmount} sats) is less than budget (${BUDGET} sats)`)
+    }
+  } else if (hasApiKey()) {
+    // Fallback to invoice mode via built-in wallet
+    paymentMethod = 'invoice'
+    const balance = await walletGetBalance()
+    log(`Payment: invoice via wallet (balance: ${balance} sats)`)
+    if (balance < BUDGET) {
+      warn(`Wallet balance (${balance} sats) is less than budget (${BUDGET} sats)`)
+    }
+  } else {
+    warn('No payment method available.')
+    warn('  Option 1 (default): --cashu-token=cashuA... (Cashu eCash token)')
+    warn('  Option 2: --agent=NAME (pay invoices via built-in wallet)')
     await node.destroy()
     process.exit(1)
   }
 
-  log(`Payment: CLINK debit (provider pulls per-minute)`)
-
-  // 5. Send session_start with ndebit, wait for session_ack
+  // 5. Send session_start, wait for session_ack
   const startId = randomBytes(4).toString('hex')
   const ackResp = await sendAndWait({
     type: 'session_start',
     id: startId,
     budget: BUDGET,
     sats_per_minute: satsPerMinute,
-    ndebit: NDEBIT,
+    payment_method: paymentMethod,
   }, 15_000)
 
   if (ackResp.type !== 'session_ack' || !ackResp.session_id) {
@@ -749,7 +815,7 @@ async function main() {
   }
 
   log(`Session started: ${state.sessionId}`)
-  log(`Provider will debit ${state.satsPerMinute} sats/min via CLINK`)
+  log(`Billing: ${state.satsPerMinute} sats/min via ${paymentMethod}`)
 
   // 6. Start HTTP proxy
   try {

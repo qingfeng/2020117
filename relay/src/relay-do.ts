@@ -120,12 +120,10 @@ export class RelayDO implements DurableObject {
       const isDvmResult = isDvmKind(event.kind)
       // 6. Zap receipt (9735) — must be writable for zap verification to work
       const isZapReceipt = event.kind === 9735
-      // Encrypted protocol kinds — open to platform/agents (no POW needed)
-      const isProtocolKind = event.kind === 21002 || event.kind === 21000 || event.kind === 21120
-      // Service events (metadata, app data, heartbeats) — used by Lightning.Pub etc
+      // Service events (metadata, app data, heartbeats)
       const isServiceEvent = event.kind === 0 || event.kind === 30078
 
-      if (!isDvmResult && !isZapReceipt && !isProtocolKind && !isServiceEvent) {
+      if (!isDvmResult && !isZapReceipt && !isServiceEvent) {
         // 7. POW check for external users
         const minPow = parseInt(this.env.MIN_POW || '20', 10)
         if (!checkPow(event.id, minPow)) {

@@ -8,7 +8,6 @@ import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
-import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 
 const api = new Hono<AppContext>()
 
@@ -460,7 +459,7 @@ api.get('/activity', async (c) => {
       .leftJoin(users, eq(dvmJobs.userId, users.id))
       .where(or(
         eq(dvmJobs.role, 'customer'),
-        and(eq(dvmJobs.role, 'provider'), eq(dvmJobs.paymentMethod, 'clink'))
+        and(eq(dvmJobs.role, 'provider'), eq(dvmJobs.paymentMethod, 'p2p'))
       ))
       .orderBy(desc(dvmJobs.updatedAt))
       .limit(fetchLimit),
@@ -982,8 +981,6 @@ api.get('/me', requireApiAuth, async (c) => {
     nip05: user.nip05Enabled ? `${user.username}@2020117.xyz` : null,
     nwc_enabled: !!user.nwcEnabled,
     ...(nwcRelayUrl ? { nwc_relay_url: nwcRelayUrl } : {}),
-    clink_ndebit_enabled: !!user.clinkNdebitEnabled,
-    clink_platform_pubkey: getPlatformPubkey(c.env.NOSTR_MASTER_KEY!),
   })
 })
 
@@ -991,7 +988,7 @@ api.get('/me', requireApiAuth, async (c) => {
 api.put('/me', requireApiAuth, async (c) => {
   const user = c.get('user')!
   const db = c.get('db')
-  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string; lightning_address?: string | null; nwc_connection_string?: string | null; clink_ndebit?: string | null }
+  const body = await c.req.json().catch(() => ({})) as { display_name?: string; bio?: string; lightning_address?: string | null; nwc_connection_string?: string | null }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() }
   if (body.display_name !== undefined) updates.displayName = body.display_name.slice(0, 100)
@@ -1027,28 +1024,6 @@ api.put('/me', requireApiAuth, async (c) => {
       updates.nwcEncrypted = encrypted
       updates.nwcIv = iv
       updates.nwcEnabled = 1
-    }
-  }
-
-  // Handle CLINK ndebit authorization
-  if (body.clink_ndebit !== undefined) {
-    if (body.clink_ndebit === null || body.clink_ndebit === '') {
-      // Disconnect CLINK
-      updates.clinkNdebitEncrypted = null
-      updates.clinkNdebitIv = null
-      updates.clinkNdebitEnabled = 0
-    } else {
-      if (!c.env.NOSTR_MASTER_KEY) {
-        return c.json({ error: 'CLINK not available: encryption key not configured' }, 500)
-      }
-      const validation = validateNdebit(body.clink_ndebit)
-      if (!validation.valid) {
-        return c.json({ error: `Invalid ndebit: ${validation.error}` }, 400)
-      }
-      const { encrypted, iv } = await encryptNdebit(body.clink_ndebit, c.env.NOSTR_MASTER_KEY)
-      updates.clinkNdebitEncrypted = encrypted
-      updates.clinkNdebitIv = iv
-      updates.clinkNdebitEnabled = 1
     }
   }
 
@@ -3502,7 +3477,7 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
 })
 
 
-// POST /api/dvm/jobs/:id/complete — Customer confirms result, pay provider via CLINK ndebit or NWC
+// POST /api/dvm/jobs/:id/complete — Customer confirms result, pay provider via NWC
 api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   const db = c.get('db')
   const user = c.get('user')!
@@ -3527,18 +3502,17 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
   const feeSats = (feePercent > 0 && platformAddress) ? Math.max(1, Math.floor(totalPaymentSats * feePercent / 100)) : 0
   const providerSats = totalPaymentSats - feeSats
 
-  // Payment via CLINK ndebit or NWC (if amount > 0)
+  // Payment via NWC (if amount > 0)
   let paymentResult: { preimage?: string; paid_sats?: number; fee_sats?: number; method?: string } = {}
 
   if (totalPaymentSats > 0) {
-    const hasClink = user.clinkNdebitEnabled && user.clinkNdebitEncrypted && user.clinkNdebitIv && c.env.NOSTR_MASTER_KEY
     const hasNwc = user.nwcEnabled && user.nwcEncrypted && user.nwcIv && c.env.NOSTR_MASTER_KEY
 
-    if (!hasClink && !hasNwc) {
-      return c.json({ error: 'No payment method configured. Connect a wallet via PUT /api/me (clink_ndebit or nwc_connection_string).' }, 400)
+    if (!hasNwc) {
+      return c.json({ error: 'No payment method configured. Connect a wallet via PUT /api/me (nwc_connection_string).' }, 400)
     }
 
-    // Resolve provider Lightning Address (needed for CLINK always, NWC when no bolt11)
+    // Resolve provider Lightning Address
     let providerLightningAddress: string | null = null
     if (job[0].requestEventId) {
       const providerJob = await db.select({ userId: dvmJobs.userId }).from(dvmJobs)
@@ -3560,85 +3534,47 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       if (localUser.length > 0) providerLightningAddress = localUser[0].lightningAddress
     }
 
-    // --- CLINK ndebit path (preferred) ---
-    if (hasClink) {
-      if (!providerLightningAddress) {
-        return c.json({ error: 'Cannot pay via CLINK: provider has no Lightning Address' }, 400)
-      }
+    if (!job[0].bolt11 && !providerLightningAddress) {
+      return c.json({ error: 'Cannot pay: provider has no Lightning invoice or Lightning Address' }, 400)
+    }
 
-      const ndebit = await decryptNdebit(user.clinkNdebitEncrypted!, user.clinkNdebitIv!, c.env.NOSTR_MASTER_KEY!)
+    const nwcUri = await decryptNwcUri(user.nwcEncrypted!, user.nwcIv!, c.env.NOSTR_MASTER_KEY!)
+    const nwcParsed = parseNwcUri(nwcUri)
 
-      // Step 1: Pay platform fee via CLINK
-      if (feeSats > 0) {
-        try {
-          const feeResult = await debitForPayment({ ndebit, lightningAddress: platformAddress, amountSats: feeSats, masterKey: c.env.NOSTR_MASTER_KEY! })
-          if (!feeResult.ok) throw new Error(feeResult.error || 'Debit rejected')
-          console.log(`[DVM] Platform fee (CLINK): ${feeSats} sats → ${platformAddress}`)
-        } catch (e) {
-          console.error('[DVM] Platform fee CLINK debit failed:', e)
-          return c.json({
-            error: 'Platform fee payment failed (CLINK)',
-            detail: e instanceof Error ? e.message : 'Unknown error',
-          }, 502)
-        }
-      }
-
-      // Step 2: Pay provider via CLINK (always uses Lightning Address → LNURL-pay)
+    // Step 1: Pay platform fee
+    if (feeSats > 0) {
       try {
-        const result = await debitForPayment({ ndebit, lightningAddress: providerLightningAddress, amountSats: providerSats, masterKey: c.env.NOSTR_MASTER_KEY! })
-        if (!result.ok) throw new Error(result.error || 'Debit rejected')
-        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'clink' }
+        await resolveAndPayLightningAddress(nwcParsed, platformAddress, feeSats)
+        console.log(`[DVM] Platform fee: ${feeSats} sats → ${platformAddress}`)
       } catch (e) {
+        console.error('[DVM] Platform fee payment failed:', e)
         return c.json({
-          error: 'CLINK debit payment failed',
+          error: 'Platform fee payment failed',
           detail: e instanceof Error ? e.message : 'Unknown error',
         }, 502)
       }
+    }
 
-    // --- NWC fallback path ---
+    // Step 2: Pay provider
+    if (job[0].bolt11) {
+      try {
+        const result = await nwcPayInvoice(nwcParsed, job[0].bolt11)
+        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'nwc' }
+      } catch (e) {
+        return c.json({
+          error: 'NWC payment failed',
+          detail: e instanceof Error ? e.message : 'Unknown error',
+        }, 502)
+      }
     } else {
-      if (!job[0].bolt11 && !providerLightningAddress) {
-        return c.json({ error: 'Cannot pay: provider has no Lightning invoice or Lightning Address' }, 400)
-      }
-
-      const nwcUri = await decryptNwcUri(user.nwcEncrypted!, user.nwcIv!, c.env.NOSTR_MASTER_KEY!)
-      const nwcParsed = parseNwcUri(nwcUri)
-
-      // Step 1: Pay platform fee
-      if (feeSats > 0) {
-        try {
-          await resolveAndPayLightningAddress(nwcParsed, platformAddress, feeSats)
-          console.log(`[DVM] Platform fee (NWC): ${feeSats} sats → ${platformAddress}`)
-        } catch (e) {
-          console.error('[DVM] Platform fee payment failed:', e)
-          return c.json({
-            error: 'Platform fee payment failed',
-            detail: e instanceof Error ? e.message : 'Unknown error',
-          }, 502)
-        }
-      }
-
-      // Step 2: Pay provider
-      if (job[0].bolt11) {
-        try {
-          const result = await nwcPayInvoice(nwcParsed, job[0].bolt11)
-          paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'nwc' }
-        } catch (e) {
-          return c.json({
-            error: 'NWC payment failed',
-            detail: e instanceof Error ? e.message : 'Unknown error',
-          }, 502)
-        }
-      } else {
-        try {
-          const result = await resolveAndPayLightningAddress(nwcParsed, providerLightningAddress!, providerSats)
-          paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'nwc' }
-        } catch (e) {
-          return c.json({
-            error: 'NWC payment to Lightning Address failed',
-            detail: e instanceof Error ? e.message : 'Unknown error',
-          }, 502)
-        }
+      try {
+        const result = await resolveAndPayLightningAddress(nwcParsed, providerLightningAddress!, providerSats)
+        paymentResult = { preimage: result.preimage, paid_sats: totalPaymentSats, fee_sats: feeSats, method: 'nwc' }
+      } catch (e) {
+        return c.json({
+          error: 'NWC payment to Lightning Address failed',
+          detail: e instanceof Error ? e.message : 'Unknown error',
+        }, 502)
       }
     }
   }
@@ -3811,7 +3747,7 @@ api.post('/dvm/session-report', requireApiAuth, async (c) => {
     input: null,
     result: null,
     paidMsats: body.total_sats * 1000,
-    paymentMethod: 'clink',
+    paymentMethod: 'p2p',
     params: JSON.stringify({ channel: 'p2p', duration_s: body.duration_s }),
     providerPubkey: user.nostrPubkey,
     createdAt: now,
@@ -4557,39 +4493,4 @@ api.post('/dvm/swarm/:id/select', requireApiAuth, async (c) => {
 })
 
 // POST /api/dvm/proxy-debit — Provider requests platform to debit customer's wallet
-// Platform uses its authorized CLINK identity (platform key) to execute the debit,
-// so providers don't need individual DebitAccess authorization on customer wallets.
-api.post('/dvm/proxy-debit', requireApiAuth, async (c) => {
-  const masterKey = c.env.NOSTR_MASTER_KEY
-  if (!masterKey) return c.json({ error: 'Platform CLINK not configured' }, 500)
-
-  const body = await c.req.json<{
-    ndebit: string
-    lightning_address: string
-    amount_sats: number
-  }>()
-
-  if (!body.ndebit || !body.lightning_address || !body.amount_sats) {
-    return c.json({ error: 'ndebit, lightning_address, and amount_sats required' }, 400)
-  }
-  if (body.amount_sats <= 0 || body.amount_sats > 100000) {
-    return c.json({ error: 'amount_sats must be 1-100000' }, 400)
-  }
-
-  try {
-    const result = await debitForPayment({
-      ndebit: body.ndebit,
-      lightningAddress: body.lightning_address,
-      amountSats: body.amount_sats,
-      masterKey,
-    })
-    if (result.ok) {
-      return c.json({ ok: true, preimage: result.preimage })
-    }
-    return c.json({ ok: false, error: result.error || 'Debit rejected' }, 402)
-  } catch (e: any) {
-    return c.json({ ok: false, error: e.message || 'Debit failed' }, 502)
-  }
-})
-
 export default api

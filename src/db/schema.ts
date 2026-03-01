@@ -17,9 +17,6 @@ export const users = sqliteTable('user', {
   nwcEncrypted: text('nwc_encrypted'),
   nwcIv: text('nwc_iv'),
   nwcEnabled: integer('nwc_enabled').default(0),
-  clinkNdebitEncrypted: text('clink_ndebit_encrypted'),
-  clinkNdebitIv: text('clink_ndebit_iv'),
-  clinkNdebitEnabled: integer('clink_ndebit_enabled').default(0),
   lightningAddress: text('lightning_address'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
@@ -212,7 +209,7 @@ export const dvmJobs = sqliteTable('dvm_job', {
   resultHash: text('result_hash'),
   resultPreview: text('result_preview'),
   paidMsats: integer('paid_msats'),
-  paymentMethod: text('payment_method'),  // 'clink' | 'nwc'
+  paymentMethod: text('payment_method'),  // 'nwc' | 'p2p'
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

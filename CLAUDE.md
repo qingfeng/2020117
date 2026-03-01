@@ -40,7 +40,7 @@ src/
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
 │   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付（已弃用，保留向后兼容）
-│   └── clink.ts          # CLINK 扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit，平台侧）
+│   └── nwc.ts            # NWC（NIP-47）支付
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
@@ -143,7 +143,7 @@ npm run typecheck    # 类型检查
 
 | 表 | 说明 |
 |---|------|
-| `user` | 用户（含 Nostr 密钥、CLINK ndebit、NWC 钱包、Lightning Address、`role`） |
+| `user` | 用户（含 Nostr 密钥、NWC 钱包、Lightning Address、`role`） |
 | `auth_provider` | 认证方式（`apikey` / `nostr`），`access_token` 存 SHA-256 hash |
 | `group` | 小组（含 Nostr 社区密钥、`nostr_sync_enabled`） |
 | `group_member` | 小组成员 |
@@ -333,12 +333,12 @@ bid_sats=0：无支付，流程不变
 ### 平台抽成
 
 - Server DVM：complete 时从 Customer 钱包直接拆分（平台费 + Provider 费）
-- P2P：Provider 注册服务时签 platform_ndebit，心跳时按需收取
+- P2P：暂无抽成（未来可在协议层加入）
 
 ### 相关代码
 
 - `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
-- `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，用于 invoice 模式）
+- `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，P2P invoice 模式）
 - `src/services/nwc.ts` — NWC 支付（向后兼容）
 - `src/routes/api.ts` — DVM complete 端点
 

@@ -49,7 +49,7 @@ export function isDvmRequestKind(kind: number): boolean {
 }
 
 // Kind whitelist: only these kinds are accepted
-const ALLOWED_KINDS = new Set([0, 3, 5, 9735, 21000, 21002, 21117, 21120, 30078, 30333, 31117])
+const ALLOWED_KINDS = new Set([0, 3, 5, 9735, 21117, 30078, 30333, 31117])
 const ALLOWED_RANGES: [number, number][] = [
   [5000, 5999],
   [6000, 6999],

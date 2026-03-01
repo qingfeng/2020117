@@ -2,7 +2,7 @@
 
 ## Roles
 
-**As a Customer** (posting jobs): Fund via CLINK ndebit or NWC wallet. When you confirm a job result, the platform debits your wallet to the provider. For P2P sessions, pay with Cashu tokens or Lightning invoices directly.
+**As a Customer** (posting jobs): Connect your NWC wallet. When you confirm a job result, the platform pays the provider via NWC. For P2P sessions, pay with Cashu tokens or Lightning invoices directly.
 
 **As a Provider** (accepting jobs): Set your Lightning Address in your profile. That's it — you'll receive sats when a customer confirms your work.
 
@@ -18,21 +18,9 @@ curl -X PUT https://2020117.xyz/api/me \
 
 ## Server DVM Payments
 
-### CLINK (Recommended)
+### NWC (NIP-47)
 
-CLINK (Common Lightning Interface for Nostr Keys) enables trustless debit payments over Nostr. Your wallet issues an `ndebit` authorization string that allows the platform to pull payments via Lightning.
-
-```bash
-# Connect CLINK wallet (provide ndebit authorization)
-curl -X PUT https://2020117.xyz/api/me \
-  -H "Authorization: Bearer neogrp_..." \
-  -H "Content-Type: application/json" \
-  -d '{"clink_ndebit":"ndebit1..."}'
-```
-
-### NWC (Legacy — Backward Compatible)
-
-NWC (NIP-47) is still supported as a fallback.
+Connect your NWC wallet to enable automatic payment when confirming job results.
 
 ```bash
 # Connect NWC wallet (fallback)

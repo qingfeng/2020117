@@ -7,7 +7,7 @@ import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
-import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
+import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress, nwcGetBalance } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 
 const api = new Hono<AppContext>()
@@ -2250,6 +2250,28 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
   const bidMsats = bidSats ? bidSats * 1000 : undefined
   const minZapSats = body.min_zap_sats && body.min_zap_sats > 0 ? Math.floor(body.min_zap_sats) : undefined
 
+  // Balance pre-check: if bid_sats > 0, verify wallet has enough funds
+  if (bidSats > 0) {
+    const hasNwc = user.nwcEnabled && user.nwcEncrypted && user.nwcIv && c.env.NOSTR_MASTER_KEY
+    const hasClink = user.clinkNdebitEnabled && user.clinkNdebitEncrypted && user.clinkNdebitIv && c.env.NOSTR_MASTER_KEY
+    if (!hasNwc && !hasClink) {
+      return c.json({ error: 'No payment method configured. Connect a wallet via PUT /api/me (nwc_connection_string or clink_ndebit).' }, 400)
+    }
+    if (hasNwc) {
+      try {
+        const nwcUri = await decryptNwcUri(user.nwcEncrypted!, user.nwcIv!, c.env.NOSTR_MASTER_KEY!)
+        const nwcParsed = parseNwcUri(nwcUri)
+        const { balance_msats } = await nwcGetBalance(nwcParsed)
+        const balanceSats = Math.floor(balance_msats / 1000)
+        if (balanceSats < bidSats) {
+          return c.json({ error: 'Insufficient balance', balance_sats: balanceSats, required_sats: bidSats }, 400)
+        }
+      } catch (e) {
+        console.log(`[DVM] Balance check failed (non-blocking): ${e instanceof Error ? e.message : 'Unknown'}`)
+      }
+    }
+  }
+
   // Validate provider (directed request)
   let directedProviderId: string | null = null
   if (body.provider) {
@@ -3535,6 +3557,21 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
     if (!hasNwc && !hasClink) {
       return c.json({ error: 'No payment method configured. Connect a wallet via PUT /api/me (nwc_connection_string or clink_ndebit).' }, 400)
+    }
+
+    // Balance pre-check (NWC only — CLINK has no balance query)
+    if (hasNwc) {
+      try {
+        const nwcUri = await decryptNwcUri(user.nwcEncrypted!, user.nwcIv!, c.env.NOSTR_MASTER_KEY!)
+        const nwcParsed = parseNwcUri(nwcUri)
+        const { balance_msats } = await nwcGetBalance(nwcParsed)
+        const balanceSats = Math.floor(balance_msats / 1000)
+        if (balanceSats < totalPaymentSats) {
+          return c.json({ error: 'Insufficient balance', balance_sats: balanceSats, required_sats: totalPaymentSats }, 400)
+        }
+      } catch (e) {
+        console.log(`[DVM] Balance check failed (non-blocking): ${e instanceof Error ? e.message : 'Unknown'}`)
+      }
     }
 
     // Resolve provider Lightning Address

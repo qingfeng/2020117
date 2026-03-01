@@ -9,8 +9,6 @@ import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, bui
 import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
-import { collectProviderFee } from '../services/platform-fee'
-import { walletCreateUser, walletGetBalance, walletCreateInvoice, walletPayInvoice } from '../services/wallet-bridge'
 
 const api = new Hono<AppContext>()
 
@@ -947,26 +945,10 @@ api.post('/auth/register', async (c) => {
     }
   }
 
-  // Auto-provision wallet via Lightning Bridge (best-effort)
-  let walletEnabled = false
-  if (c.env.NOSTR_MASTER_KEY && c.env.LIGHTNING_BRIDGE_PUBKEY) {
-    try {
-      await walletCreateUser({
-        NOSTR_MASTER_KEY: c.env.NOSTR_MASTER_KEY,
-        NOSTR_RELAYS: c.env.NOSTR_RELAYS,
-        LIGHTNING_BRIDGE_PUBKEY: c.env.LIGHTNING_BRIDGE_PUBKEY,
-      }, userId)
-      walletEnabled = true
-    } catch (e) {
-      console.error('[API] Wallet provisioning failed (non-fatal):', e instanceof Error ? e.message : e)
-    }
-  }
-
   return c.json({
     user_id: userId,
     username,
     api_key: key,
-    wallet_enabled: walletEnabled,
     message: 'Save your API key — it will not be shown again.',
   }, 201)
 })
@@ -2994,7 +2976,6 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     direct_request_enabled?: boolean
     models?: string[]
     skill?: Record<string, unknown>
-    platform_ndebit?: string | null
   }
 
   if (!body.kinds || !Array.isArray(body.kinds) || body.kinds.length === 0) {
@@ -3014,21 +2995,6 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
 
   const pricingMin = body.pricing?.min_sats ? body.pricing.min_sats * 1000 : null
   const pricingMax = body.pricing?.max_sats ? body.pricing.max_sats * 1000 : null
-
-  // Validate + encrypt platform ndebit if provided
-  let ndebitUpdate: { platformNdebitEncrypted: string | null; platformNdebitIv: string | null } | undefined
-  if (body.platform_ndebit !== undefined && c.env.NOSTR_MASTER_KEY) {
-    if (body.platform_ndebit === null || body.platform_ndebit === '') {
-      ndebitUpdate = { platformNdebitEncrypted: null, platformNdebitIv: null }
-    } else {
-      const validation = validateNdebit(body.platform_ndebit)
-      if (!validation.valid) {
-        return c.json({ error: `Invalid platform_ndebit: ${validation.error}` }, 400)
-      }
-      const { encrypted, iv } = await encryptNdebit(body.platform_ndebit, c.env.NOSTR_MASTER_KEY)
-      ndebitUpdate = { platformNdebitEncrypted: encrypted, platformNdebitIv: iv }
-    }
-  }
 
   // Fetch existing service for reputation data
   const existing = await db.select().from(dvmServices)
@@ -3079,7 +3045,6 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     if (directRequestEnabled !== undefined) updateSet.directRequestEnabled = directRequestEnabled
     if (body.models) updateSet.models = JSON.stringify(body.models)
     if (body.skill !== undefined) updateSet.skill = body.skill ? JSON.stringify(body.skill) : null
-    if (ndebitUpdate) Object.assign(updateSet, ndebitUpdate)
     await db.update(dvmServices).set(updateSet).where(eq(dvmServices.id, serviceId))
   } else {
     serviceId = generateId()
@@ -3095,7 +3060,6 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
       directRequestEnabled: directRequestEnabled || 0,
       models: body.models ? JSON.stringify(body.models) : null,
       skill: body.skill ? JSON.stringify(body.skill) : null,
-      ...(ndebitUpdate || {}),
       createdAt: now,
       updatedAt: now,
     })
@@ -3145,8 +3109,6 @@ api.get('/dvm/services', requireApiAuth, async (c) => {
       active: !!s.active,
       direct_request_enabled: !!s.directRequestEnabled,
       total_zap_received_sats: s.totalZapReceived || 0,
-      platform_ndebit_enabled: !!s.platformNdebitEncrypted,
-      fee_billed_sats: s.feeBilledMsats ? Math.floor(s.feeBilledMsats / 1000) : 0,
       reputation: buildReputationData(s, wotData, reviewData),
       report_count: reportCount,
       flagged: reportCount >= REPORT_FLAG_THRESHOLD,
@@ -3822,16 +3784,6 @@ api.post('/heartbeat', requireApiAuth, async (c) => {
   // Publish to relay
   if (c.env.NOSTR_QUEUE) {
     c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-  }
-
-  // Collect platform fee in background (non-blocking)
-  const feePercent = parseFloat(c.env.PLATFORM_FEE_PERCENT || '0')
-  const platformAddress = c.env.PLATFORM_LIGHTNING_ADDRESS || ''
-  if (feePercent > 0 && platformAddress && c.env.NOSTR_MASTER_KEY) {
-    c.executionCtx.waitUntil(
-      collectProviderFee({ db, userId: user.id, feePercent, platformAddress, masterKey: c.env.NOSTR_MASTER_KEY })
-        .catch(e => console.error('[PlatformFee] Heartbeat fee collection error:', e))
-    )
   }
 
   return c.json({ ok: true, event_id: event.id })
@@ -4637,68 +4589,6 @@ api.post('/dvm/proxy-debit', requireApiAuth, async (c) => {
     return c.json({ ok: false, error: result.error || 'Debit rejected' }, 402)
   } catch (e: any) {
     return c.json({ ok: false, error: e.message || 'Debit failed' }, 502)
-  }
-})
-
-// ─── Wallet 端点（通过 Lightning Bridge Kind 21120）───
-
-api.get('/wallet/balance', requireApiAuth, async (c) => {
-  const user = c.get('user')!
-  const bridgeEnv = { NOSTR_MASTER_KEY: c.env.NOSTR_MASTER_KEY, NOSTR_RELAYS: c.env.NOSTR_RELAYS, LIGHTNING_BRIDGE_PUBKEY: c.env.LIGHTNING_BRIDGE_PUBKEY }
-  if (!bridgeEnv.NOSTR_MASTER_KEY || !bridgeEnv.LIGHTNING_BRIDGE_PUBKEY) {
-    return c.json({ error: 'Wallet service not configured' }, 503)
-  }
-  try {
-    const result = await walletGetBalance(bridgeEnv, user.id)
-    return c.json({ balance_sats: result.balance_sats })
-  } catch (e: any) {
-    // Auto-provision wallet for existing users on first access
-    if (e.message?.includes('not found')) {
-      try {
-        await walletCreateUser(bridgeEnv, user.id)
-        const result = await walletGetBalance(bridgeEnv, user.id)
-        return c.json({ balance_sats: result.balance_sats })
-      } catch (e2: any) {
-        return c.json({ error: e2.message || 'Failed to provision wallet' }, 502)
-      }
-    }
-    return c.json({ error: e.message || 'Failed to get balance' }, 502)
-  }
-})
-
-api.post('/wallet/invoice', requireApiAuth, async (c) => {
-  const user = c.get('user')!
-  const bridgeEnv = { NOSTR_MASTER_KEY: c.env.NOSTR_MASTER_KEY, NOSTR_RELAYS: c.env.NOSTR_RELAYS, LIGHTNING_BRIDGE_PUBKEY: c.env.LIGHTNING_BRIDGE_PUBKEY }
-  if (!bridgeEnv.NOSTR_MASTER_KEY || !bridgeEnv.LIGHTNING_BRIDGE_PUBKEY) {
-    return c.json({ error: 'Wallet service not configured' }, 503)
-  }
-  const body = await c.req.json().catch(() => ({})) as { amount_sats?: number; memo?: string }
-  if (!body.amount_sats || body.amount_sats < 1) {
-    return c.json({ error: 'amount_sats is required (>= 1)' }, 400)
-  }
-  try {
-    const result = await walletCreateInvoice(bridgeEnv, user.id, body.amount_sats, body.memo)
-    return c.json({ bolt11: result.bolt11, amount_sats: body.amount_sats })
-  } catch (e: any) {
-    return c.json({ error: e.message || 'Failed to create invoice' }, 502)
-  }
-})
-
-api.post('/wallet/send', requireApiAuth, async (c) => {
-  const user = c.get('user')!
-  const bridgeEnv = { NOSTR_MASTER_KEY: c.env.NOSTR_MASTER_KEY, NOSTR_RELAYS: c.env.NOSTR_RELAYS, LIGHTNING_BRIDGE_PUBKEY: c.env.LIGHTNING_BRIDGE_PUBKEY }
-  if (!bridgeEnv.NOSTR_MASTER_KEY || !bridgeEnv.LIGHTNING_BRIDGE_PUBKEY) {
-    return c.json({ error: 'Wallet service not configured' }, 503)
-  }
-  const body = await c.req.json().catch(() => ({})) as { bolt11?: string }
-  if (!body.bolt11) {
-    return c.json({ error: 'bolt11 invoice is required' }, 400)
-  }
-  try {
-    const result = await walletPayInvoice(bridgeEnv, user.id, body.bolt11)
-    return c.json({ ok: true, preimage: result.preimage, amount_sats: result.amount_sats })
-  } catch (e: any) {
-    return c.json({ error: e.message || 'Payment failed' }, 502)
   }
 })
 

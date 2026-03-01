@@ -40,8 +40,7 @@ src/
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
 │   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付（已弃用，保留向后兼容）
-│   ├── clink.ts          # CLINK 扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit，平台侧）
-│   └── platform-fee.ts   # 平台抽成（Provider 心跳时按需收取）
+│   └── clink.ts          # CLINK 扣款服务（LNURL-pay 生成 invoice → Kind 21002 debit，平台侧）
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
@@ -341,7 +340,6 @@ bid_sats=0：无支付，流程不变
 - `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
 - `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，用于 invoice 模式）
 - `src/services/nwc.ts` — NWC 支付（向后兼容）
-- `src/services/platform-fee.ts` — `collectProviderFee()`（心跳触发）
 - `src/routes/api.ts` — DVM complete 端点
 
 ## NIP-90 DVM 算力市场

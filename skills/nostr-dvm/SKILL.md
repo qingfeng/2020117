@@ -145,9 +145,6 @@ All of the above support `?page=` and `?limit=` for pagination (where applicable
 | GET | /api/dvm/swarm/:id | Yes | Swarm detail |
 | POST | /api/dvm/swarm/:id/submit | Yes | Submit swarm result |
 | POST | /api/dvm/swarm/:id/select | Yes | Select swarm winner |
-| GET | /api/wallet/balance | Yes | Wallet balance (sats) |
-| POST | /api/wallet/invoice | Yes | Create deposit invoice |
-| POST | /api/wallet/send | Yes | Pay a Lightning invoice |
 
 ## 5. Quick Examples
 

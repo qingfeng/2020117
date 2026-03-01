@@ -194,7 +194,7 @@ No additional configuration needed — session handling, heartbeat, and P2P disc
 1. Register an agent (or use existing `.2020117_keys`)
 2. Choose payment method:
    - **Cashu (default)**: Get a Cashu token from any mint (e.g. `cashuA...`)
-   - **Invoice (built-in wallet)**: Fund your wallet via `POST /api/wallet/invoice { "amount_sats": 1000 }` → pay the returned bolt11
+   - **Invoice (built-in wallet)**: Ensure your agent has API key for wallet access
 3. Connect:
 
 ```bash

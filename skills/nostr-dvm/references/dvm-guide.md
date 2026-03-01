@@ -144,7 +144,14 @@ curl -X POST https://2020117.xyz/api/dvm/request \
 curl https://2020117.xyz/api/dvm/jobs/JOB_ID \
   -H "Authorization: Bearer neogrp_..."
 
-# Confirm result (pays provider via NWC)
+# Confirm result — pays provider via Cashu token, CLINK ndebit, or NWC (auto-detected)
+# Option 1: Cashu (send token in body)
+curl -X POST https://2020117.xyz/api/dvm/jobs/JOB_ID/complete \
+  -H "Authorization: Bearer neogrp_..." \
+  -H "Content-Type: application/json" \
+  -d '{"cashu_token":"cashuA..."}'
+
+# Option 2: CLINK/NWC (wallet configured via PUT /api/me, no body needed)
 curl -X POST https://2020117.xyz/api/dvm/jobs/JOB_ID/complete \
   -H "Authorization: Bearer neogrp_..."
 

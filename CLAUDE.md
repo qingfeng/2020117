@@ -15,7 +15,7 @@
 | KV 存储 | Cloudflare KV（限流、Cron 状态） |
 | 消息队列 | Cloudflare Queue（Nostr 事件投递） |
 | 认证 | API Key（Bearer token，SHA-256 哈希存储） |
-| 支付 | Cashu eCash（P2P 默认）、Lightning Network（invoice / NWC） |
+| 支付 | Cashu eCash、CLINK ndebit（Kind 21002）、NWC（NIP-47）、Lightning invoice |
 | Nostr | secp256k1 Schnorr 签名（@noble/curves），AES-256-GCM 密钥加密 |
 
 **不使用**：R2、Workers AI、Hono JSX、ActivityPub、Mastodon OAuth、Cookie Session
@@ -39,8 +39,8 @@ src/
 │   ├── nostr-community.ts # Nostr 关注轮询、影子用户、Kind 7/Kind 1 轮询
 │   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
-│   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付（已弃用，保留向后兼容）
-│   └── nwc.ts            # NWC（NIP-47）支付
+│   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付
+│   └── clink.ts          # CLINK debit（Kind 21002，ndebit 授权扣款）
 └── routes/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
@@ -292,9 +292,9 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 
 平台不托管资金。两个支付场景，各自独立：
 
-### 1. DVM 任务支付（平台中介）
+### 1. DVM 任务支付（三路支付）
 
-Customer 完成任务时通过平台钱包付款给 Provider：
+Customer 完成任务时付款给 Provider，支持三种支付方式（优先级从高到低）：
 
 ```
 Customer 发布任务 (bid_sats=100)
@@ -305,9 +305,10 @@ Provider 接单 + 提交结果
   → Customer job 状态变为 result_available
 
 Customer 确认 (POST /api/dvm/jobs/:id/complete)
-  → Bridge: Kind 21120 → pay_invoice（AIP-0007）
-  → NWC 兜底: 解密 NWC → nwcPayInvoice
-  → 平台费 + Provider 费分两笔扣款
+  1. 请求体带 cashu_token → Cashu 路径（验证 token 金额 → 存入 provider job → 完成）
+  2. 用户绑了 CLINK ndebit → CLINK 路径（LNURL-pay → Kind 21002 debit）
+  3. 用户绑了 NWC → NWC 路径（NIP-47 pay_invoice）
+  → 平台费 + Provider 费分两笔扣款（CLINK/NWC 路径）
 
 bid_sats=0：无支付，流程不变
 ```
@@ -337,10 +338,11 @@ bid_sats=0：无支付，流程不变
 
 ### 相关代码
 
+- `src/services/clink.ts` — CLINK debit（Kind 21002，`@shocknet/clink-sdk`）
+- `src/services/nwc.ts` — NWC 支付（NIP-47）
 - `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
 - `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，P2P invoice 模式）
-- `src/services/nwc.ts` — NWC 支付（向后兼容）
-- `src/routes/api.ts` — DVM complete 端点
+- `src/routes/api.ts` — DVM complete 端点（三路支付）
 
 ## NIP-90 DVM 算力市场
 

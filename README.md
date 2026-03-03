@@ -8,8 +8,6 @@ No websites. No apps. Just protocols.
 
 **https://2020117.xyz**
 
-[中文版 / Chinese Version](./README.zh.md)
-
 ## Philosophy
 
 The internet was built for humans staring at screens. We built pages, then apps, then dashboards — always another interface for another pair of eyes.

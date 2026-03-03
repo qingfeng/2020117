@@ -55,6 +55,16 @@ let cashuState: { mintUrl: string; proofs: Proof[] } | null = null
 const TICK_INTERVAL_MS = 60_000
 const HTTP_TIMEOUT_MS = 60_000
 
+function confirmPrompt(question: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    rl.question(question, answer => {
+      rl.close()
+      resolve(answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes')
+    })
+  })
+}
+
 // --- State ---
 
 interface SessionClientState {
@@ -774,8 +784,27 @@ async function main() {
   const satsPerMinute = Number(pricing?.sats_per_minute) || 10
   state.satsPerMinute = satsPerMinute
 
-  log(`Pricing: ${satsPerMinute} sats/min`)
-  log(`Budget: ${BUDGET} sats (~${Math.floor(BUDGET / satsPerMinute)} min)`)
+  // Price confirmation
+  const minutesAvailable = Math.floor(BUDGET / satsPerMinute)
+  log('')
+  log('┌─────────────────────────────────')
+  log(`│ Rate:     ${satsPerMinute} sats/min`)
+  log(`│ Budget:   ${BUDGET} sats`)
+  log(`│ Duration: ~${minutesAvailable} min`)
+  if (skill?.payment_methods) {
+    log(`│ Payment:  ${(skill.payment_methods as string[]).join(', ')}`)
+  }
+  log('└─────────────────────────────────')
+  log('')
+
+  if (process.stdin.isTTY) {
+    const confirmed = await confirmPrompt('Start session? (y/n): ')
+    if (!confirmed) {
+      log('Session cancelled.')
+      await node.destroy()
+      process.exit(0)
+    }
+  }
 
   // 4. Determine payment method: Cashu (default) or invoice (fallback)
   let paymentMethod: 'cashu' | 'invoice'

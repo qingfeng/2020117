@@ -801,7 +801,15 @@ async function startSwarmListener(label: string) {
     const tag = peerId.slice(0, 8)
 
     if (msg.type === 'skill_request') {
-      node.send(socket, { type: 'skill_response', id: msg.id, skill: state.skill })
+      const satsPerMinute =
+        (state.skill?.pricing as any)?.sats_per_minute
+        || Number(process.env.SATS_PER_MINUTE)
+        || 10
+      // Always include runtime pricing, even without a skill file
+      const skillWithPricing = state.skill
+        ? { ...state.skill, pricing: { ...(state.skill.pricing as any || {}), sats_per_minute: satsPerMinute } }
+        : { pricing: { sats_per_minute: satsPerMinute }, payment_methods: LIGHTNING_ADDRESS ? ['cashu', 'invoice'] : ['cashu'] }
+      node.send(socket, { type: 'skill_response', id: msg.id, skill: skillWithPricing })
       return
     }
 

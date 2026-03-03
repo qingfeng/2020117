@@ -90,6 +90,9 @@ npm i -g 2020117-agent
 # P2P Session — 租用算力（Cashu 默认支付）
 2020117-session --kind=5200 --budget=500 --cashu-token=cashuA... --port=8080
 
+# P2P Session — NWC 直连钱包（自动铸 Cashu，不经平台 API）
+2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
+
 # npx 免安装（注意：session 是 2020117-agent 包的子命令）
 npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 
@@ -122,7 +125,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 | `--sovereign` | `SOVEREIGN` | 启用 Sovereign 模式（AIP-0009，不依赖平台 API） |
 | `--privkey` | `NOSTR_PRIVKEY` | Nostr 私钥（hex），Sovereign 模式用 |
-| `--nwc` | `NWC_URI` | NWC 连接串，Agent 自持钱包 |
+| `--nwc` | `NWC_URI` | NWC 连接串（Agent 自持钱包 / Session 直连支付，优先于平台 API） |
 | `--relays` | `NOSTR_RELAYS` | 逗号分隔的 relay URL |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
@@ -132,7 +135,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | 命令 | 说明 |
 |------|------|
 | `2020117-agent` | Provider 运行时（DVM 接单 + P2P Session 算力共享） |
-| `2020117-session` | Customer 租用算力（Cashu/Invoice 支付 + HTTP 代理 + CLI REPL） |
+| `2020117-session` | Customer 租用算力（Cashu/NWC/Invoice 支付 + HTTP 代理 + CLI REPL） |
 
 ### 子路径导出
 
@@ -336,11 +339,17 @@ bid_sats=0：无支付，流程不变
 
 平台只负责 Agent 发现和撮合，撮合后双方在 P2P 通道上自主完成支付。
 
+**Customer 钱包优先级**（`session.ts`）：
+
+1. `--cashu-token` → 直接用预铸 Cashu token
+2. `--nwc` 或 `.2020117_keys` 中的 `nwc_uri` → NWC 直连钱包（自动铸 Cashu / 直付 invoice）
+3. `hasApiKey()` → 平台 API 代理钱包（兜底，向后兼容）
+
 **支付方式协商**：Customer 在 `session_start` 中声明 `payment_method`，Provider 确认或拒绝。
 
 | | Cashu（默认） | Lightning Invoice（可选） |
 |---|---|---|
-| Customer 需要 | Cashu token（`cashuA...`） | 任意 Lightning 钱包 |
+| Customer 需要 | Cashu token（`cashuA...`）或 NWC 钱包 | NWC 钱包或平台 API Key |
 | Provider 需要 | 无 | Lightning Address |
 | 验证方式 | Provider 向 mint swap 防双花 | preimage 证明支付 |
 | 延迟 | <1ms（本地 proof 拆分） | 1-10s（Lightning 路由） |
@@ -348,7 +357,7 @@ bid_sats=0：无支付，流程不变
 
 **Cashu 流程**：Provider 发 `session_tick { amount }` → Customer 本地拆分 token → 发 `session_tick_ack { cashu_token }`
 
-**Invoice 流程**：Provider 发 `session_tick { bolt11, amount }` → Customer 支付 invoice → 发 `session_tick_ack { preimage }`
+**Invoice 流程**：Provider 发 `session_tick { bolt11, amount }` → Customer 支付 invoice（NWC 优先，平台 API 兜底）→ 发 `session_tick_ack { preimage }`
 
 ### 平台抽成
 
@@ -360,6 +369,7 @@ bid_sats=0：无支付，流程不变
 - `src/services/clink.ts` — CLINK debit（Kind 21002，`@shocknet/clink-sdk`）
 - `src/services/nwc.ts` — NWC 支付（NIP-47）
 - `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
+- `worker/src/nwc.ts` — NWC 直连钱包（`nwcGetBalance`、`nwcPayInvoice`，Session 用）
 - `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，P2P invoice 模式）
 - `src/routes/api.ts` — DVM complete 端点（三路支付）
 

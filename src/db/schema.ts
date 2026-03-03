@@ -253,6 +253,7 @@ export const externalDvms = sqliteTable('external_dvm', {
   pricingMin: integer('pricing_min'),
   pricingMax: integer('pricing_max'),
   reputation: text('reputation'),           // JSON string
+  lightningAddress: text('lightning_address'),
   eventId: text('event_id').notNull().unique(),
   eventCreatedAt: integer('event_created_at').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),

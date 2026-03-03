@@ -273,6 +273,9 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
           const bolt11 = amountTag?.[2] || null
           const priceMsats = amountTag?.[1] ? parseInt(amountTag[1]) : null
 
+          // Extract lightning_address tag (sovereign agents include this)
+          const laTag = event.tags.find((t: string[]) => t[0] === 'lightning_address')?.[1]
+
           await db.update(dvmJobs)
             .set({
               status: 'result_available',
@@ -284,7 +287,21 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
               updatedAt: new Date(),
             })
             .where(eq(dvmJobs.id, job.id))
-          console.log(`[DVM] Job ${job.id} → result_available (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''})`)
+          console.log(`[DVM] Job ${job.id} → result_available (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''}${laTag ? ', has lightning_address' : ''})`)
+
+          // Backfill external_dvm lightning_address if present and not yet stored
+          if (laTag) {
+            const extDvm = await db.select({ id: externalDvms.id, lightningAddress: externalDvms.lightningAddress })
+              .from(externalDvms)
+              .where(eq(externalDvms.pubkey, event.pubkey))
+              .limit(1)
+            if (extDvm.length > 0 && !extDvm[0].lightningAddress) {
+              await db.update(externalDvms)
+                .set({ lightningAddress: laTag, updatedAt: new Date() })
+                .where(eq(externalDvms.id, extDvm[0].id))
+              console.log(`[DVM] Backfilled lightning_address for external DVM ${event.pubkey.slice(0, 8)}`)
+            }
+          }
 
           // Check if this job is part of a workflow — auto-advance
           try {
@@ -785,6 +802,7 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
     let pricingMin: number | null = null
     let pricingMax: number | null = null
     let reputation: string | null = null
+    let lightningAddress: string | null = null
 
     try {
       const content = JSON.parse(event.content)
@@ -797,6 +815,11 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
       }
       if (content.reputation) {
         reputation = JSON.stringify(content.reputation)
+      }
+      if (content.payment?.lightning_address) {
+        lightningAddress = content.payment.lightning_address
+      } else if (content.lud16) {
+        lightningAddress = content.lud16
       }
     } catch {
       // Content may not be JSON, use tags fallback
@@ -822,6 +845,7 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
             pricingMin,
             pricingMax,
             reputation,
+            lightningAddress,
             eventId: event.id,
             eventCreatedAt: event.created_at,
             updatedAt: now,
@@ -841,6 +865,7 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
         pricingMin,
         pricingMax,
         reputation,
+        lightningAddress,
         eventId: event.id,
         eventCreatedAt: event.created_at,
         createdAt: now,

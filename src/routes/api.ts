@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
@@ -3594,6 +3594,17 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
       const localUser = await db.select({ lightningAddress: users.lightningAddress }).from(users)
         .where(eq(users.nostrPubkey, job[0].providerPubkey)).limit(1)
       if (localUser.length > 0) providerLightningAddress = localUser[0].lightningAddress
+    }
+
+    // Path C: sovereign agent — look up external_dvm indexed from relay
+    if (!providerLightningAddress && job[0].providerPubkey) {
+      const extDvm = await db.select({ lightningAddress: externalDvms.lightningAddress })
+        .from(externalDvms)
+        .where(eq(externalDvms.pubkey, job[0].providerPubkey))
+        .limit(1)
+      if (extDvm.length > 0 && extDvm[0].lightningAddress) {
+        providerLightningAddress = extDvm[0].lightningAddress
+      }
     }
 
     // --- Path 1: NWC (preferred) ---

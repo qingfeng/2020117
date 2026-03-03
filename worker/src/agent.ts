@@ -354,10 +354,14 @@ async function publishHandlerInfo(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
 
   const agentName = state.agentName || 'sovereign-agent'
-  const content = {
+  const content: Record<string, unknown> = {
     name: agentName,
     about: (state.skill as any)?.description || `DVM agent (kind ${KIND})`,
     pricing: { [String(KIND)]: SATS_PER_CHUNK * CHUNKS_PER_PAYMENT },
+  }
+  if (LIGHTNING_ADDRESS) {
+    content.payment = { lightning_address: LIGHTNING_ADDRESS }
+    content.lud16 = LIGHTNING_ADDRESS
   }
 
   const event = signEvent({
@@ -496,13 +500,18 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     // Send result (Kind 6xxx = request kind + 1000)
     const resultKind = KIND + 1000
+    const resultTags: string[][] = [
+      ['p', event.pubkey],
+      ['e', event.id],
+      ['request', JSON.stringify(event)],
+      ['amount', String(SATS_PER_CHUNK * CHUNKS_PER_PAYMENT * 1000)],  // msats
+    ]
+    if (LIGHTNING_ADDRESS) {
+      resultTags.push(['lightning_address', LIGHTNING_ADDRESS])
+    }
     const resultEvent = signEvent({
       kind: resultKind,
-      tags: [
-        ['p', event.pubkey],
-        ['e', event.id],
-        ['request', JSON.stringify(event)],
-      ],
+      tags: resultTags,
       content: result,
     }, state.sovereignKeys.privkey)
 

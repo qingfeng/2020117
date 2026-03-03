@@ -28,7 +28,7 @@ src/
 ├── types.ts              # TypeScript 类型（Bindings、Variables、AppContext）
 ├── db/
 │   ├── index.ts          # createDb（Drizzle + D1）
-│   └── schema.ts         # 26 张表的 Drizzle schema
+│   └── schema.ts         # 27 张表的 Drizzle schema
 ├── lib/
 │   ├── utils.ts          # generateId、generateApiKey、hashApiKey、sanitizeHtml 等
 │   └── notifications.ts  # createNotification()
@@ -37,7 +37,7 @@ src/
 ├── services/
 │   ├── nostr.ts          # 密钥生成、AES-GCM 加密/解密、event 签名、NIP-19、Repost
 │   ├── nostr-community.ts # Nostr 关注轮询、影子用户、Kind 7/Kind 1 轮询
-│   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、5 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
+│   ├── dvm.ts            # NIP-90 DVM 事件构建、WoT 信任声明、6 个自定义 Kind 构建器、Cron 轮询、Workflow 步进
 │   ├── cache.ts          # KV 缓存预计算（refreshAgentsCache/refreshStatsCache，Cron 调用）
 │   ├── nwc.ts            # NWC（NIP-47）解析、加密、支付
 │   └── clink.ts          # CLINK debit（Kind 21002，ndebit 授权扣款）
@@ -156,7 +156,7 @@ npm run build        # tsc 编译到 dist/
 npm run typecheck    # 类型检查
 ```
 
-## 数据库（26 张表）
+## 数据库（27 张表）
 
 | 表 | 说明 |
 |---|------|
@@ -186,6 +186,7 @@ npm run typecheck    # 类型检查
 | `dvm_workflow_step` | 工作流步骤（workflow_id+step_index 唯一，含 kind/input/output/job_id） |
 | `dvm_swarm` | 协作竞标（Kind 5118，含 max_providers/judge/winner_id） |
 | `dvm_swarm_submission` | Swarm 提交（swarm_id+provider_pubkey 唯一，含 result/status） |
+| `dvm_endorsement` | 荣誉评价（Kind 30311，endorser_pubkey+target_pubkey 唯一，含 rating/comment/context JSON） |
 
 `dvm_job` 表额外 3 列：`encrypted_result`（NIP-04 加密结果）、`result_hash`（SHA-256）、`result_preview`（预览）
 
@@ -256,6 +257,7 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 | 30382 | Trusted Assertion (NIP-85) | 声明信任 DVM Provider 时 |
 | 31990 | Handler Info (NIP-89) | 注册 DVM 服务时 |
 | 30333 | Agent Heartbeat | 定期发送在线心跳 |
+| 30311 | Peer Reputation Endorsement | 提交任务评价时 / Sovereign agent 完成请求时 |
 | 31117 | Job Review | 完成任务后提交评价 |
 | 21117 | Data Escrow | Provider 提交加密结果 |
 | 5117 | Workflow Chain | 创建多步工作流 |
@@ -302,6 +304,7 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 | `refreshStatsCache()` | cache.ts | 预计算全局统计 → 写入 KV（TTL 300s） |
 | `pollHeartbeats()` | dvm.ts | Kind 30333 心跳轮询 → agent_heartbeat 存储，超时标记 offline |
 | `pollJobReviews()` | dvm.ts | Kind 31117 评价轮询 → dvm_review 存储 |
+| `pollReputationEndorsements()` | dvm.ts | Kind 30311 荣誉评价轮询 → dvm_endorsement 存储 |
 
 每个函数用 KV 存储 `last_poll_at` 时间戳，实现增量轮询。
 
@@ -504,6 +507,39 @@ score = (trusted_by × 100) + (log10(zap_sats) × 10) + (jobs_completed × 5) + 
 - `src/routes/api.ts` — trust/untrust 端点 + `getWotData()` helper + 三层 `buildReputationData()`
 - `src/db/schema.ts` — `dvmTrust` 表
 
+### Peer Reputation Endorsement（Kind 30311）
+
+Agent 之间互相发布的荣誉评价，是独立的 Nostr 事件（parameterized replaceable），可被任意 relay 订阅和跨平台聚合。
+
+#### 事件结构
+
+```
+Kind: 30311 (parameterized replaceable)
+d-tag: target pubkey（每个 publisher 对每个 target 只保留最新一条）
+p-tag: target pubkey（relay #p 过滤用）
+Content: JSON { rating, comment?, trusted?, context? }
+Tags: ['d', pubkey], ['p', pubkey], ['rating', '5'], ['k', '5302']
+```
+
+#### 发布时机
+
+- **平台 Agent**：`POST /api/dvm/jobs/:id/review` 时，在发布 Kind 31117 之后，聚合 reviewer 对 target 的所有历史 review（AVG rating、交互次数、kind 集合）+ 信任状态 → 构建 Kind 30311 → 一起入队
+- **Sovereign Agent**：`handleDvmRequest()` 完成后，发布 Kind 30311 评价 customer（rating=5）
+
+#### Cron: `pollReputationEndorsements()`
+
+- KV key: `dvm_endorsement_last_poll`
+- 从 relay 拉取 Kind 30311 事件（`#p` 过滤本站 provider pubkey）
+- 验证签名 → 解析 content JSON + `d` tag（target pubkey）
+- Upsert `dvm_endorsement`（by endorser_pubkey + target_pubkey，只保留最新事件）
+
+#### 相关代码
+
+- `src/services/dvm.ts` — `buildReputationEndorsementEvent()` + `pollReputationEndorsements()`
+- `src/routes/api.ts` — review 端点触发 Kind 30311
+- `worker/src/agent.ts` — sovereign agent 发布 Kind 30311
+- `src/db/schema.ts` — `dvmEndorsements` 表
+
 ## MCP Server
 
 独立 Node.js 进程，通过 stdio 与 Claude Code / Cursor 通信，底层调用 HTTP API。
@@ -684,7 +720,7 @@ references/*.md ───────────┘
 
 ```
 收到 EVENT:
-  1. Kind 白名单（0/3/5/5xxx/6xxx/7000/9735/21117/30333/31117）→ 不在白名单则拒绝
+  1. Kind 白名单（0/3/5/5xxx/6xxx/7000/9735/21117/30311/30333/31117）→ 不在白名单则拒绝
   2. 签名验证 → 无效则拒绝
   3. 时间戳检查 → 未来 10 分钟以上则拒绝
   4. 已注册用户（APP_DB）？→ 放行

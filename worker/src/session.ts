@@ -35,8 +35,8 @@ for (const arg of process.argv.slice(2)) {
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { queryProviderSkill } from './p2p-customer.js'
 import { walletPayInvoice, walletGetBalance, hasApiKey } from './api.js'
-import { decodeCashuToken, sendCashuToken, peekCashuToken, createMintQuote, claimMintQuote, type Proof } from './cashu.js'
-import { parseNwcUri, nwcGetBalance, nwcPayInvoice, type NwcParsed } from './nwc.js'
+import { decodeCashuToken, sendCashuToken, peekCashuToken, createMintQuote, claimMintQuote, meltProofs, estimateMeltFee, type Proof } from './cashu.js'
+import { parseNwcUri, nwcGetBalance, nwcPayInvoice, nwcMakeInvoice, type NwcParsed } from './nwc.js'
 import { loadSovereignKeys } from './nostr.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
@@ -754,6 +754,31 @@ async function endSession() {
     log(`Session ended. Total: ${state.totalSpent} sats for ${duration}s.`)
   }
 
+  // Refund remaining Cashu proofs back to NWC wallet
+  if (cashuState && cashuState.proofs.length > 0 && nwcParsed) {
+    const remaining = cashuState.proofs.reduce((s, p) => s + p.amount, 0)
+    if (remaining >= 3) {
+      log(`Refunding ${remaining} sats Cashu → NWC wallet...`)
+      try {
+        // Probe: create 1-sat invoice to discover melt fee_reserve + swap fee
+        const probe = await nwcMakeInvoice(nwcParsed, 1000, 'fee-probe')
+        const { fee } = await estimateMeltFee(cashuState.mintUrl, probe.bolt11)
+        // fee = melt fee_reserve; +1 for Cashu internal swap fee
+        const refundAmount = remaining - fee - 1
+        if (refundAmount < 1) {
+          warn(`Remaining ${remaining} sats < melt fee (${fee} sats), cannot refund`)
+        } else {
+          const { bolt11 } = await nwcMakeInvoice(nwcParsed, refundAmount * 1000, '2020117-session refund')
+          const { preimage } = await meltProofs(cashuState.mintUrl, cashuState.proofs, bolt11)
+          cashuState.proofs = []
+          log(`Refunded ${refundAmount} sats (fee: ${fee}, preimage: ${preimage?.slice(0, 16)}...)`)
+        }
+      } catch (e: any) {
+        warn(`Refund failed: ${e.message} — ${remaining} sats lost`)
+      }
+    }
+  }
+
   // Close HTTP proxy
   if (state.httpServer) {
     state.httpServer.close()
@@ -847,37 +872,20 @@ async function main() {
       warn(`Cashu token (${tokenAmount} sats) is less than budget (${BUDGET} sats)`)
     }
   } else if (nwcUri) {
-    // NWC direct: auto-mint Cashu tokens via local NWC wallet (no platform API)
+    // NWC direct: pay provider invoices via Lightning — no Cashu needed
     nwcParsed = parseNwcUri(nwcUri)
     const { balance_msats } = await nwcGetBalance(nwcParsed)
     const balance = Math.floor(balance_msats / 1000)
     if (balance <= 0) {
-      warn('NWC wallet balance is 0. Cannot auto-mint Cashu tokens.')
+      warn('NWC wallet balance is 0.')
       await node.destroy()
       process.exit(1)
     }
-    const mintAmount = Math.min(balance, BUDGET)
-    log(`NWC wallet balance: ${balance} sats — minting ${mintAmount} sats from ${MINT_URL}`)
-    try {
-      const { quote, invoice } = await createMintQuote(MINT_URL, mintAmount)
-      log(`Mint quote: ${quote} (invoice: ${invoice.slice(0, 30)}...)`)
-
-      log('Paying mint invoice via NWC...')
-      const { preimage } = await nwcPayInvoice(nwcParsed, invoice)
-      log(`Invoice paid (preimage: ${preimage?.slice(0, 16)}...)`)
-
-      log('Claiming minted tokens...')
-      const token = await claimMintQuote(MINT_URL, mintAmount, quote)
-      const { mint, proofs } = decodeCashuToken(token)
-      cashuState = { mintUrl: mint, proofs }
-      paymentMethod = 'cashu'
-      const totalMinted = proofs.reduce((s, p) => s + p.amount, 0)
-      log(`Minted ${totalMinted} sats Cashu token — using Cashu payment mode`)
-    } catch (e: any) {
-      warn(`NWC auto-mint failed: ${e.message}`)
-      await node.destroy()
-      process.exit(1)
+    if (balance < BUDGET) {
+      warn(`NWC wallet balance (${balance} sats) < budget (${BUDGET} sats)`)
     }
+    paymentMethod = 'invoice'
+    log(`Payment: NWC direct (balance: ${balance} sats, pay-per-tick via Lightning)`)
   } else if (hasApiKey()) {
     // Platform API fallback: auto-mint Cashu tokens via platform wallet proxy
     const balance = await walletGetBalance()
@@ -943,6 +951,32 @@ async function main() {
   if (ackResp.sats_per_minute && ackResp.sats_per_minute !== satsPerMinute) {
     state.satsPerMinute = ackResp.sats_per_minute
     log(`Provider adjusted rate: ${ackResp.sats_per_minute} sats/min`)
+  }
+
+  // Provider may override payment method (e.g. no Lightning Address → force cashu)
+  if (ackResp.payment_method && ackResp.payment_method !== paymentMethod) {
+    if (ackResp.payment_method === 'cashu' && paymentMethod === 'invoice' && nwcParsed) {
+      // Provider doesn't support invoice — fall back to NWC-minted Cashu
+      log(`Provider requires Cashu — minting via NWC...`)
+      try {
+        const { balance_msats } = await nwcGetBalance(nwcParsed)
+        const balance = Math.floor(balance_msats / 1000)
+        const mintAmount = Math.min(balance, BUDGET)
+        const { quote, invoice } = await createMintQuote(MINT_URL, mintAmount)
+        const { preimage } = await nwcPayInvoice(nwcParsed, invoice)
+        const token = await claimMintQuote(MINT_URL, mintAmount, quote)
+        const { mint, proofs } = decodeCashuToken(token)
+        cashuState = { mintUrl: mint, proofs }
+        paymentMethod = 'cashu'
+        log(`Minted ${proofs.reduce((s, p) => s + p.amount, 0)} sats Cashu — fallback ready`)
+      } catch (e: any) {
+        warn(`Cashu fallback mint failed: ${e.message}`)
+        await node.destroy()
+        process.exit(1)
+      }
+    } else {
+      paymentMethod = ackResp.payment_method as 'cashu' | 'invoice'
+    }
   }
 
   log(`Session started: ${state.sessionId}`)

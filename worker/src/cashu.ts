@@ -79,6 +79,40 @@ export function encodeCashuToken(mintUrl: string, proofs: Proof[]): string {
 }
 
 /**
+ * Melt proofs back into a Lightning invoice — converts Cashu back to Lightning.
+ * Returns the payment preimage and any change proofs.
+ */
+export async function meltProofs(
+  mintUrl: string,
+  proofs: Proof[],
+  invoice: string,
+): Promise<{ preimage: string; change: Proof[] }> {
+  const wallet = await getWallet(mintUrl)
+  const meltQuote = await wallet.createMeltQuote(invoice)
+  const amountNeeded = meltQuote.amount + meltQuote.fee_reserve
+  const total = proofs.reduce((s, p) => s + p.amount, 0)
+  if (total < amountNeeded) {
+    throw new Error(`Need ${amountNeeded} sats (invoice ${meltQuote.amount} + fee ${meltQuote.fee_reserve}) but only have ${total}`)
+  }
+  const { send, keep } = await wallet.send(amountNeeded, proofs, { includeFees: true })
+  const result = await wallet.meltProofs(meltQuote, send)
+  const change = [...keep, ...(result.change || [])]
+  return { preimage: result.quote.payment_preimage || '', change }
+}
+
+/**
+ * Estimate total cost to melt (invoice amount + fee_reserve) for a given invoice.
+ */
+export async function estimateMeltFee(
+  mintUrl: string,
+  invoice: string,
+): Promise<{ amount: number; fee: number; total: number }> {
+  const wallet = await getWallet(mintUrl)
+  const quote = await wallet.createMeltQuote(invoice)
+  return { amount: quote.amount, fee: quote.fee_reserve, total: quote.amount + quote.fee_reserve }
+}
+
+/**
  * Request a mint quote — returns a Lightning invoice to pay for minting tokens.
  */
 export async function createMintQuote(

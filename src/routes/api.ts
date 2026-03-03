@@ -2716,6 +2716,19 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
         .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: new Date() })
         .where(and(eq(dvmJobs.requestEventId, pj.requestEventId), eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'open')))
     }
+    // Kind 7000 — broadcast "processing" status to relay
+    if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE && pj.requestEventId && pj.customerPubkey) {
+      const feedbackEvent = await buildJobFeedbackEvent({
+        privEncrypted: user.nostrPrivEncrypted,
+        iv: user.nostrPrivIv,
+        masterKey: c.env.NOSTR_MASTER_KEY,
+        requestEventId: pj.requestEventId,
+        customerPubkey: pj.customerPubkey,
+        status: 'processing',
+        content: '',
+      })
+      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [feedbackEvent] }))
+    }
     return c.json({ job_id: pj.id, status: 'accepted', kind: pj.kind })
   }
 
@@ -2798,10 +2811,26 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     .set({ status: 'processing', updatedAt: now })
     .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.status, 'open')))
 
-  // Kind 1 note + board repost
+  // Kind 7000 feedback (processing) + Kind 1 note
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
+    const events: NostrEvent[] = []
+
+    // Kind 7000 — Nostr-first: broadcast "processing" status to relay
+    if (cj.eventId && cj.customerPubkey) {
+      const feedbackEvent = await buildJobFeedbackEvent({
+        privEncrypted: user.nostrPrivEncrypted,
+        iv: user.nostrPrivIv,
+        masterKey: c.env.NOSTR_MASTER_KEY,
+        requestEventId: cj.eventId,
+        customerPubkey: cj.customerPubkey,
+        status: 'processing',
+        content: '',
+      })
+      events.push(feedbackEvent)
+    }
+
+    // Kind 1 — social note
     const kindLabel = DVM_KIND_LABELS[cj.kind] || `kind ${cj.kind}`
-    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
     const noteEvent = await buildSignedEvent({
       privEncrypted: user.nostrPrivEncrypted,
       iv: user.nostrPrivIv,
@@ -2810,7 +2839,9 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
       content: `⚡ Accepted a ${kindLabel} job\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
       tags: [['t', 'dvm'], ['t', '2020117']],
     })
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
+    events.push(noteEvent)
+
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events }))
   }
 
   // Check if provider is flagged and add warning

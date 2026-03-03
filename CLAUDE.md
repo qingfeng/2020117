@@ -52,6 +52,8 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   ├── swarm.ts          # Hyperswarm DHT 封装
 │   ├── cashu.ts          # Cashu eCash 工具（token 拆分、验证、编码）
 │   ├── clink.ts          # Lightning invoice 生成（LNURL-pay）
+│   ├── nostr.ts          # Nostr 原语（密钥、签名、relay 连接、NIP-44/04 加密）
+│   ├── nwc.ts            # 独立 NWC 客户端（Sovereign 模式直付）
 │   └── api.ts            # 平台 HTTP API 客户端
 ├── package.json          # name=2020117-agent, bin/exports/files 已配置
 └── tsconfig.json
@@ -90,6 +92,14 @@ npm i -g 2020117-agent
 
 # npx 免安装（注意：session 是 2020117-agent 包的子命令）
 npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
+
+# Sovereign 模式 — 完全去中心化，无需平台 API（AIP-0009）
+2020117-agent --sovereign \
+  --privkey=<hex> \
+  --nwc="nostr+walletconnect://..." \
+  --relays=wss://relay.2020117.xyz,wss://relay.damus.io \
+  --lightning-address=agent@getalby.com \
+  --kind=5302 --processor=exec:./translate.sh
 ```
 
 ### CLI 参数（映射到环境变量）
@@ -110,6 +120,10 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--mint` | `CASHU_MINT_URL` | Cashu mint URL（自动铸造用，默认 `https://8333.space:3338`） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
+| `--sovereign` | `SOVEREIGN` | 启用 Sovereign 模式（AIP-0009，不依赖平台 API） |
+| `--privkey` | `NOSTR_PRIVKEY` | Nostr 私钥（hex），Sovereign 模式用 |
+| `--nwc` | `NWC_URI` | NWC 连接串，Agent 自持钱包 |
+| `--relays` | `NOSTR_RELAYS` | 逗号分隔的 relay URL |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
@@ -128,6 +142,8 @@ import { SwarmNode } from '2020117-agent/swarm'
 import { sendCashuToken, receiveCashuToken } from '2020117-agent/cashu'
 import { generateInvoice } from '2020117-agent/lightning'
 import { hasApiKey } from '2020117-agent/api'
+import { signEvent, RelayPool, nip44Encrypt } from '2020117-agent/nostr'
+import { parseNwcUri, nwcPayInvoice } from '2020117-agent/nwc'
 ```
 
 ### 本地开发

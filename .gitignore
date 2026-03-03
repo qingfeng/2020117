@@ -11,3 +11,7 @@ mcp-server/dist/
 worker/dist/
 worker-configuration.d.ts
 *-NOCOMMIT.md
+.agents/
+.claude/
+skills-lock.json
+logo-philosophy.md

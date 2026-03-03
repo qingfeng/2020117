@@ -15,7 +15,9 @@
     "./swarm": "./dist/swarm.js",
     "./cashu": "./dist/cashu.js",
     "./lightning": "./dist/clink.js",
-    "./api": "./dist/api.js"
+    "./api": "./dist/api.js",
+    "./nostr": "./dist/nostr.js",
+    "./nwc": "./dist/nwc.js"
   },
   "scripts": {
     "agent": "node dist/agent.js",
@@ -28,7 +30,10 @@
   },
   "dependencies": {
     "@cashu/cashu-ts": "^2.5.3",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
     "hyperswarm": "^4.17.0",
+    "nostr-tools": "^2.23.3",
     "ws": "^8.19.0"
   },
   "devDependencies": {

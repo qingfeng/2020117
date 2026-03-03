@@ -19,7 +19,11 @@
 for (const arg of process.argv.slice(2)) {
   if (!arg.startsWith('--')) continue
   const eq = arg.indexOf('=')
-  if (eq === -1) continue
+  if (eq === -1) {
+    // Bare flags (no value)
+    if (arg === '--sovereign') process.env.SOVEREIGN = '1'
+    continue
+  }
   const key = arg.slice(0, eq)
   const val = arg.slice(eq + 1)
   switch (key) {
@@ -36,6 +40,10 @@ for (const arg of process.argv.slice(2)) {
     case '--models':       process.env.MODELS = val; break
     case '--skill':        process.env.SKILL_FILE = val; break
     case '--lightning-address': process.env.LIGHTNING_ADDRESS = val; break
+    case '--sovereign':    process.env.SOVEREIGN = val || '1'; break
+    case '--privkey':      process.env.NOSTR_PRIVKEY = val; break
+    case '--nwc':          process.env.NWC_URI = val; break
+    case '--relays':       process.env.NOSTR_RELAYS = val; break
   }
 }
 
@@ -49,6 +57,14 @@ import {
 } from './api.js'
 import { generateInvoice } from './clink.js'
 import { receiveCashuToken } from './cashu.js'
+import {
+  generateKeypair, loadSovereignKeys, saveSovereignKeys,
+  signEvent, nip44Encrypt, nip44Decrypt, pubkeyFromPrivkey,
+  RelayPool,
+} from './nostr.js'
+import type { NostrEvent, SovereignKeys } from './nostr.js'
+import { parseNwcUri, nwcGetBalance } from './nwc.js'
+import type { NwcParsed } from './nwc.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
 // Polyfill global WebSocket for Node.js < 22 (needed by ws tunnel)
@@ -64,6 +80,11 @@ const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 
 // --- Lightning payment config ---
 let LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
+
+// --- Sovereign mode config ---
+const SOVEREIGN = process.env.SOVEREIGN === '1' || process.env.SOVEREIGN === 'true'
+const DEFAULT_RELAYS = ['wss://relay.2020117.xyz', 'wss://relay.damus.io', 'wss://nos.lol']
+const RELAYS = process.env.NOSTR_RELAYS?.split(',').map(s => s.trim()) || DEFAULT_RELAYS
 
 // --- Sub-task delegation config ---
 const SUB_KIND = process.env.SUB_KIND ? Number(process.env.SUB_KIND) : null
@@ -104,6 +125,10 @@ interface AgentState {
   // P2P session lifetime counters (in-memory, resets on restart)
   p2pSessionsCompleted: number
   p2pTotalEarnedSats: number
+  // Sovereign mode
+  sovereignKeys: SovereignKeys | null
+  relayPool: RelayPool | null
+  nwcParsed: NwcParsed | null
 }
 
 const state: AgentState = {
@@ -117,6 +142,9 @@ const state: AgentState = {
   skill: loadSkill(),
   p2pSessionsCompleted: 0,
   p2pTotalEarnedSats: 0,
+  sovereignKeys: null,
+  relayPool: null,
+  nwcParsed: null,
 }
 
 // --- Capacity management ---
@@ -166,19 +194,27 @@ async function main() {
     }
   }
 
-  // 3. Platform registration + heartbeat
-  await setupPlatform(label)
+  // 3. Sovereign mode: Nostr identity + relay connections + NIP-XX
+  if (SOVEREIGN) {
+    await setupSovereign(label)
+  }
 
-  // 5. Async inbox poller
+  // 4. Platform registration + heartbeat (skipped in sovereign-only mode)
+  if (!SOVEREIGN || hasApiKey()) {
+    await setupPlatform(label)
+  }
+
+  // 5. Async inbox poller (platform mode)
   startInboxPoller(label)
 
   // 6. P2P swarm listener
   await startSwarmListener(label)
 
-  // 6. Graceful shutdown
+  // 7. Graceful shutdown
   setupShutdown(label)
 
-  console.log(`[${label}] Agent ready — async + P2P channels active\n`)
+  const mode = SOVEREIGN ? 'sovereign' : (hasApiKey() ? 'platform' : 'P2P-only')
+  console.log(`[${label}] Agent ready — mode=${mode}, channels active\n`)
 }
 
 // --- 2. Platform registration ---
@@ -203,6 +239,332 @@ async function setupPlatform(label: string) {
     earned_sats: state.p2pTotalEarnedSats,
     active: activeSessions.size > 0,
   }))
+}
+
+// --- 2a. Sovereign Mode (AIP-0009) ---
+
+async function setupSovereign(label: string) {
+  const agentName = state.agentName || 'sovereign-agent'
+
+  // 1. Load or generate Nostr keys
+  let keys = loadSovereignKeys(agentName)
+
+  if (!keys?.privkey) {
+    const privkey = process.env.NOSTR_PRIVKEY
+    if (privkey) {
+      keys = {
+        ...(keys || {} as SovereignKeys),
+        privkey,
+        pubkey: pubkeyFromPrivkey(privkey),
+        nwc_uri: process.env.NWC_URI,
+        relays: RELAYS,
+        lightning_address: LIGHTNING_ADDRESS || undefined,
+      }
+    } else {
+      const kp = generateKeypair()
+      keys = {
+        ...(keys || {} as SovereignKeys),
+        privkey: kp.privkey,
+        pubkey: kp.pubkey,
+        nwc_uri: process.env.NWC_URI,
+        relays: RELAYS,
+        lightning_address: LIGHTNING_ADDRESS || undefined,
+      }
+      console.log(`[${label}] Generated new Nostr keypair: ${kp.pubkey}`)
+    }
+    saveSovereignKeys(agentName, keys)
+  }
+
+  // Apply NWC/relays from env if not already in keys
+  if (!keys.nwc_uri && process.env.NWC_URI) keys.nwc_uri = process.env.NWC_URI
+  if (!keys.relays?.length) keys.relays = RELAYS
+  if (!keys.lightning_address && LIGHTNING_ADDRESS) keys.lightning_address = LIGHTNING_ADDRESS
+
+  state.sovereignKeys = keys
+  console.log(`[${label}] Sovereign identity: ${keys.pubkey}`)
+
+  // 2. Parse NWC URI if available
+  const nwcUri = keys.nwc_uri || process.env.NWC_URI
+  if (nwcUri) {
+    try {
+      state.nwcParsed = parseNwcUri(nwcUri)
+      const { balance_msats } = await nwcGetBalance(state.nwcParsed)
+      console.log(`[${label}] NWC wallet connected (balance: ${Math.floor(balance_msats / 1000)} sats)`)
+    } catch (e: any) {
+      console.warn(`[${label}] NWC connection failed: ${e.message}`)
+      state.nwcParsed = null
+    }
+  }
+
+  // 3. Connect to relay pool
+  const relayUrls = keys.relays || RELAYS
+  console.log(`[${label}] Connecting to ${relayUrls.length} relay(s)...`)
+  state.relayPool = new RelayPool(relayUrls)
+  await state.relayPool.connect()
+  console.log(`[${label}] Connected to ${state.relayPool.connectedCount} relay(s)`)
+
+  // 4. Publish ai.info (Kind 31340) — NIP-XX capability advertisement
+  await publishAiInfo(label)
+
+  // 5. Publish handler info (Kind 31990) — NIP-89 DVM capability
+  await publishHandlerInfo(label)
+
+  // 6. Subscribe to NIP-XX prompts (Kind 25802)
+  subscribeNipXX(label)
+
+  // 7. Subscribe to DVM requests (Kind 5xxx) directly from relay
+  subscribeDvmRequests(label)
+
+  // 8. Start sovereign heartbeat (Kind 30333 to relay)
+  startSovereignHeartbeat(label)
+}
+
+async function publishAiInfo(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  const info: Record<string, unknown> = {
+    ver: 1,
+    supports_streaming: false,
+    encryption: ['nip44'],
+    supported_models: state.processor?.name ? [state.processor.name] : [],
+    default_model: state.processor?.name || 'default',
+    dvm_compatible: true,
+    dvm_kinds: [KIND],
+    pricing_hints: {
+      currency: 'BTC',
+      sats_per_prompt: SATS_PER_CHUNK * CHUNKS_PER_PAYMENT,
+    },
+    payment: {
+      methods: state.nwcParsed ? ['nwc', 'cashu'] : ['cashu'],
+      lightning_address: LIGHTNING_ADDRESS || undefined,
+    },
+  }
+
+  const event = signEvent({
+    kind: 31340,
+    tags: [['d', 'agent-info']],
+    content: JSON.stringify(info),
+  }, state.sovereignKeys.privkey)
+
+  const ok = await state.relayPool.publish(event)
+  console.log(`[${label}] Published ai.info (Kind 31340): ${ok ? 'ok' : 'failed'}`)
+}
+
+async function publishHandlerInfo(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  const agentName = state.agentName || 'sovereign-agent'
+  const content = {
+    name: agentName,
+    about: (state.skill as any)?.description || `DVM agent (kind ${KIND})`,
+    pricing: { [String(KIND)]: SATS_PER_CHUNK * CHUNKS_PER_PAYMENT },
+  }
+
+  const event = signEvent({
+    kind: 31990,
+    tags: [
+      ['d', `${agentName}-${KIND}`],
+      ['k', String(KIND)],
+    ],
+    content: JSON.stringify(content),
+  }, state.sovereignKeys.privkey)
+
+  const ok = await state.relayPool.publish(event)
+  console.log(`[${label}] Published handler info (Kind 31990): ${ok ? 'ok' : 'failed'}`)
+}
+
+function subscribeNipXX(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  state.relayPool.subscribe(
+    { kinds: [25802], '#p': [state.sovereignKeys.pubkey] },
+    (event: NostrEvent) => {
+      handleAiPrompt(label, event).catch(e => {
+        console.error(`[${label}] NIP-XX prompt error: ${e.message}`)
+      })
+    },
+  )
+  console.log(`[${label}] Subscribed to ai.prompt (Kind 25802)`)
+}
+
+function subscribeDvmRequests(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  state.relayPool.subscribe(
+    { kinds: [KIND], '#p': [state.sovereignKeys.pubkey] },
+    (event: NostrEvent) => {
+      handleDvmRequest(label, event).catch(e => {
+        console.error(`[${label}] DVM request error: ${e.message}`)
+      })
+    },
+  )
+  console.log(`[${label}] Subscribed to DVM requests (Kind ${KIND}) via relay`)
+}
+
+async function handleAiPrompt(label: string, event: NostrEvent) {
+  if (!state.sovereignKeys || !state.relayPool || !state.processor) return
+  if (!acquireSlot()) {
+    await publishAiError(event.pubkey, event.id, 'RATE_LIMIT', 'Agent at capacity')
+    return
+  }
+
+  try {
+    const clientPubkey = event.pubkey
+    const promptId = event.id
+
+    // NIP-44 decrypt
+    let content: any
+    try {
+      const decrypted = await nip44Decrypt(state.sovereignKeys.privkey, clientPubkey, event.content)
+      content = JSON.parse(decrypted)
+    } catch {
+      await publishAiError(clientPubkey, promptId, 'INVALID_REQUEST', 'Failed to decrypt')
+      return
+    }
+
+    const message = content.message || content.text || ''
+    console.log(`[${label}] NIP-XX prompt from ${clientPubkey.slice(0, 8)}: "${message.slice(0, 60)}..."`)
+
+    // Status: thinking
+    await publishAiStatus(clientPubkey, promptId, 'thinking')
+
+    // Process
+    const result = await state.processor.generate({ input: message, params: content.params })
+    console.log(`[${label}] NIP-XX response: ${result.length} chars`)
+
+    // Build ai.response (Kind 25803)
+    const responsePayload = JSON.stringify({
+      text: result,
+      usage: { input_tokens: message.length, output_tokens: result.length },
+    })
+    const encrypted = await nip44Encrypt(state.sovereignKeys.privkey, clientPubkey, responsePayload)
+
+    const tags: string[][] = [
+      ['p', clientPubkey],
+      ['e', promptId],
+    ]
+    const sessionTag = event.tags.find(t => t[0] === 's')
+    if (sessionTag) tags.push(sessionTag)
+
+    const responseEvent = signEvent({
+      kind: 25803,
+      tags,
+      content: encrypted,
+    }, state.sovereignKeys.privkey)
+
+    await state.relayPool!.publish(responseEvent)
+
+    // Status: done
+    await publishAiStatus(clientPubkey, promptId, 'done')
+    console.log(`[${label}] Published ai.response (Kind 25803)`)
+  } finally {
+    releaseSlot()
+  }
+}
+
+async function handleDvmRequest(label: string, event: NostrEvent) {
+  if (!state.sovereignKeys || !state.relayPool || !state.processor) return
+  if (!acquireSlot()) return
+
+  try {
+    // Parse DVM request: input is in 'i' tag
+    const inputTag = event.tags.find(t => t[0] === 'i')
+    const input = inputTag?.[1] || ''
+    if (!input) {
+      console.warn(`[${label}] DVM request ${event.id.slice(0, 8)} has no input`)
+      return
+    }
+
+    console.log(`[${label}] DVM request from ${event.pubkey.slice(0, 8)}: "${input.slice(0, 60)}..."`)
+
+    // Send feedback (Kind 7000)
+    const feedbackEvent = signEvent({
+      kind: 7000,
+      tags: [
+        ['p', event.pubkey],
+        ['e', event.id],
+        ['status', 'processing'],
+      ],
+      content: '',
+    }, state.sovereignKeys.privkey)
+    await state.relayPool.publish(feedbackEvent)
+
+    // Process
+    const result = await state.processor.generate({ input })
+    console.log(`[${label}] DVM result: ${result.length} chars`)
+
+    // Send result (Kind 6xxx = request kind + 1000)
+    const resultKind = KIND + 1000
+    const resultEvent = signEvent({
+      kind: resultKind,
+      tags: [
+        ['p', event.pubkey],
+        ['e', event.id],
+        ['request', JSON.stringify(event)],
+      ],
+      content: result,
+    }, state.sovereignKeys.privkey)
+
+    await state.relayPool.publish(resultEvent)
+    console.log(`[${label}] Published DVM result (Kind ${resultKind}) via relay`)
+  } finally {
+    releaseSlot()
+  }
+}
+
+async function publishAiStatus(clientPubkey: string, promptId: string, status: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  const payload = JSON.stringify({ state: status })
+  const encrypted = await nip44Encrypt(state.sovereignKeys.privkey, clientPubkey, payload)
+
+  const event = signEvent({
+    kind: 25800,
+    tags: [['p', clientPubkey], ['e', promptId]],
+    content: encrypted,
+  }, state.sovereignKeys.privkey)
+
+  await state.relayPool.publish(event).catch(() => {})
+}
+
+async function publishAiError(clientPubkey: string, promptId: string, code: string, message: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  const payload = JSON.stringify({ code, message })
+  const encrypted = await nip44Encrypt(state.sovereignKeys.privkey, clientPubkey, payload)
+
+  const event = signEvent({
+    kind: 25805,
+    tags: [['p', clientPubkey], ['e', promptId]],
+    content: encrypted,
+  }, state.sovereignKeys.privkey)
+
+  await state.relayPool.publish(event).catch(() => {})
+}
+
+function startSovereignHeartbeat(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  async function publishHeartbeat() {
+    if (!state.sovereignKeys || !state.relayPool) return
+
+    const event = signEvent({
+      kind: 30333,
+      tags: [
+        ['d', state.sovereignKeys!.pubkey],
+        ['status', 'online'],
+        ['capacity', String(getAvailableCapacity())],
+        ['kinds', String(KIND)],
+      ],
+      content: '',
+    }, state.sovereignKeys.privkey)
+
+    const ok = await state.relayPool!.publish(event)
+    if (ok) console.log(`[${label}] Heartbeat published to relay`)
+  }
+
+  publishHeartbeat()
+  setInterval(publishHeartbeat, 5 * 60_000)
 }
 
 // --- 3. Async Inbox Poller ---
@@ -796,6 +1158,11 @@ function setupShutdown(label: string) {
     // Destroy swarm
     if (state.swarmNode) {
       await state.swarmNode.destroy()
+    }
+
+    // Close relay pool (sovereign mode)
+    if (state.relayPool) {
+      await state.relayPool.close()
     }
 
     console.log(`[${label}] Goodbye`)

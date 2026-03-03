@@ -214,8 +214,9 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
 
   const relayUrl = relayUrls[0]
 
-  // Poll for Job Results (Kind 6000-6999) and Feedback (Kind 7000)
-  // We need to query for events that reference our request event IDs
+  // Poll for Job Results and Feedback (Kind 7000)
+  // Derive actual result kinds from active jobs (request kind + 1000)
+  const resultKinds = [...new Set(activeJobs.map(j => j.kind + 1000))]
   const BATCH_SIZE = 50
   let maxCreatedAt = since
 
@@ -223,9 +224,9 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
     const batch = requestEventIds.slice(i, i + BATCH_SIZE)
 
     try {
-      // Query Kind 6000-6999 results
+      // Query result kinds derived from active request kinds
       const resultRelay = await fetchEventsFromRelay(relayUrl, {
-        kinds: Array.from({ length: 1000 }, (_, k) => k + 6000),
+        kinds: resultKinds,
         '#e': batch,
         since,
       })

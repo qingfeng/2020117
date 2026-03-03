@@ -65,6 +65,7 @@ interface SessionClientState {
   skill: Record<string, unknown> | null
   satsPerMinute: number
   totalSpent: number          // tracked from provider's debit notifications
+  pendingAmount: number       // accumulates fractional sats until >= 1
   startedAt: number
   httpServer: ReturnType<typeof createServer> | null
   shuttingDown: boolean
@@ -85,6 +86,7 @@ const state: SessionClientState = {
   skill: null,
   satsPerMinute: 0,
   totalSpent: 0,
+  pendingAmount: 0,   // accumulates fractional sats until >= 1
   startedAt: 0,
   httpServer: null,
   shuttingDown: false,
@@ -221,19 +223,32 @@ function setupMessageHandler() {
             endSession()
           }
         } else if (cashuState) {
-          // Cashu mode: split tokens and send
-          log(`Paying with Cashu: ${amount} sats...`)
+          // Cashu mode: accumulate fractional amounts, pay in whole sats
+          state.pendingAmount += amount
+          const payNow = Math.floor(state.pendingAmount)
+          if (payNow < 1) {
+            // Not enough to pay yet — ack without token
+            state.node!.send(state.socket, {
+              type: 'session_tick_ack',
+              id: msg.id,
+              session_id: state.sessionId,
+              amount: 0,
+            })
+            break
+          }
+          log(`Paying with Cashu: ${payNow} sats (accumulated from ${state.pendingAmount.toFixed(2)})...`)
           try {
-            const { token, change } = await sendCashuToken(cashuState.mintUrl, cashuState.proofs, amount)
+            const { token, change } = await sendCashuToken(cashuState.mintUrl, cashuState.proofs, payNow)
             cashuState.proofs = change
-            state.totalSpent += amount
-            log(`Paid ${amount} sats (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
+            state.totalSpent += payNow
+            state.pendingAmount -= payNow
+            log(`Paid ${payNow} sats (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
             state.node!.send(state.socket, {
               type: 'session_tick_ack',
               id: msg.id,
               session_id: state.sessionId,
               cashu_token: token,
-              amount,
+              amount: payNow,
             })
           } catch (e: any) {
             warn(`Cashu payment failed: ${e.message} — ending session`)

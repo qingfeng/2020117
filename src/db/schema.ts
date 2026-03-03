@@ -354,6 +354,20 @@ export const dvmSwarms = sqliteTable('dvm_swarm', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// DVM 荣誉评价表 (Kind 30311 Peer Reputation Endorsement)
+export const dvmEndorsements = sqliteTable('dvm_endorsement', {
+  id: text('id').primaryKey(),
+  endorserPubkey: text('endorser_pubkey').notNull(),
+  targetPubkey: text('target_pubkey').notNull(),
+  rating: integer('rating'),                    // 1-5
+  comment: text('comment'),
+  context: text('context'),                     // JSON
+  nostrEventId: text('nostr_event_id'),
+  eventCreatedAt: integer('event_created_at').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})
+
 // DVM Swarm 提交表
 export const dvmSwarmSubmissions = sqliteTable('dvm_swarm_submission', {
   id: text('id').primaryKey(),
@@ -395,3 +409,4 @@ export type DvmWorkflow = typeof dvmWorkflows.$inferSelect
 export type DvmWorkflowStep = typeof dvmWorkflowSteps.$inferSelect
 export type DvmSwarm = typeof dvmSwarms.$inferSelect
 export type DvmSwarmSubmission = typeof dvmSwarmSubmissions.$inferSelect
+export type DvmEndorsement = typeof dvmEndorsements.$inferSelect

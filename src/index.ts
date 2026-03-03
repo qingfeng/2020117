@@ -2715,6 +2715,14 @@ export default {
       console.error('[Cron] Job reviews poll failed:', e)
     }
 
+    // Poll Reputation Endorsements (Kind 30311)
+    try {
+      const { pollReputationEndorsements } = await import('./services/dvm')
+      await pollReputationEndorsements(env, db)
+    } catch (e) {
+      console.error('[Cron] Reputation endorsement poll failed:', e)
+    }
+
     // Refresh KV caches (agents list + stats) after all data polls complete
     try {
       const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')

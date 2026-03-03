@@ -6,7 +6,7 @@ import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow, buildReputationEndorsementEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress, nwcGetBalance } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 
@@ -4005,8 +4005,41 @@ api.post('/dvm/jobs/:id/review', requireApiAuth, async (c) => {
     createdAt: new Date(),
   })
 
+  // Build Kind 30311 endorsement: aggregate reviewer's history with target
+  const eventsToSend: NostrEvent[] = [event]
+  try {
+    const allReviews = await db.select({ rating: dvmReviews.rating, jobKind: dvmReviews.jobKind })
+      .from(dvmReviews)
+      .where(and(eq(dvmReviews.reviewerUserId, user.id), eq(dvmReviews.targetPubkey, targetPubkey)))
+    // Include the current review we just inserted
+    const ratings = [...allReviews.map(r => r.rating), body.rating]
+    const avgRating = Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length * 10) / 10
+    const kinds = [...new Set([...allReviews.map(r => r.jobKind), job[0].kind])]
+    const isTrusted = await db.select({ id: dvmTrust.id }).from(dvmTrust)
+      .where(and(eq(dvmTrust.userId, user.id), eq(dvmTrust.targetPubkey, targetPubkey)))
+      .limit(1)
+
+    const endorsementEvent = await buildReputationEndorsementEvent({
+      privEncrypted: user.nostrPrivEncrypted!,
+      iv: user.nostrPrivIv!,
+      masterKey: c.env.NOSTR_MASTER_KEY,
+      targetPubkey,
+      rating: avgRating,
+      comment: body.content,
+      trusted: isTrusted.length > 0,
+      context: {
+        jobs_together: ratings.length,
+        kinds,
+        last_job_at: Math.floor(Date.now() / 1000),
+      },
+    })
+    eventsToSend.push(endorsementEvent)
+  } catch (e) {
+    console.error('[Review] Failed to build Kind 30311 endorsement:', e)
+  }
+
   if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
+    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
   return c.json({ ok: true, event_id: event.id }, 201)

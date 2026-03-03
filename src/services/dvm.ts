@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps } from '../db/schema'
+import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -1377,6 +1377,147 @@ export async function pollJobReviews(env: Bindings, db: Database): Promise<void>
     }
   } catch (e) {
     console.error('[DVM] Failed to poll job reviews:', e)
+  }
+}
+
+// --- Kind 30311: Peer Reputation Endorsement ---
+
+export async function buildReputationEndorsementEvent(params: {
+  privEncrypted: string
+  iv: string
+  masterKey: string
+  targetPubkey: string
+  rating: number
+  comment?: string
+  trusted?: boolean
+  context?: { jobs_together: number; kinds: number[]; last_job_at: number }
+}): Promise<NostrEvent> {
+  const tags: string[][] = [
+    ['d', params.targetPubkey],
+    ['p', params.targetPubkey],
+    ['rating', String(params.rating)],
+  ]
+  if (params.context?.kinds) {
+    for (const k of params.context.kinds) {
+      tags.push(['k', String(k)])
+    }
+  }
+
+  const content: Record<string, unknown> = {
+    rating: params.rating,
+  }
+  if (params.comment) content.comment = params.comment
+  if (params.trusted !== undefined) content.trusted = params.trusted
+  if (params.context) content.context = params.context
+
+  return buildSignedEvent({
+    privEncrypted: params.privEncrypted,
+    iv: params.iv,
+    masterKey: params.masterKey,
+    kind: 30311,
+    content: JSON.stringify(content),
+    tags,
+  })
+}
+
+export async function pollReputationEndorsements(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Get all local provider pubkeys to filter #p
+  const activeServices = await db
+    .select({ nostrPubkey: users.nostrPubkey })
+    .from(dvmServices)
+    .innerJoin(users, eq(dvmServices.userId, users.id))
+    .where(eq(dvmServices.active, 1))
+
+  const providerPubkeys = [...new Set(activeServices.map(s => s.nostrPubkey).filter((pk): pk is string => !!pk))]
+  if (providerPubkeys.length === 0) return
+
+  // KV-based incremental polling
+  const kv = env.KV
+  const sinceKey = 'dvm_endorsement_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400
+
+  let maxCreatedAt = since
+
+  for (const relayUrl of relayUrls) {
+    try {
+      const { events } = await fetchEventsFromRelay(relayUrl, {
+        kinds: [30311],
+        '#p': providerPubkeys,
+        since,
+      })
+
+      console.log(`[DVM] Fetched ${events.length} Kind 30311 endorsement events from ${relayUrl}`)
+
+      for (const event of events) {
+        if (!verifyEvent(event)) continue
+
+        const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+        if (!dTag) {
+          if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+          continue
+        }
+
+        const targetPubkey = dTag
+
+        // Parse content JSON
+        let rating: number | null = null
+        let comment: string | null = null
+        let context: string | null = null
+        try {
+          const parsed = JSON.parse(event.content)
+          rating = typeof parsed.rating === 'number' ? parsed.rating : null
+          comment = parsed.comment || null
+          context = parsed.context ? JSON.stringify(parsed.context) : null
+        } catch {
+          // Content may not be valid JSON, try rating tag
+          const ratingTag = event.tags.find((t: string[]) => t[0] === 'rating')?.[1]
+          if (ratingTag) rating = parseInt(ratingTag)
+        }
+
+        const now = new Date()
+
+        // Upsert: (endorser_pubkey, target_pubkey) unique — keep newest
+        const existing = await db.select({ id: dvmEndorsements.id, eventCreatedAt: dvmEndorsements.eventCreatedAt })
+          .from(dvmEndorsements)
+          .where(and(eq(dvmEndorsements.endorserPubkey, event.pubkey), eq(dvmEndorsements.targetPubkey, targetPubkey)))
+          .limit(1)
+
+        if (existing.length === 0) {
+          await db.insert(dvmEndorsements).values({
+            id: generateId(),
+            endorserPubkey: event.pubkey,
+            targetPubkey,
+            rating,
+            comment,
+            context,
+            nostrEventId: event.id,
+            eventCreatedAt: event.created_at,
+            createdAt: now,
+            updatedAt: now,
+          })
+          console.log(`[DVM] Stored endorsement: ${event.pubkey.slice(0, 8)}... → ${targetPubkey.slice(0, 8)}... (rating=${rating})`)
+        } else if (event.created_at > existing[0].eventCreatedAt) {
+          await db.update(dvmEndorsements)
+            .set({ rating, comment, context, nostrEventId: event.id, eventCreatedAt: event.created_at, updatedAt: now })
+            .where(eq(dvmEndorsements.id, existing[0].id))
+        }
+
+        if (event.created_at > maxCreatedAt) {
+          maxCreatedAt = event.created_at
+        }
+      }
+    } catch (e) {
+      console.warn(`[DVM] Failed to fetch Kind 30311 from ${relayUrl}:`, e)
+    }
+  }
+
+  // Update KV timestamp
+  if (maxCreatedAt > since) {
+    await kv.put(sinceKey, String(maxCreatedAt + 1))
   }
 }
 

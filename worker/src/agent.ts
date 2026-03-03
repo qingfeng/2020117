@@ -517,6 +517,27 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     await state.relayPool.publish(resultEvent)
     console.log(`[${label}] Published DVM result (Kind ${resultKind}) via relay`)
+
+    // Publish reputation endorsement (Kind 30311) for customer
+    try {
+      const endorsementEvent = signEvent({
+        kind: 30311,
+        tags: [
+          ['d', event.pubkey],
+          ['p', event.pubkey],
+          ['rating', '5'],
+          ['k', String(KIND)],
+        ],
+        content: JSON.stringify({
+          rating: 5,
+          context: { jobs_together: 1, kinds: [KIND], last_job_at: Math.floor(Date.now() / 1000) },
+        }),
+      }, state.sovereignKeys.privkey)
+      await state.relayPool.publish(endorsementEvent)
+      console.log(`[${label}] Published endorsement (Kind 30311) for ${event.pubkey.slice(0, 8)}`)
+    } catch (e: any) {
+      console.warn(`[${label}] Failed to publish endorsement: ${e.message}`)
+    }
   } finally {
     releaseSlot()
   }

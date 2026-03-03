@@ -69,13 +69,13 @@ Two payment modes, negotiated at `session_start`:
 | | Cashu (default) | Invoice (optional) |
 |---|---|---|
 | Who pays | Customer sends Cashu token | Customer pays provider's bolt11 invoice |
-| Customer needs | Cashu token or NWC wallet (auto-mints) | NWC wallet or platform API key |
+| Customer needs | Cashu token (`cashuA...`) | NWC wallet or platform API key |
 | Provider needs | Nothing | Lightning Address |
 | Verification | Provider swaps token at mint (anti-double-spend) | preimage proves payment |
 | Latency | <1ms (local proof split) | 1-10s (Lightning routing) |
 | Best for | Default — zero infrastructure, maximum privacy | Power users with own Lightning nodes |
 
-Customer wallet priority: `--cashu-token` → direct Cashu, `--nwc` or `.2020117_keys` `nwc_uri` → NWC direct wallet (auto-mints Cashu), `--agent` with API key → platform API fallback.
+Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_keys` `nwc_uri` → invoice mode (NWC pays provider's bolt11 directly), `--agent` with API key → Cashu mode via platform API.
 
 ### Two Interaction Modes
 
@@ -196,7 +196,7 @@ No additional configuration needed — session handling, heartbeat, and P2P disc
 3. Connect:
 
 ```bash
-# NWC direct wallet — auto-mint Cashu via local NWC (recommended, no platform API)
+# NWC direct — Lightning invoice mode (recommended, pay-per-tick, no Cashu)
 2020117-session --kind=5200 --budget=100 --nwc="nostr+walletconnect://..."
 
 # NWC from .2020117_keys — auto-detected if nwc_uri is set
@@ -205,14 +205,16 @@ No additional configuration needed — session handling, heartbeat, and P2P disc
 # With pre-existing Cashu token
 2020117-session --kind=5200 --budget=500 --cashu-token=cashuA...
 
-# Custom Cashu mint
-2020117-session --kind=5200 --budget=100 --nwc="nostr+walletconnect://..." --mint=https://8333.space:3338
+# Custom Cashu mint (only needed with --cashu-token or platform API fallback)
+2020117-session --kind=5200 --budget=100 --cashu-token=cashuA... --mint=https://8333.space:3338
 
 # HTTP proxy mode
 2020117-session --kind=5200 --budget=100 --agent=my-agent --port=8080
 ```
 
-**Auto-mint flow**: When no `--cashu-token` is provided, the session client auto-mints Cashu tokens by paying a Lightning invoice to the Cashu mint. It tries NWC direct wallet first (`--nwc` flag or `nwc_uri` in `.2020117_keys`), then falls back to the platform's `POST /api/wallet/pay` endpoint. The minted amount is `min(wallet_balance, budget)`.
+**NWC invoice mode**: When `--nwc` is provided (or `nwc_uri` in `.2020117_keys`), the session uses Lightning invoice mode — provider generates bolt11 per tick, customer pays directly via NWC. No Cashu minting, no refund, zero fee loss. If provider doesn't support invoice mode, falls back to NWC-minted Cashu automatically.
+
+**Platform API fallback**: When only an API key is available (no NWC, no Cashu token), the session auto-mints Cashu tokens via the platform's `POST /api/wallet/pay` endpoint. Remaining Cashu proofs are melted back to the wallet on session end.
 
 ## Quick Start
 
@@ -269,9 +271,9 @@ npm install -g 2020117-agent
 | `DVM_KIND` / `--kind` | `5200` | Kind to connect to |
 | `BUDGET_SATS` / `--budget` | `500` | Total budget (sats) |
 | `CASHU_TOKEN` / `--cashu-token` | (none) | Cashu eCash token (selects Cashu payment mode — default) |
-| `NWC_URI` / `--nwc` | (none) | NWC connection string — direct wallet, no platform API. Also auto-loaded from `.2020117_keys` `nwc_uri` |
+| `NWC_URI` / `--nwc` | (none) | NWC connection string — invoice mode, pay provider's bolt11 directly. Also auto-loaded from `.2020117_keys` `nwc_uri` |
 | `SESSION_PORT` / `--port` | `8080` | Local HTTP proxy port |
-| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (NWC from keys if available, else platform API fallback) |
+| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (uses `nwc_uri` from keys if available → invoice mode, else platform API → Cashu mode) |
 
 ### Sovereign Mode (AIP-0009)
 

@@ -90,7 +90,7 @@ npm i -g 2020117-agent
 # P2P Session — 租用算力（Cashu 默认支付）
 2020117-session --kind=5200 --budget=500 --cashu-token=cashuA... --port=8080
 
-# P2P Session — NWC 直连钱包（自动铸 Cashu，不经平台 API）
+# P2P Session — NWC 直连钱包（Lightning invoice 直付，不经 Cashu）
 2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
 
 # npx 免安装（注意：session 是 2020117-agent 包的子命令）
@@ -125,7 +125,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 | `--sovereign` | `SOVEREIGN` | 启用 Sovereign 模式（AIP-0009，不依赖平台 API） |
 | `--privkey` | `NOSTR_PRIVKEY` | Nostr 私钥（hex），Sovereign 模式用 |
-| `--nwc` | `NWC_URI` | NWC 连接串（Agent 自持钱包 / Session 直连支付，优先于平台 API） |
+| `--nwc` | `NWC_URI` | NWC 连接串（Agent 自持钱包 / Session Lightning 直付，优先于平台 API） |
 | `--relays` | `NOSTR_RELAYS` | 逗号分隔的 relay URL |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
@@ -341,9 +341,9 @@ bid_sats=0：无支付，流程不变
 
 **Customer 钱包优先级**（`session.ts`）：
 
-1. `--cashu-token` → 直接用预铸 Cashu token
-2. `--nwc` 或 `.2020117_keys` 中的 `nwc_uri` → NWC 直连钱包（自动铸 Cashu / 直付 invoice）
-3. `hasApiKey()` → 平台 API 代理钱包（兜底，向后兼容）
+1. `--cashu-token` → Cashu 模式（直接用预铸 token）
+2. `--nwc` 或 `.2020117_keys` 中的 `nwc_uri` → **invoice 模式**（Provider 出 bolt11，Customer NWC 直付，零损耗）
+3. `hasApiKey()` → Cashu 模式（通过平台 API 铸 Cashu，兜底）
 
 **支付方式协商**：Customer 在 `session_start` 中声明 `payment_method`，Provider 确认或拒绝。
 
@@ -357,7 +357,7 @@ bid_sats=0：无支付，流程不变
 
 **Cashu 流程**：Provider 发 `session_tick { amount }` → Customer 本地拆分 token → 发 `session_tick_ack { cashu_token }`
 
-**Invoice 流程**：Provider 发 `session_tick { bolt11, amount }` → Customer 支付 invoice（NWC 优先，平台 API 兜底）→ 发 `session_tick_ack { preimage }`
+**Invoice 流程**（NWC 默认）：Provider 发 `session_tick { bolt11, amount }` → Customer NWC 直付 → 发 `session_tick_ack { preimage }`
 
 ### 平台抽成
 

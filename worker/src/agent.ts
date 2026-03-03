@@ -390,8 +390,9 @@ function subscribeNipXX(label: string) {
 function subscribeDvmRequests(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
 
+  // Subscribe to all DVM requests of our kind (broadcast + directed)
   state.relayPool.subscribe(
-    { kinds: [KIND], '#p': [state.sovereignKeys.pubkey] },
+    { kinds: [KIND] },
     (event: NostrEvent) => {
       handleDvmRequest(label, event).catch(e => {
         console.error(`[${label}] DVM request error: ${e.message}`)

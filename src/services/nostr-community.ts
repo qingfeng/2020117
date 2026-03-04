@@ -1,7 +1,7 @@
 import { eq, and, sql, isNotNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { groups, topics, comments, users, notifications, nostrFollows, nostrCommunityFollows, topicLikes, commentLikes } from '../db/schema'
+import { groups, topics, comments, users, notifications, nostrFollows, nostrCommunityFollows, topicLikes, commentLikes, externalDvms } from '../db/schema'
 import type { User } from '../db/schema'
 import {
   type NostrEvent,
@@ -11,7 +11,7 @@ import {
   buildSignedEvent,
   pubkeyToNpub,
 } from './nostr'
-import { generateId, truncate } from '../lib/utils'
+import { generateId, truncate, ensureUniqueUsername } from '../lib/utils'
 import { createNotification } from '../lib/notifications'
 
 // --- Cron entry point ---
@@ -1156,9 +1156,7 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
     .from(users)
     .where(and(eq(users.nostrSyncEnabled, 1), isNotNull(users.nostrPubkey)))
 
-  if (nostrUsers.length === 0) return
-
-  // Build pubkey → user map
+  // Build pubkey → user map (shared between Phase A and Phase B)
   const pubkeyToUser = new Map<string, typeof nostrUsers[number]>()
   for (const u of nostrUsers) {
     if (u.nostrPubkey) pubkeyToUser.set(u.nostrPubkey, u)
@@ -1166,6 +1164,7 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
 
   const BATCH_SIZE = 50
 
+  // --- Phase A: sync metadata for existing users ---
   for (let i = 0; i < nostrUsers.length; i += BATCH_SIZE) {
     const batch = nostrUsers.slice(i, i + BATCH_SIZE)
     const pubkeys = batch.map(u => u.nostrPubkey!).filter(Boolean)
@@ -1252,5 +1251,109 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
     } catch (e) {
       console.error('[Nostr Metadata] Poll failed:', e)
     }
+  }
+
+  // --- Phase B: auto-create users from external_dvm Kind 0 ---
+  try {
+    const extPubkeys = await db
+      .selectDistinct({ pubkey: externalDvms.pubkey })
+      .from(externalDvms)
+
+    // Filter out pubkeys already in user table (check ALL users, not just sync-enabled)
+    const allUserPubkeys = await db
+      .select({ nostrPubkey: users.nostrPubkey })
+      .from(users)
+      .where(isNotNull(users.nostrPubkey))
+    const existingPubkeys = new Set(allUserPubkeys.map(u => u.nostrPubkey!))
+
+    const missingPubkeys = extPubkeys
+      .map(r => r.pubkey)
+      .filter(pk => !existingPubkeys.has(pk))
+
+    if (missingPubkeys.length === 0) return
+
+    console.log(`[Nostr Metadata] Phase B: ${missingPubkeys.length} external_dvm pubkeys without user record`)
+
+    // Fetch Kind 0 from relay in batches
+    for (let i = 0; i < missingPubkeys.length; i += BATCH_SIZE) {
+      const batch = missingPubkeys.slice(i, i + BATCH_SIZE)
+
+      const allEvents: NostrEvent[] = []
+      const seenIds = new Set<string>()
+      for (const relay of relayUrls) {
+        try {
+          const result = await fetchEventsFromRelay(relay, {
+            kinds: [0],
+            authors: batch,
+          })
+          for (const e of result.events) {
+            if (!seenIds.has(e.id)) {
+              seenIds.add(e.id)
+              allEvents.push(e)
+            }
+          }
+          if (allEvents.length >= batch.length) break
+        } catch (e) {
+          console.warn(`[Nostr Metadata] Phase B relay ${relay} failed:`, e)
+        }
+      }
+
+      // Keep only latest Kind 0 per pubkey
+      const latestByPubkey = new Map<string, NostrEvent>()
+      for (const ev of allEvents) {
+        const existing = latestByPubkey.get(ev.pubkey)
+        if (!existing || ev.created_at > existing.created_at) {
+          latestByPubkey.set(ev.pubkey, ev)
+        }
+      }
+
+      for (const [pubkey, event] of latestByPubkey) {
+        try {
+          if (!verifyEvent(event)) continue
+
+          let meta: { name?: string; about?: string; picture?: string; lud16?: string }
+          try {
+            meta = JSON.parse(event.content)
+          } catch {
+            continue
+          }
+
+          const rawName = (meta.name || '').trim()
+          const baseName = rawName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
+          const username = await ensureUniqueUsername(db, baseName)
+          const userId = generateId()
+          const now = new Date()
+
+          await db.insert(users).values({
+            id: userId,
+            username,
+            displayName: rawName || null,
+            bio: meta.about || null,
+            avatarUrl: meta.picture || null,
+            lightningAddress: meta.lud16 || null,
+            nostrPubkey: pubkey,
+            nostrSyncEnabled: 1,
+            createdAt: now,
+            updatedAt: now,
+          })
+
+          // Add to map so Phase A picks them up next Cron cycle
+          pubkeyToUser.set(pubkey, {
+            id: userId,
+            nostrPubkey: pubkey,
+            displayName: rawName || null,
+            bio: meta.about || null,
+            avatarUrl: meta.picture || null,
+            lightningAddress: meta.lud16 || null,
+          })
+
+          console.log(`[Nostr Metadata] Created user ${username} from Kind 0 (pubkey=${pubkey.slice(0, 8)}...)`)
+        } catch (e) {
+          console.error(`[Nostr Metadata] Phase B failed for pubkey ${pubkey.slice(0, 8)}:`, e)
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[Nostr Metadata] Phase B failed:', e)
   }
 }

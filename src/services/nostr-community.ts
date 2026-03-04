@@ -1133,3 +1133,124 @@ export async function pollOwnUserPosts(env: Bindings, db: Database) {
     await env.KV.put(KV_KEY, String(maxCreatedAt + 1))
   }
 }
+
+// --- Poll Kind 0 user metadata from relay → sync back to D1 ---
+
+export async function pollUserMetadata(env: Bindings, db: Database) {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Kind 0 is replaceable — relays store at most 1 per pubkey.
+  // No `since` filter needed; we compare with D1 to skip unchanged profiles.
+
+  // Get all Nostr-enabled users with current profile fields for comparison
+  const nostrUsers = await db
+    .select({
+      id: users.id,
+      nostrPubkey: users.nostrPubkey,
+      displayName: users.displayName,
+      bio: users.bio,
+      avatarUrl: users.avatarUrl,
+      lightningAddress: users.lightningAddress,
+    })
+    .from(users)
+    .where(and(eq(users.nostrSyncEnabled, 1), isNotNull(users.nostrPubkey)))
+
+  if (nostrUsers.length === 0) return
+
+  // Build pubkey → user map
+  const pubkeyToUser = new Map<string, typeof nostrUsers[number]>()
+  for (const u of nostrUsers) {
+    if (u.nostrPubkey) pubkeyToUser.set(u.nostrPubkey, u)
+  }
+
+  const BATCH_SIZE = 50
+
+  for (let i = 0; i < nostrUsers.length; i += BATCH_SIZE) {
+    const batch = nostrUsers.slice(i, i + BATCH_SIZE)
+    const pubkeys = batch.map(u => u.nostrPubkey!).filter(Boolean)
+
+    try {
+      // Try all relays and merge (Kind 0 from external clients may land on different relays)
+      const allEvents: NostrEvent[] = []
+      const seenIds = new Set<string>()
+      for (const relay of relayUrls) {
+        try {
+          const result = await fetchEventsFromRelay(relay, {
+            kinds: [0],
+            authors: pubkeys,
+          })
+          for (const e of result.events) {
+            if (!seenIds.has(e.id)) {
+              seenIds.add(e.id)
+              allEvents.push(e)
+            }
+          }
+          if (allEvents.length >= pubkeys.length) break // Got enough, one per user max
+        } catch (e) {
+          console.warn(`[Nostr Metadata] Relay ${relay} failed:`, e)
+        }
+      }
+
+      console.log(`[Nostr Metadata] Fetched ${allEvents.length} Kind 0 events from ${pubkeys.length} users`)
+
+      // Kind 0 is replaceable — keep only the latest per pubkey
+      const latestByPubkey = new Map<string, NostrEvent>()
+      for (const ev of allEvents) {
+        const existing = latestByPubkey.get(ev.pubkey)
+        if (!existing || ev.created_at > existing.created_at) {
+          latestByPubkey.set(ev.pubkey, ev)
+        }
+      }
+
+      let updated = 0
+      for (const [pubkey, event] of latestByPubkey) {
+        try {
+          if (!verifyEvent(event)) continue
+
+          const user = pubkeyToUser.get(pubkey)
+          if (!user) continue
+
+          let meta: { name?: string; about?: string; picture?: string; lud16?: string }
+          try {
+            meta = JSON.parse(event.content)
+          } catch {
+            continue
+          }
+
+          // Build update set — only fields that actually changed
+          // Normalize: empty string ↔ null are equivalent (avoid no-op writes)
+          const norm = (v: string | undefined | null): string | null => v ? v : null
+          const updates: Record<string, string | null> = {}
+
+          if (meta.name !== undefined && norm(meta.name) !== norm(user.displayName)) {
+            updates.displayName = norm(meta.name)
+          }
+          if (meta.about !== undefined && norm(meta.about) !== norm(user.bio)) {
+            updates.bio = norm(meta.about)
+          }
+          if (meta.picture !== undefined && norm(meta.picture) !== norm(user.avatarUrl)) {
+            updates.avatarUrl = norm(meta.picture)
+          }
+          if (meta.lud16 !== undefined && norm(meta.lud16) !== norm(user.lightningAddress)) {
+            updates.lightningAddress = norm(meta.lud16)
+          }
+
+          if (Object.keys(updates).length === 0) continue
+
+          await db.update(users).set(updates).where(eq(users.id, user.id))
+          updated++
+          console.log(`[Nostr Metadata] Updated user ${user.id}: ${Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')}`)
+        } catch (e) {
+          console.error(`[Nostr Metadata] Failed to process event ${event.id}:`, e)
+        }
+      }
+
+      if (updated > 0) {
+        console.log(`[Nostr Metadata] Synced ${updated} user profiles`)
+      }
+    } catch (e) {
+      console.error('[Nostr Metadata] Poll failed:', e)
+    }
+  }
+}

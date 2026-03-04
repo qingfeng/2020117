@@ -2827,6 +2827,14 @@ export default {
       console.error('[Cron] Own Nostr posts poll failed:', e)
     }
 
+    // Poll Kind 0 user metadata from relay → sync profile fields back to D1
+    try {
+      const { pollUserMetadata } = await import('./services/nostr-community')
+      await pollUserMetadata(env, db)
+    } catch (e) {
+      console.error('[Cron] User metadata poll failed:', e)
+    }
+
     // NIP-72: poll Nostr relays for community posts
     try {
       const { pollCommunityPosts } = await import('./services/nostr-community')

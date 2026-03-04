@@ -749,6 +749,7 @@ interface SessionState {
   lastPaidAt: number
   billingTimer: ReturnType<typeof setInterval> | null
   timeoutTimer: ReturnType<typeof setTimeout> | null
+  customerPubkey?: string
 }
 
 const activeSessions = new Map<string, SessionState>()
@@ -847,6 +848,7 @@ async function startSwarmListener(label: string) {
         lastPaidAt: Date.now(),
         billingTimer: null,
         timeoutTimer: null,
+        customerPubkey: msg.pubkey || undefined,
       }
 
       activeSessions.set(sessionId, session)
@@ -857,6 +859,7 @@ async function startSwarmListener(label: string) {
         session_id: sessionId,
         sats_per_minute: satsPerMinute,
         payment_method: paymentMethod,
+        pubkey: state.sovereignKeys?.pubkey,
       })
 
       // Send first billing tick
@@ -1157,6 +1160,32 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   }
 
   console.log(`[${label}] Session ${session.sessionId} ended: ${session.totalEarned} sats, ${durationS}s`)
+
+  // Publish Kind 30311 endorsement for customer (best-effort)
+  if (state.sovereignKeys && state.relayPool && session.customerPubkey) {
+    try {
+      const endorsement = signEvent({
+        kind: 30311,
+        tags: [
+          ['d', session.customerPubkey],
+          ['p', session.customerPubkey],
+          ['rating', '5'],
+          ['k', String(KIND)],
+        ],
+        content: JSON.stringify({
+          rating: 5,
+          context: {
+            session_duration_s: durationS,
+            total_sats: session.totalEarned,
+            kinds: [KIND],
+            last_job_at: Math.floor(Date.now() / 1000),
+          },
+        }),
+      }, state.sovereignKeys.privkey)
+      state.relayPool.publish(endorsement).catch(() => {})
+      console.log(`[${label}] Published endorsement for customer ${session.customerPubkey.slice(0, 8)}`)
+    } catch {}
+  }
 
   // Update P2P lifetime counters
   state.p2pSessionsCompleted++

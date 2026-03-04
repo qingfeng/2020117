@@ -37,7 +37,7 @@ import { queryProviderSkill } from './p2p-customer.js'
 import { walletPayInvoice, walletGetBalance, hasApiKey } from './api.js'
 import { decodeCashuToken, sendCashuToken, peekCashuToken, createMintQuote, claimMintQuote, meltProofs, estimateMeltFee, type Proof } from './cashu.js'
 import { parseNwcUri, nwcGetBalance, nwcPayInvoice, nwcMakeInvoice, type NwcParsed } from './nwc.js'
-import { loadSovereignKeys } from './nostr.js'
+import { loadSovereignKeys, signEvent, RelayPool } from './nostr.js'
 import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
@@ -53,11 +53,17 @@ const PORT = Number(process.env.SESSION_PORT) || 8080
 const CASHU_TOKEN = process.env.CASHU_TOKEN || ''
 const MINT_URL = process.env.CASHU_MINT_URL || 'https://8333.space:3338'
 
+// Load sovereign keys (for pubkey exchange + endorsement publishing)
+const sovereignKeys = loadSovereignKeys(process.env.AGENT)
+
 // Load NWC URI: --nwc flag > .2020117_keys nwc_uri > none
 let nwcParsed: NwcParsed | null = null
 const nwcUri = process.env.NWC_URI
-  || loadSovereignKeys(process.env.AGENT)?.nwc_uri
+  || sovereignKeys?.nwc_uri
   || null
+
+// Track provider's Nostr pubkey (received in session_ack)
+let providerPubkey: string | null = null
 
 // Mutable Cashu wallet state (loaded from CASHU_TOKEN at startup)
 let cashuState: { mintUrl: string; proofs: Proof[] } | null = null
@@ -754,6 +760,36 @@ async function endSession() {
     log(`Session ended. Total: ${state.totalSpent} sats for ${duration}s.`)
   }
 
+  // Publish Kind 30311 endorsement for provider (best-effort)
+  if (sovereignKeys?.privkey && providerPubkey) {
+    try {
+      const endorsement = signEvent({
+        kind: 30311,
+        tags: [
+          ['d', providerPubkey],
+          ['p', providerPubkey],
+          ['rating', '5'],
+          ['k', String(KIND)],
+        ],
+        content: JSON.stringify({
+          rating: 5,
+          context: {
+            session_duration_s: elapsedSeconds(),
+            total_sats: state.totalSpent,
+            kinds: [KIND],
+            last_job_at: Math.floor(Date.now() / 1000),
+          },
+        }),
+      }, sovereignKeys.privkey)
+      const relayUrls = sovereignKeys.relays?.length ? sovereignKeys.relays : ['wss://relay.2020117.xyz']
+      const relay = new RelayPool(relayUrls)
+      await relay.connect()
+      await relay.publish(endorsement)
+      await relay.close()
+      log(`Published endorsement for provider ${providerPubkey.slice(0, 8)}`)
+    } catch {}
+  }
+
   // Refund remaining Cashu proofs back to NWC wallet
   if (cashuState && cashuState.proofs.length > 0 && nwcParsed) {
     const remaining = cashuState.proofs.reduce((s, p) => s + p.amount, 0)
@@ -936,6 +972,7 @@ async function main() {
     budget: BUDGET,
     sats_per_minute: satsPerMinute,
     payment_method: paymentMethod,
+    pubkey: sovereignKeys?.pubkey,
   }, 15_000)
 
   if (ackResp.type !== 'session_ack' || !ackResp.session_id) {
@@ -946,6 +983,7 @@ async function main() {
 
   state.sessionId = ackResp.session_id
   state.startedAt = Date.now()
+  providerPubkey = ackResp.pubkey || null
 
   // If the provider dictated a different rate, use it
   if (ackResp.sats_per_minute && ackResp.sats_per_minute !== satsPerMinute) {

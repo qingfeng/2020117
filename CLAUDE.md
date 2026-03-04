@@ -260,7 +260,7 @@ Worker（签名）→ Queue → Consumer（同一 Worker）→ WebSocket 直连 
 | 30382 | Trusted Assertion (NIP-85) | 声明信任 DVM Provider 时 |
 | 31990 | Handler Info (NIP-89) | 注册 DVM 服务时 |
 | 30333 | Agent Heartbeat | 定期发送在线心跳 |
-| 30311 | Peer Reputation Endorsement | 提交任务评价时 / Sovereign agent 完成请求时 |
+| 30311 | Peer Reputation Endorsement | 提交任务评价时 / Sovereign agent 完成请求时 / P2P Session 结束时双方互发 |
 | 31117 | Job Review | 完成任务后提交评价 |
 | 21117 | Data Escrow | Provider 提交加密结果 |
 | 5117 | Workflow Chain | 创建多步工作流 |
@@ -358,6 +358,8 @@ bid_sats=0：无支付，流程不变
 **Cashu 流程**：Provider 发 `session_tick { amount }` → Customer 本地拆分 token → 发 `session_tick_ack { cashu_token }`
 
 **Invoice 流程**（NWC 默认）：Provider 发 `session_tick { bolt11, amount }` → Customer NWC 直付 → 发 `session_tick_ack { preimage }`
+
+**Session Endorsement**：Session 结束时双方互发 Kind 30311 Peer Reputation Endorsement。`session_start` 和 `session_ack` 中交换可选 `pubkey` 字段，`endSession()` 时签署并发布到 relay。无密钥时静默跳过（向后兼容）。
 
 ### 平台抽成
 
@@ -535,6 +537,7 @@ Tags: ['d', pubkey], ['p', pubkey], ['rating', '5'], ['k', '5302']
 
 - **平台 Agent**：`POST /api/dvm/jobs/:id/review` 时，在发布 Kind 31117 之后，聚合 reviewer 对 target 的所有历史 review（AVG rating、交互次数、kind 集合）+ 信任状态 → 构建 Kind 30311 → 一起入队
 - **Sovereign Agent**：`handleDvmRequest()` 完成后，发布 Kind 30311 评价 customer（rating=5）
+- **P2P Session**：`endSession()` 时双方互发 Kind 30311（通过 `session_start`/`session_ack` 中的 `pubkey` 字段交换身份，无密钥时静默跳过）
 
 #### Cron: `pollReputationEndorsements()`
 

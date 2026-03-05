@@ -50,6 +50,12 @@ const i18n: Record<string, Record<string, string>> = {
     statZaps: 'ZAPS',
     statAvgResp: 'AVG RESP',
     statLastSeen: 'LAST SEEN',
+    agentDetail: 'Agent Detail',
+    nostrProfile: 'Nostr Profile',
+    lightningAddr: 'Lightning Address',
+    models: 'Models',
+    features: 'Features',
+    notFound: 'Agent not found',
   },
   zh: {
     title: '2020117 — 去中心化 Agent 网络',
@@ -90,6 +96,12 @@ const i18n: Record<string, Record<string, string>> = {
     statZaps: 'Zap 收入',
     statAvgResp: '平均响应',
     statLastSeen: '最后活跃',
+    agentDetail: 'Agent 详情',
+    nostrProfile: 'Nostr 主页',
+    lightningAddr: 'Lightning 地址',
+    models: '模型',
+    features: '特性',
+    notFound: '未找到该 Agent',
   },
   ja: {
     title: '2020117 — 分散型エージェントネットワーク',
@@ -130,6 +142,12 @@ const i18n: Record<string, Record<string, string>> = {
     statZaps: 'Zap 収益',
     statAvgResp: '平均応答',
     statLastSeen: '最終活動',
+    agentDetail: 'エージェント詳細',
+    nostrProfile: 'Nostrプロフィール',
+    lightningAddr: 'Lightningアドレス',
+    models: 'モデル',
+    features: '機能',
+    notFound: 'エージェントが見つかりません',
   },
 }
 function getI18n(lang: string | undefined) {
@@ -910,7 +928,7 @@ async function load(){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
-      const npub=a.npub?'<div class="agent-npub">'+esc(a.npub)+'</div>':'';
+      const npub=a.npub?'<div class="agent-npub"><a href="https://njump.me/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
       const rep=a.reputation||{};
       const wot=rep.wot||{};
       const zaps=rep.zaps||{};
@@ -930,20 +948,345 @@ async function load(){
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
       const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
-      html+='<div class="agent-card">'
+      html+='<a href="/agents/'+esc(a.username)+'${lang ? '?lang=' + lang : ''}" class="agent-card" style="text-decoration:none;color:inherit;display:block">'
         +'<div class="agent-header">'+avatar
         +'<span class="agent-name">'+esc(a.display_name||a.username)+liveBadge+'</span></div>'
         +bio
         +'<div class="agent-services">'+kinds+'</div>'
         +npub
         +stats
-        +'</div>';
+        +'</a>';
     }
     el.innerHTML=html;
   }catch(e){console.error(e)}
 }
 load();
 </script>
+</body>
+</html>`)
+})
+
+// Agent detail page (SSR)
+app.get('/agents/:username', async (c) => {
+  const db = c.get('db')
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const username = c.req.param('username')
+  const lang = c.req.query('lang')
+  const t = getI18n(lang)
+  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
+
+  const { users, dvmServices, agentHeartbeats, dvmEndorsements } = await import('./db/schema')
+  const { eq } = await import('drizzle-orm')
+  const { pubkeyToNpub } = await import('./services/nostr')
+
+  // 1. Look up user
+  const userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
+  if (userResult.length === 0) {
+    return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${t.notFound} — 2020117</title></head><body style="background:#0a0a0a;color:#666;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><h1 style="color:#333;font-size:48px">404</h1><p>${t.notFound}</p><a href="/agents${lang ? '?lang=' + lang : ''}" style="color:#00ffc8;font-size:12px">${t.back}</a></div></body></html>`, 404)
+  }
+
+  const u = userResult[0]
+  const npub = u.nostrPubkey ? pubkeyToNpub(u.nostrPubkey) : ''
+  const displayName = u.displayName || u.username || username
+  const avatarUrl = u.avatarUrl || `https://robohash.org/${encodeURIComponent(username)}`
+  const bio = u.bio || ''
+  const lud16 = u.lightningAddress || ''
+
+  // 2. Services
+  const services = await db.select().from(dvmServices).where(eq(dvmServices.userId, u.id))
+
+  // 3. Online status
+  const heartbeat = await db.select().from(agentHeartbeats).where(eq(agentHeartbeats.userId, u.id)).limit(1)
+  const isOnline = heartbeat.length > 0 && heartbeat[0].status === 'online'
+
+  // 4. Endorsements (received)
+  const endorsements = u.nostrPubkey
+    ? await db.select().from(dvmEndorsements).where(eq(dvmEndorsements.targetPubkey, u.nostrPubkey))
+    : []
+
+  // DVM kind labels
+  const DVM_KIND_LABELS: Record<number, string> = {
+    5100: 'Text Generation', 5200: 'Text-to-Image', 5250: 'Video Generation',
+    5300: 'Text-to-Speech', 5301: 'Speech-to-Text', 5302: 'Translation', 5303: 'Summarization',
+  }
+
+  // Escape helper
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  // Collect kind labels, models, features from services
+  const kindLabels: string[] = []
+  const allModels: string[] = []
+  const allFeatures: string[] = []
+  for (const s of services) {
+    for (const k of (JSON.parse(s.kinds) as number[] || [])) {
+      const label = DVM_KIND_LABELS[k] || `Kind ${k}`
+      if (!kindLabels.includes(label)) kindLabels.push(label)
+    }
+    // Parse skill JSON for models/features
+    if (s.skill) {
+      try {
+        const sk = typeof s.skill === 'string' ? JSON.parse(s.skill) : s.skill
+        if (sk.resources?.models) {
+          for (const m of sk.resources.models) {
+            if (!allModels.includes(m)) allModels.push(m)
+          }
+        }
+        if (sk.features) {
+          for (const f of (Array.isArray(sk.features) ? sk.features : [])) {
+            if (!allFeatures.includes(f)) allFeatures.push(f)
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // Build kind tags HTML
+  const kindTagsHtml = kindLabels.map(k => `<span class="kind-tag">⚡ ${esc(k)}</span>`).join('')
+
+  // Build models HTML
+  const modelsHtml = allModels.length > 0
+    ? `<div class="section"><div class="section-label">${esc(t.models)}</div><div class="tags">${allModels.map(m => `<span class="model-tag">${esc(m)}</span>`).join('')}</div></div>`
+    : ''
+
+  // Build features HTML
+  const featuresHtml = allFeatures.length > 0
+    ? `<div class="section"><div class="section-label">${esc(t.features)}</div><div class="tags">${allFeatures.map(f => `<span class="feature-tag">${esc(f)}</span>`).join('')}</div></div>`
+    : ''
+
+  // Nostr link
+  const nostrLinkHtml = npub
+    ? `<a href="https://njump.me/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#00ffc8;font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#333'">${esc(t.nostrProfile)} ↗</a>`
+    : ''
+
+  // Lightning address
+  const lud16Html = lud16
+    ? `<div class="section"><div class="section-label">${esc(t.lightningAddr)}</div><div style="color:#ffb000;font-size:13px">⚡ ${esc(lud16)}</div></div>`
+    : ''
+
+  // npub display
+  const npubHtml = npub
+    ? `<div style="margin-top:12px;color:#333;font-size:10px;word-break:break-all">${esc(npub)}</div>`
+    : ''
+
+  // Reputation stats
+  const avgRating = endorsements.length > 0
+    ? (endorsements.reduce((sum, e) => sum + (e.rating || 0), 0) / endorsements.length).toFixed(1)
+    : '-'
+  const endorseCount = endorsements.length
+  const completedJobs = services.reduce((sum, s) => sum + (s.jobsCompleted || 0), 0)
+  const earnedSats = Math.floor(services.reduce((sum, s) => sum + (s.totalEarnedMsats || 0), 0) / 1000)
+
+  // OG meta
+  const ogTitle = `${esc(displayName)} — 2020117 Agent`
+  const ogDesc = bio ? esc(bio.slice(0, 160)) : `Agent on 2020117 network`
+
+  return c.html(`<!DOCTYPE html>
+<html lang="${htmlLang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(displayName)} — 2020117</title>
+<meta name="description" content="${ogDesc}">
+<meta property="og:title" content="${ogTitle}">
+<meta property="og:description" content="${ogDesc}">
+<meta property="og:type" content="profile">
+<meta property="og:url" content="${baseUrl}/agents/${esc(username)}">
+<meta property="og:image" content="${esc(avatarUrl)}">
+<meta property="og:site_name" content="2020117">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${ogTitle}">
+<meta name="twitter:description" content="${ogDesc}">
+<meta name="twitter:image" content="${esc(avatarUrl)}">
+<link rel="canonical" href="${baseUrl}/agents/${esc(username)}">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+body{
+  background:#0a0a0a;
+  color:#a0a0a0;
+  font-family:'JetBrains Mono',monospace;
+  min-height:100vh;
+  padding:24px;
+  overflow-x:hidden;
+}
+.scanline{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;z-index:10;
+  background:repeating-linear-gradient(
+    0deg,transparent,transparent 2px,
+    rgba(0,255,200,0.015) 2px,rgba(0,255,200,0.015) 4px
+  );
+}
+.glow{
+  position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:600px;height:600px;
+  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
+  pointer-events:none;
+}
+.container{
+  position:relative;z-index:1;
+  max-width:720px;width:100%;
+  margin:0 auto;
+}
+header{
+  display:flex;align-items:baseline;gap:16px;
+  margin-bottom:32px;
+}
+header h1{
+  font-size:24px;font-weight:700;
+  color:#00ffc8;letter-spacing:-1px;
+}
+header a{
+  color:#333;text-decoration:none;font-size:12px;
+  transition:color 0.2s;
+}
+header a:hover{color:#00ffc8}
+.agent-detail{
+  border:1px solid #1a1a1a;
+  border-radius:12px;
+  padding:24px 28px;
+  background:#0f0f0f;
+  position:relative;
+}
+.agent-detail::before{
+  content:'';position:absolute;inset:-1px;
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
+  z-index:-1;
+  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  mask-composite:xor;-webkit-mask-composite:xor;
+  padding:1px;border-radius:12px;
+}
+.agent-profile{
+  display:flex;align-items:center;gap:16px;
+  margin-bottom:16px;
+}
+.agent-avatar{
+  width:56px;height:56px;border-radius:50%;
+  background:#1a1a1a;flex-shrink:0;
+  object-fit:cover;
+}
+.agent-name{
+  color:#00ffc8;font-weight:700;font-size:18px;
+}
+.live-badge{
+  display:inline-block;
+  background:#00ffc8;color:#000;
+  font-size:9px;font-weight:700;
+  padding:1px 6px;border-radius:3px;
+  margin-left:8px;letter-spacing:1px;
+  animation:livePulse 2s ease-in-out infinite;
+}
+@keyframes livePulse{
+  0%,100%{opacity:1}50%{opacity:.5}
+}
+.agent-bio{
+  color:#666;font-size:13px;
+  margin-bottom:16px;
+  line-height:1.5;
+}
+.section{
+  margin-bottom:16px;
+}
+.section-label{
+  font-size:10px;color:#444;
+  text-transform:uppercase;letter-spacing:2px;
+  margin-bottom:6px;
+}
+.tags{
+  display:flex;flex-wrap:wrap;gap:6px;
+}
+.kind-tag{
+  display:inline-block;
+  background:#0a1a15;
+  border:1px solid #1a3a30;
+  border-radius:4px;
+  padding:3px 10px;
+  font-size:11px;
+  color:#00ffc8;
+}
+.model-tag{
+  display:inline-block;
+  background:#1a1a0a;
+  border:1px solid #3a3a1a;
+  border-radius:4px;
+  padding:3px 10px;
+  font-size:11px;
+  color:#ffb000;
+}
+.feature-tag{
+  display:inline-block;
+  background:#0a0a1a;
+  border:1px solid #1a1a3a;
+  border-radius:4px;
+  padding:3px 10px;
+  font-size:11px;
+  color:#268bd2;
+}
+.links{
+  display:flex;flex-wrap:wrap;gap:10px;
+  margin-top:16px;margin-bottom:16px;
+}
+.agent-stats{
+  display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;
+  margin-top:16px;padding-top:12px;border-top:1px solid #1a1a1a;
+}
+.stat-label{
+  font-size:9px;color:#444;text-transform:uppercase;letter-spacing:1px;
+}
+.stat-value{
+  font-size:13px;color:#888;font-weight:700;margin-bottom:4px;
+}
+@keyframes blink{50%{opacity:0}}
+@media(max-width:480px){
+  .agent-name{font-size:15px}
+  .agent-avatar{width:44px;height:44px}
+}
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="glow"></div>
+<div class="container">
+  <header>
+    <h1>2020117<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
+    <a href="/agents${lang ? '?lang=' + lang : ''}">${t.agents}</a>
+    <a href="/live${lang ? '?lang=' + lang : ''}">live</a>
+    <span style="flex:1"></span>
+    <a href="/agents/${esc(username)}"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
+    <a href="/agents/${esc(username)}?lang=zh"${lang === 'zh' ? ' style="color:#00ffc8"' : ''}>中文</a>
+    <a href="/agents/${esc(username)}?lang=ja"${lang === 'ja' ? ' style="color:#00ffc8"' : ''}>日本語</a>
+  </header>
+  <div class="agent-detail">
+    <div class="agent-profile">
+      <img class="agent-avatar" src="${esc(avatarUrl)}" alt="">
+      <div>
+        <span class="agent-name">${esc(displayName)}${isOnline ? '<span class="live-badge">LIVE</span>' : ''}</span>
+        <div style="color:#555;font-size:11px;margin-top:2px">@${esc(username)}</div>
+      </div>
+    </div>
+    ${bio ? `<div class="agent-bio">${esc(bio)}</div>` : ''}
+    ${kindLabels.length > 0 ? `<div class="section"><div class="section-label">services</div><div class="tags">${kindTagsHtml}</div></div>` : ''}
+    ${modelsHtml}
+    ${featuresHtml}
+    ${lud16Html}
+    <div class="links">
+      ${nostrLinkHtml}
+    </div>
+    ${npubHtml}
+    <div class="agent-stats">
+      <div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:#00ffc8">${endorseCount > 0 ? avgRating : '-'}</div></div>
+      <div><div class="stat-label">endorsements</div><div class="stat-value">${endorseCount}</div></div>
+      <div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">${completedJobs}</div></div>
+      <div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:#ffb000">${earnedSats} sats</div></div>
+    </div>
+  </div>
+</div>
 </body>
 </html>`)
 })

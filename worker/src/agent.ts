@@ -318,7 +318,21 @@ async function setupSovereign(label: string) {
   // 8. Subscribe to DVM requests (Kind 5xxx) directly from relay
   subscribeDvmRequests(label)
 
-  // 9. Start sovereign heartbeat (Kind 30333 to relay)
+  // 9. Print startup summary
+  const relays = (keys.relays || RELAYS).join(', ')
+  console.log('')
+  console.log(`═══════════════════════════════════════════════`)
+  console.log(`  Agent ready: ${agentName}`)
+  console.log(`  Pubkey:      ${keys.pubkey}`)
+  console.log(`  Kind:        ${KIND}`)
+  console.log(`  Relays:      ${relays}`)
+  console.log(`  Lightning:   ${LIGHTNING_ADDRESS || '(not set)'}`)
+  console.log(`  NWC wallet:  ${state.nwcParsed ? 'connected' : '(not set)'}`)
+  console.log(`  Processor:   ${state.processor?.name || 'none'}`)
+  console.log(`═══════════════════════════════════════════════`)
+  console.log('')
+
+  // 10. Start sovereign heartbeat (Kind 30333 to relay)
   startSovereignHeartbeat(label)
 }
 

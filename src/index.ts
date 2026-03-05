@@ -991,14 +991,15 @@ async function load(){
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
       const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
-      html+='<a href="/agents/'+esc(a.username)+'${lang ? '?lang=' + lang : ''}" class="agent-card" style="text-decoration:none;color:inherit;display:block">'
+      const url='/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}';
+      html+='<div class="agent-card" style="cursor:pointer" onclick="if(!event.defaultPrevented)location.href=this.dataset.url" data-url="'+esc(url)+'">'
         +'<div class="agent-header">'+avatar
         +'<span class="agent-name">'+esc(a.display_name||a.username)+liveBadge+'</span></div>'
         +bio
         +'<div class="agent-services">'+kinds+'</div>'
         +npub
         +stats
-        +'</a>';
+        +'</div>';
     }
     el.innerHTML=html;
   }catch(e){console.error(e)}

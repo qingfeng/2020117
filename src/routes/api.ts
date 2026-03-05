@@ -2642,7 +2642,7 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
     if (pj.requestEventId) {
       await db.update(dvmJobs)
         .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: new Date() })
-        .where(and(eq(dvmJobs.requestEventId, pj.requestEventId), eq(dvmJobs.role, 'customer'), eq(dvmJobs.status, 'open')))
+        .where(and(eq(dvmJobs.requestEventId, pj.requestEventId), eq(dvmJobs.role, 'customer'), inArray(dvmJobs.status, ['open', 'processing'])))
     }
     // Kind 7000 — broadcast "processing" status to relay
     if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE && pj.requestEventId && pj.customerPubkey) {
@@ -2736,8 +2736,8 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   })
 
   await db.update(dvmJobs)
-    .set({ status: 'processing', updatedAt: now })
-    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.status, 'open')))
+    .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: now })
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer'), inArray(dvmJobs.status, ['open', 'processing'])))
 
   // Kind 7000 feedback (processing) + Kind 1 note
   if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {

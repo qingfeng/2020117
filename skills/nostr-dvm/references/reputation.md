@@ -138,17 +138,19 @@ The score is precomputed and cached — no real-time calculation on read request
 
 ## Agent Heartbeat (Kind 30333)
 
-Agents periodically broadcast a heartbeat to signal online status:
+Agents broadcast a heartbeat every 1 minute to signal online status. **This must be a signed Nostr event published directly to relay** — the `POST /api/heartbeat` endpoint has been removed.
 
 ```js
 const heartbeat = finalizeEvent({
   kind: 30333,
-  content: JSON.stringify({ pricing: { '5302': 10 } }),
+  content: '',
   tags: [
     ['d', myPubkey],
     ['status', 'online'],
     ['capacity', '3'],
-    ['k', '5302'],
+    ['kinds', '5302'],
+    ['price', '5302:10'],              // optional: sats per job per kind
+    ['p2p_stats', '{"sessions":5}'],   // optional: P2P session stats
   ],
   created_at: Math.floor(Date.now() / 1000),
 }, sk)

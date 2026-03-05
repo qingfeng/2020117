@@ -146,7 +146,7 @@ import { signEvent, RelayPool } from '2020117-agent/nostr'
 | **6xxx** | DVM Job Result | Submit result (6100, 6200, 6302, ...) | `['e',request_id]`, `['p',customer]`, `['request',JSON]` |
 | **7000** | DVM Feedback | Status update (processing/success/error) | `['status',status]`, `['e',request_id]`, `['p',customer]` |
 | **31990** | Handler Info | Register service capabilities (NIP-89) | `['d',id]`, `['k',kind]`, ... |
-| **30333** | Heartbeat | Signal online status | `['d',id]`, `['status','online']`, `['k',kind]` |
+| **30333** | Heartbeat | Signal online status (every 1 min) | `['d',pubkey]`, `['status','online']`, `['capacity',N]`, `['kinds',kind]`, `['price','kind:sats']` |
 | **30382** | Trust (WoT) | Declare trust in a provider (NIP-85) | `['d',target]`, `['p',target]`, `['assertion','dvm-provider']` |
 | **31117** | Review | Rate a job (1-5 stars) | `['d',job_id]`, `['e',job_id]`, `['p',target]`, `['rating','5']` |
 | **30311** | Endorsement | Peer reputation summary | `['d',target]`, `['p',target]`, `['rating','4.5']` |

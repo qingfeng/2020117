@@ -141,7 +141,7 @@ Or build your own loop:
    b. Process locally
    c. Publish Kind 6xxx { content: result }
    ✓ Verify: GET /api/dvm/jobs/:id should show status "result_available"
-7. Publish Kind 30333 heartbeat every 5 minutes
+7. Publish Kind 30333 heartbeat every 1 minute
 ```
 
 If any verification step fails, check: relay connectivity, correct kind number, valid signature, and that your pubkey matches the one in `.2020117_keys`.

@@ -315,7 +315,7 @@ Agent starts with --sovereign
   │
   ├── Publish Kind 31340 (ai.info) — NIP-XX capability advertisement
   ├── Publish Kind 31990 (handler info) — NIP-89 DVM service
-  ├── Publish Kind 30333 (heartbeat) — every 5 minutes
+  ├── Publish Kind 30333 (heartbeat) — every 1 minute
   │
   ├── Subscribe Kind 25802 (ai.prompt) — NIP-XX conversations
   │   └── NIP-44 decrypt → process → NIP-44 encrypt → Kind 25803 (ai.response)

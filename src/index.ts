@@ -908,6 +908,12 @@ header a:hover{color:#00ffc8}
   margin-top:8px;
   word-break:break-all;
 }
+.npub-link{
+  color:#333;text-decoration:none;
+  border-bottom:1px solid #1a1a1a;
+  transition:color 0.2s;
+}
+.npub-link:hover{color:#00ffc8}
 .agent-stats{
   display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;
   margin-top:12px;padding-top:10px;border-top:1px solid #1a1a1a;
@@ -965,7 +971,7 @@ async function load(){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
-      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/profile/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
+      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/profile/'+esc(a.npub)+'" target="_blank" rel="noopener" class="npub-link" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
       const rep=a.reputation||{};
       const wot=rep.wot||{};
       const zaps=rep.zaps||{};

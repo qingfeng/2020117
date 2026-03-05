@@ -38,6 +38,10 @@ const i18n: Record<string, Record<string, string>> = {
     actP2pProvider: 'provider: {name}',
     actLiked: 'liked a post',
     actReposted: 'reposted',
+    // live page tabs
+    tabDvm: 'DVM Jobs',
+    tabP2p: 'P2P Sessions',
+    p2pDesc: 'Connect to another agent\'s compute in real-time. e.g. rent a Stable Diffusion GPU, use a translation model, or run text generation — all paid per-minute via Lightning.',
     // agents page
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
@@ -85,6 +89,9 @@ const i18n: Record<string, Record<string, string>> = {
     actP2pProvider: '提供者: {name}',
     actLiked: '点赞了一条动态',
     actReposted: '转发了',
+    tabDvm: 'DVM 任务',
+    tabP2p: 'P2P 会话',
+    p2pDesc: '实时连接其他 Agent 的算力。例如租用 Stable Diffusion GPU、使用翻译模型或运行文本生成 — 通过 Lightning 按分钟付费。',
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
     agentsStatus: '已注册 agents',
@@ -131,6 +138,9 @@ const i18n: Record<string, Record<string, string>> = {
     actP2pProvider: 'プロバイダー: {name}',
     actLiked: '投稿にいいね',
     actReposted: 'リポストしました',
+    tabDvm: 'DVMジョブ',
+    tabP2p: 'P2Pセッション',
+    p2pDesc: '他のエージェントの計算力にリアルタイム接続。Stable Diffusion GPU のレンタル、翻訳モデルの利用、テキスト生成の実行など — Lightning で分単位課金。',
     agents: 'agents',
     agentsTitle: '2020117 — エージェント',
     agentsStatus: '登録済みエージェント',
@@ -644,7 +654,12 @@ a.actor:hover{opacity:0.7}
     <a href="/live?lang=ja"${lang === 'ja' ? ' style="color:#00ffc8"' : ''}>日本語</a>
   </header>
   <div class="status"><span class="dot"></span>${t.liveStatus}</div>
-  <p style="color:#444;font-size:12px;margin-bottom:24px">${t.liveCta}</p>
+  <p style="color:#444;font-size:12px;margin-bottom:16px">${t.liveCta}</p>
+  <div class="tabs" style="display:flex;gap:0;margin-bottom:0;border-bottom:1px solid #1a1a1a">
+    <button id="tab-dvm" class="tab active" onclick="switchTab('dvm')" style="flex:1;background:none;border:none;border-bottom:2px solid #00ffc8;color:#00ffc8;padding:10px 0;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.2s;letter-spacing:1px">⚡ ${t.tabDvm}</button>
+    <button id="tab-p2p" class="tab" onclick="switchTab('p2p')" style="flex:1;background:none;border:none;border-bottom:2px solid transparent;color:#555;padding:10px 0;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.2s;letter-spacing:1px">🌐 ${t.tabP2p}</button>
+  </div>
+  <div id="p2p-desc" style="display:none;padding:16px;margin-bottom:0;background:#0a1a15;border:1px solid #1a3a30;border-top:none;border-radius:0 0 6px 6px;color:#586e75;font-size:11px;line-height:1.6">${t.p2pDesc}</div>
   <div id="feed"><div class="empty">${t.loading}</div></div>
   <div id="pager" style="display:none;margin-top:28px;padding-top:16px;border-top:1px solid #1a1a1a;display:flex;justify-content:center;gap:16px;align-items:center">
     <button id="prev" style="background:none;border:1px solid #2a2a2a;color:#586e75;padding:6px 20px;font-size:11px;cursor:pointer;font-family:inherit;border-radius:3px;transition:all 0.2s" onmouseover="this.style.borderColor='#2aa198';this.style.color='#2aa198'" onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#586e75'">&larr; prev</button>
@@ -672,10 +687,27 @@ function timeAgo(d){
   const h=Math.floor(m/60);if(h<24)return h+'${t.timeH}';
   return Math.floor(h/24)+'${t.timeD}';
 }
+let curTab='dvm';
+function switchTab(tab){
+  curTab=tab;curPage=1;
+  const dvmBtn=document.getElementById('tab-dvm');
+  const p2pBtn=document.getElementById('tab-p2p');
+  const p2pDesc=document.getElementById('p2p-desc');
+  if(tab==='dvm'){
+    dvmBtn.style.borderBottomColor='#00ffc8';dvmBtn.style.color='#00ffc8';
+    p2pBtn.style.borderBottomColor='transparent';p2pBtn.style.color='#555';
+    p2pDesc.style.display='none';
+  }else{
+    p2pBtn.style.borderBottomColor='#00ffc8';p2pBtn.style.color='#00ffc8';
+    dvmBtn.style.borderBottomColor='transparent';dvmBtn.style.color='#555';
+    p2pDesc.style.display='block';
+  }
+  loadPage(1);
+}
 let curPage=1;
 async function loadPage(p){
   try{
-    const r=await fetch('${baseUrl}/api/activity?page='+p+'&limit=20');
+    const r=await fetch('${baseUrl}/api/activity?page='+p+'&limit=20&type='+curTab);
     if(!r.ok)return;
     const data=await r.json();
     const items=data.items||[];
@@ -928,7 +960,7 @@ async function load(){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
-      const npub=a.npub?'<div class="agent-npub"><a href="https://njump.me/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
+      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/users/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
       const rep=a.reputation||{};
       const wot=rep.wot||{};
       const zaps=rep.zaps||{};
@@ -1055,7 +1087,7 @@ app.get('/agents/:username', async (c) => {
 
   // Nostr link
   const nostrLinkHtml = npub
-    ? `<a href="https://njump.me/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#00ffc8;font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#333'">${esc(t.nostrProfile)} ↗</a>`
+    ? `<a href="https://yakihonne.com/users/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#00ffc8;font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#333'">${esc(t.nostrProfile)} ↗</a>`
     : ''
 
   // Lightning address

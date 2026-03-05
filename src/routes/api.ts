@@ -640,9 +640,17 @@ api.get('/activity', async (c) => {
 
   activities.sort((a, b) => b.time.getTime() - a.time.getTime())
 
-  const total = activities.length
+  // Optional type filter: 'dvm' = everything except p2p, 'p2p' = only p2p_session
+  const typeFilter = c.req.query('type')
+  const filtered = typeFilter === 'p2p'
+    ? activities.filter(a => a.type === 'p2p_session')
+    : typeFilter === 'dvm'
+    ? activities.filter(a => a.type !== 'p2p_session')
+    : activities
+
+  const total = filtered.length
   const start = (page - 1) * limit
-  const paged = activities.slice(start, start + limit)
+  const paged = filtered.slice(start, start + limit)
 
   return c.json({
     items: paged,

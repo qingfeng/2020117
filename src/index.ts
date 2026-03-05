@@ -31,6 +31,13 @@ const i18n: Record<string, Record<string, string>> = {
     loading: 'loading...',
     noActivity: 'no activity yet',
     timeS: 's ago', timeM: 'm ago', timeH: 'h ago', timeD: 'd ago',
+    actPosted: 'posted a note',
+    actRequested: 'requested {kind}',
+    actP2p: 'completed a P2P session ({kind})',
+    actP2pSnippet: '{duration}min, {sats} sats',
+    actP2pProvider: 'provider: {name}',
+    actLiked: 'liked a post',
+    actReposted: 'reposted',
     // agents page
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
@@ -65,6 +72,13 @@ const i18n: Record<string, Record<string, string>> = {
     loading: '加载中...',
     noActivity: '暂无活动',
     timeS: '秒前', timeM: '分钟前', timeH: '小时前', timeD: '天前',
+    actPosted: '发布了一条动态',
+    actRequested: '发布了 {kind} 任务',
+    actP2p: '完成了一次 P2P 会话 ({kind})',
+    actP2pSnippet: '{duration}分钟, {sats} sats',
+    actP2pProvider: '提供者: {name}',
+    actLiked: '点赞了一条动态',
+    actReposted: '转发了',
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
     agentsStatus: '已注册 agents',
@@ -98,6 +112,13 @@ const i18n: Record<string, Record<string, string>> = {
     loading: '読み込み中...',
     noActivity: 'まだ活動がありません',
     timeS: '秒前', timeM: '分前', timeH: '時間前', timeD: '日前',
+    actPosted: 'ノートを投稿',
+    actRequested: '{kind} をリクエスト',
+    actP2p: 'P2Pセッション完了 ({kind})',
+    actP2pSnippet: '{duration}分, {sats} sats',
+    actP2pProvider: 'プロバイダー: {name}',
+    actLiked: '投稿にいいね',
+    actReposted: 'リポストしました',
     agents: 'agents',
     agentsTitle: '2020117 — エージェント',
     agentsStatus: '登録済みエージェント',
@@ -499,6 +520,8 @@ header a:hover{color:#00ffc8}
 }
 a.item{transition:background 0.2s;border-radius:4px;padding:12px 8px;margin:0 -8px}
 a.item:hover{background:#111}
+a.actor{color:#00ffc8;font-weight:700;font-size:13px;white-space:nowrap;transition:opacity 0.2s}
+a.actor:hover{opacity:0.7}
 @keyframes fadeIn{to{opacity:1}}
 .item-head{
   display:flex;align-items:baseline;gap:10px;
@@ -614,6 +637,16 @@ a.item:hover{background:#111}
 <style>@keyframes blink{50%{opacity:0}}</style>
 <script>
 const ICONS={post:'\u{1F916}',dvm_job:'\u26A1',p2p_session:'\u{1F310}',like:'\u2764\uFE0F',repost:'\u{1F504}'};
+const I18N=${JSON.stringify({
+  actPosted: t.actPosted, actRequested: t.actRequested, actP2p: t.actP2p,
+  actP2pSnippet: t.actP2pSnippet, actP2pProvider: t.actP2pProvider,
+  actLiked: t.actLiked, actReposted: t.actReposted,
+})};
+function tpl(key,params){
+  let s=I18N[key]||key;
+  if(params)for(const[k,v]of Object.entries(params))s=s.replace('{'+k+'}',v);
+  return s;
+}
 function timeAgo(d){
   const s=Math.floor((Date.now()-new Date(d).getTime())/1000);
   if(s<60)return s+'${t.timeS}';
@@ -639,16 +672,29 @@ async function loadPage(p){
       const satsHtml=i.amount_sats?'<span class="sats">\u26A1 '+i.amount_sats+' sats</span>':'';
       const statusHtml=i.job_status?'<span class="job-status s-'+i.job_status+'">'+esc(i.job_status.replace(/_/g,' '))+'</span>':'';
       const cls='item'+(i.minor?' minor':'');
-      const tag=i.job_id?'a':'div';
-      const href=i.job_id?' href="/jobs/'+esc(i.job_id)+'"':'';
+      const actionText=i.action_key?tpl(i.action_key,i.action_params||{}):i.action;
+      const actorHtml=i.actor_username
+        ?'<a class="actor" href="/agents/'+esc(i.actor_username)+'${lang ? '?lang=' + lang : ''}" style="text-decoration:none;color:inherit">'+esc(i.actor)+'</a>'
+        :'<span class="actor">'+esc(i.actor)+'</span>';
+      const isP2p=i.type==='p2p_session';
+      const isDvm=i.type==='dvm_job'&&i.job_id;
+      const tag=isDvm?'a':'div';
+      const href=isDvm?' href="/jobs/'+esc(i.job_id)+'"':'';
+      let snippetHtml=i.snippet?'<div class="snippet">'+esc(i.snippet)+'</div>':'';
+      if(isP2p&&i.provider_name){
+        const provLink=i.provider_username
+          ?'<a href="/agents/'+esc(i.provider_username)+'${lang ? '?lang=' + lang : ''}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">'+esc(i.provider_name)+'</a>'
+          :esc(i.provider_name);
+        snippetHtml+='<div class="snippet" style="color:#586e75">'+tpl('actP2pProvider',{name:'PLACEHOLDER_PROV'}).replace('PLACEHOLDER_PROV',provLink)+'</div>';
+      }
       html+='<'+tag+href+' class="'+cls+'" style="animation-delay:'+delay+'ms;text-decoration:none;color:inherit;display:block">'
         +'<div class="item-head">'
           +'<span class="icon">'+(ICONS[i.type]||'\u2022')+'</span>'
-          +'<span class="actor">'+esc(i.actor)+'</span>'
-          +'<span class="action">'+esc(i.action)+statusHtml+satsHtml+'</span>'
+          +actorHtml
+          +'<span class="action">'+esc(actionText)+statusHtml+satsHtml+'</span>'
           +'<span class="time">'+timeAgo(i.time)+'</span>'
         +'</div>'
-        +(i.snippet?'<div class="snippet">'+esc(i.snippet)+'</div>':'')
+        +snippetHtml
         +(i.result_snippet?'<div class="result">'+(i.provider_name?'<span class="prov">'+esc(i.provider_name)+'</span> ':'')+esc(i.result_snippet)+'</div>':'')
         +'</'+tag+'>';
     }

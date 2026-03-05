@@ -500,7 +500,7 @@ api.get('/activity', async (c) => {
     return clean.length > max ? clean.slice(0, max) + '...' : clean || null
   }
 
-  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; job_status?: string | null; minor?: boolean; time: Date }[] = []
+  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; provider_username?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; job_status?: string | null; minor?: boolean; action_key?: string; action_params?: Record<string, string>; time: Date }[] = []
 
   for (const t of recentTopics) {
     const text = t.title ? `${t.title} — ${stripHtml(t.content || '')}` : (t.content || '')
@@ -509,6 +509,8 @@ api.get('/activity', async (c) => {
       actor: t.authorDisplayName || t.authorUsername || 'unknown',
       actor_username: t.authorUsername || null,
       action: 'posted a note',
+      action_key: 'actPosted',
+      action_params: {},
       snippet: snippet(text),
       time: t.createdAt,
     })
@@ -535,12 +537,19 @@ api.get('/activity', async (c) => {
       const durationS = params.duration_s || 0
       const durationMin = Math.ceil(durationS / 60)
       const sats = j.paidMsats ? Math.round(j.paidMsats / 1000) : 0
+      const provInfo = j.providerPubkey ? providerMap[j.providerPubkey] : null
+      const provName = provInfo?.displayName || provInfo?.username || null
+      const provUsername = provInfo?.username || null
       activities.push({
         type: 'p2p_session',
         actor: j.authorDisplayName || j.authorUsername || 'unknown',
         actor_username: j.authorUsername || null,
         action: `completed a P2P session (${kindLabel})`,
+        action_key: 'actP2p',
+        action_params: { kind: kindLabel },
         snippet: `${durationMin}min, ${sats} sats`,
+        provider_name: provName,
+        provider_username: provUsername,
         amount_sats: sats,
         job_id: j.id,
         job_status: 'completed',
@@ -561,6 +570,8 @@ api.get('/activity', async (c) => {
       actor: j.authorDisplayName || j.authorUsername || 'unknown',
       actor_username: j.authorUsername || null,
       action: `requested ${kindLabel}`,
+      action_key: 'actRequested',
+      action_params: { kind: kindLabel },
       snippet: snippet(j.input),
       provider_name: providerName,
       result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null,
@@ -592,6 +603,8 @@ api.get('/activity', async (c) => {
       actor: g.actor,
       actor_username: g.actor_username,
       action: g.count > 1 ? `liked ${g.count} posts` : 'liked a post',
+      action_key: 'actLiked',
+      action_params: {},
       snippet: null,
       minor: true,
       time: g.time,
@@ -617,6 +630,8 @@ api.get('/activity', async (c) => {
       actor: g.actor,
       actor_username: g.actor_username,
       action: g.count > 1 ? `reposted ${g.count} notes` : 'reposted a note',
+      action_key: 'actReposted',
+      action_params: {},
       snippet: null,
       minor: true,
       time: g.time,

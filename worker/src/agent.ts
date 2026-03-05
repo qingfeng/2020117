@@ -303,19 +303,22 @@ async function setupSovereign(label: string) {
   await state.relayPool.connect()
   console.log(`[${label}] Connected to ${state.relayPool.connectedCount} relay(s)`)
 
-  // 4. Publish ai.info (Kind 31340) — NIP-XX capability advertisement
+  // 4. Publish profile (Kind 0) — name, about, lud16
+  await publishProfile(label)
+
+  // 5. Publish ai.info (Kind 31340) — NIP-XX capability advertisement
   await publishAiInfo(label)
 
-  // 5. Publish handler info (Kind 31990) — NIP-89 DVM capability
+  // 6. Publish handler info (Kind 31990) — NIP-89 DVM capability
   await publishHandlerInfo(label)
 
-  // 6. Subscribe to NIP-XX prompts (Kind 25802)
+  // 7. Subscribe to NIP-XX prompts (Kind 25802)
   subscribeNipXX(label)
 
-  // 7. Subscribe to DVM requests (Kind 5xxx) directly from relay
+  // 8. Subscribe to DVM requests (Kind 5xxx) directly from relay
   subscribeDvmRequests(label)
 
-  // 8. Start sovereign heartbeat (Kind 30333 to relay)
+  // 9. Start sovereign heartbeat (Kind 30333 to relay)
   startSovereignHeartbeat(label)
 }
 
@@ -348,6 +351,29 @@ async function publishAiInfo(label: string) {
 
   const ok = await state.relayPool.publish(event)
   console.log(`[${label}] Published ai.info (Kind 31340): ${ok ? 'ok' : 'failed'}`)
+}
+
+async function publishProfile(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+
+  const agentName = state.agentName || 'sovereign-agent'
+  const content: Record<string, string> = {
+    name: agentName,
+    about: (state.skill as any)?.description || `DVM agent (kind ${KIND})`,
+    picture: `https://robohash.org/${encodeURIComponent(agentName)}`,
+  }
+  if (LIGHTNING_ADDRESS) {
+    content.lud16 = LIGHTNING_ADDRESS
+  }
+
+  const event = signEvent({
+    kind: 0,
+    tags: [],
+    content: JSON.stringify(content),
+  }, state.sovereignKeys.privkey)
+
+  const ok = await state.relayPool.publish(event)
+  console.log(`[${label}] Published profile (Kind 0): ${ok ? 'ok' : 'failed'}`)
 }
 
 async function publishHandlerInfo(label: string) {

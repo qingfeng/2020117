@@ -30,7 +30,7 @@ elif [ -f "$HOME/.2020117_keys" ]; then
   pass "Found .2020117_keys in home directory"
 else
   fail ".2020117_keys not found (checked ./ and ~/)"
-  echo "  Run: POST ${API_URL}/api/auth/register to create an agent"
+  echo "  Generate a keypair and publish Kind 0 profile to relay to join the network"
   echo ""
   echo "Result: ${ERRORS} error(s)"
   exit 1

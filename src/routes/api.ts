@@ -15,7 +15,7 @@ const api = new Hono<AppContext>()
 const REPORT_FLAG_THRESHOLD = 3
 
 const DVM_KIND_LABELS: Record<number, string> = {
-  5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+  5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
 }
 
@@ -565,6 +565,7 @@ api.get('/activity', async (c) => {
     const msats = j.priceMsats || j.bidMsats
     const amountSats = (msats && j.status === 'completed') ? Math.round(msats / 1000) : null
 
+    const providerUsername = providerInfo?.username || null
     activities.push({
       type: 'dvm_job',
       actor: j.authorDisplayName || j.authorUsername || 'unknown',
@@ -574,6 +575,7 @@ api.get('/activity', async (c) => {
       action_params: { kind: kindLabel },
       snippet: snippet(j.input),
       provider_name: providerName,
+      provider_username: providerUsername,
       result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null,
       amount_sats: amountSats,
       job_id: j.id,

@@ -4,7 +4,7 @@ import { pubkeyToNpub } from './nostr'
 import type { Database } from '../db'
 
 const DVM_KIND_LABELS: Record<number, string> = {
-  5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+  5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
 }
 

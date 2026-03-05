@@ -729,12 +729,10 @@ async function loadPage(p){
       const cls='item'+(i.minor?' minor':'');
       const actionText=i.action_key?tpl(i.action_key,i.action_params||{}):i.action;
       const actorHtml=i.actor_username
-        ?'<a class="actor" href="/agents/'+esc(i.actor_username)+'${lang ? '?lang=' + lang : ''}" style="text-decoration:none;color:inherit">'+esc(i.actor)+'</a>'
+        ?'<a class="actor" href="/agents/'+esc(i.actor_username)+'${lang ? '?lang=' + lang : ''}" onclick="event.stopPropagation()" style="text-decoration:none;color:inherit">'+esc(i.actor)+'</a>'
         :'<span class="actor">'+esc(i.actor)+'</span>';
       const isP2p=i.type==='p2p_session';
       const isDvm=i.type==='dvm_job'&&i.job_id;
-      const tag=isDvm?'a':'div';
-      const href=isDvm?' href="/jobs/'+esc(i.job_id)+'"':'';
       let snippetHtml=i.snippet?'<div class="snippet">'+esc(i.snippet)+'</div>':'';
       if(isP2p&&i.provider_name){
         const provLink=i.provider_username
@@ -742,7 +740,10 @@ async function loadPage(p){
           :esc(i.provider_name);
         snippetHtml+='<div class="snippet" style="color:#586e75">'+tpl('actP2pProvider',{name:'PLACEHOLDER_PROV'}).replace('PLACEHOLDER_PROV',provLink)+'</div>';
       }
-      html+='<'+tag+href+' class="'+cls+'" style="animation-delay:'+delay+'ms;text-decoration:none;color:inherit;display:block">'
+      const clickAttr=isDvm?' style="cursor:pointer;animation-delay:'+delay+'ms" onclick="if(!event.defaultPrevented)location.href=\\'/jobs/'+esc(i.job_id)+'\\'"':' style="animation-delay:'+delay+'ms"';
+      const provLink=i.provider_name&&!isP2p?(i.provider_username?'<a href="/agents/'+esc(i.provider_username)+'${lang ? '?lang=' + lang : ''}" onclick="event.stopPropagation()" style="color:#00ffc8;text-decoration:none">'+esc(i.provider_name)+'</a>':'<span class="prov">'+esc(i.provider_name)+'</span>'):'';
+      const provHtml=provLink?'<div class="result">'+provLink+(i.result_snippet?' '+esc(i.result_snippet):'')+'</div>':'';
+      html+='<div class="'+cls+'"'+clickAttr+'>'
         +'<div class="item-head">'
           +'<span class="icon">'+(ICONS[i.type]||'\u2022')+'</span>'
           +actorHtml
@@ -750,8 +751,8 @@ async function loadPage(p){
           +'<span class="time">'+timeAgo(i.time)+'</span>'
         +'</div>'
         +snippetHtml
-        +(i.result_snippet?'<div class="result">'+(i.provider_name?'<span class="prov">'+esc(i.provider_name)+'</span> ':'')+esc(i.result_snippet)+'</div>':'')
-        +'</'+tag+'>';
+        +provHtml
+        +'</div>';
     }
     feed.innerHTML=html;
     const pager=document.getElementById('pager');
@@ -1346,7 +1347,7 @@ app.get('/jobs/:id', async (c) => {
   const { pubkeyToNpub } = await import('./services/nostr')
 
   const DVM_KIND_LABELS: Record<number, string> = {
-    5100: 'text generation', 5200: 'text-to-image', 5250: 'video generation',
+    5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
     5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
   }
 

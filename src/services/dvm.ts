@@ -328,11 +328,37 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
 
 // --- Cron: Poll DVM Requests (for service providers) ---
 
+// Find or create a user record for a Nostr pubkey (shadow user for external pubkeys)
+async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string> {
+  const existing = await db.select({ id: users.id }).from(users)
+    .where(eq(users.nostrPubkey, pubkey)).limit(1)
+  if (existing.length > 0) return existing[0].id
+
+  // Create shadow user for external pubkey
+  const userId = generateId()
+  const shortPub = pubkey.slice(0, 8)
+  const username = `nostr_${shortPub}`
+  // Avoid username collision
+  const collision = await db.select({ id: users.id }).from(users)
+    .where(eq(users.username, username)).limit(1)
+  const finalUsername = collision.length > 0 ? `nostr_${pubkey.slice(0, 16)}` : username
+  await db.insert(users).values({
+    id: userId,
+    username: finalUsername,
+    displayName: `nostr:${shortPub}...`,
+    nostrPubkey: pubkey,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  })
+  console.log(`[DVM] Created shadow user ${finalUsername} for pubkey ${shortPub}...`)
+  return userId
+}
+
 export async function pollDvmRequests(env: Bindings, db: Database): Promise<void> {
   const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
   if (relayUrls.length === 0) return
 
-  // Find active services
+  // Find active services (for provider matching)
   const activeServices = await db
     .select({
       id: dvmServices.id,
@@ -343,9 +369,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
     .from(dvmServices)
     .where(eq(dvmServices.active, 1))
 
-  if (activeServices.length === 0) return
-
-  // Collect all registered kinds
+  // Collect all registered kinds (for relay query filter)
   const allKinds = new Set<number>()
   for (const svc of activeServices) {
     try {
@@ -353,6 +377,9 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       for (const k of kinds) allKinds.add(k)
     } catch {}
   }
+
+  // Also poll common DVM kinds even without local providers (for indexing)
+  for (const k of [5100, 5200, 5250, 5300, 5301, 5302, 5303]) allKinds.add(k)
 
   if (allKinds.size === 0) return
 
@@ -372,7 +399,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
 
     console.log(`[DVM] Fetched ${events.length} job requests since ${since}`)
 
-    // Build user-to-kinds map for matching
+    // Build user-to-kinds map for provider matching
     const userKindsMap = new Map<string, Set<number>>()
     for (const svc of activeServices) {
       try {
@@ -385,19 +412,18 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
 
     // Get provider pubkeys
     const userIds = Array.from(userKindsMap.keys())
-    const providerUsers = await db
-      .select({ id: users.id, nostrPubkey: users.nostrPubkey })
-      .from(users)
-      .where(inArray(users.id, userIds))
+    const providerUsers = userIds.length > 0
+      ? await db.select({ id: users.id, nostrPubkey: users.nostrPubkey }).from(users).where(inArray(users.id, userIds))
+      : []
 
     const userPubkeyMap = new Map(providerUsers.map(u => [u.id, u.nostrPubkey]))
 
     let maxCreatedAt = since
 
-    // Build userId → totalZapReceived map for threshold check (static across events)
+    // Build userId → totalZapReceived map for threshold check
     const userZapMap = new Map(activeServices.map(s => [s.userId, s.totalZapReceived || 0]))
 
-    // Build report count map for flagged check (static across events)
+    // Build report count map for flagged check
     const providerPubkeys = providerUsers.map(u => u.nostrPubkey).filter((pk): pk is string => !!pk)
     const reportCounts = new Map<string, number>()
     if (providerPubkeys.length > 0) {
@@ -416,23 +442,14 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
     for (const event of events) {
       if (!verifyEvent(event)) continue
 
-      // Skip if we already have this request
-      const existing = await db
+      // Skip if we already have a customer record for this request event
+      const existingCustomer = await db
         .select({ id: dvmJobs.id })
         .from(dvmJobs)
-        .where(eq(dvmJobs.requestEventId, event.id))
+        .where(and(eq(dvmJobs.requestEventId, event.id), eq(dvmJobs.role, 'customer')))
         .limit(1)
-      if (existing.length > 0) {
-        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
-        continue
-      }
 
-      // Skip if this event is from one of our own providers (don't accept own requests)
-      const isOwnEvent = providerUsers.some(u => u.nostrPubkey === event.pubkey)
-      if (isOwnEvent) {
-        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
-        continue
-      }
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
 
       // Extract input from tags
       const iTag = event.tags.find(t => t[0] === 'i')
@@ -445,11 +462,50 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
         ? JSON.stringify(Object.fromEntries(paramTags.map(t => [t[1], t[2]])))
         : null
 
+      // 1. Index as customer record (any pubkey, local or external)
+      if (existingCustomer.length === 0) {
+        try {
+          const customerUserId = await ensureUserForPubkey(db, event.pubkey)
+          const customerJobId = generateId()
+          await db.insert(dvmJobs).values({
+            id: customerJobId,
+            userId: customerUserId,
+            role: 'customer',
+            kind: event.kind,
+            status: 'open',
+            input,
+            inputType,
+            output: outputTag?.[1] || null,
+            bidMsats: bidTag ? parseInt(bidTag[1]) : null,
+            customerPubkey: event.pubkey,
+            requestEventId: event.id,
+            params,
+            createdAt: new Date(event.created_at * 1000),
+            updatedAt: new Date(event.created_at * 1000),
+          })
+          console.log(`[DVM] Indexed customer job ${customerJobId} from ${event.pubkey.slice(0, 8)}... (kind ${event.kind})`)
+        } catch (e) {
+          console.error(`[DVM] Failed to index customer job:`, e)
+        }
+      }
+
+      // 2. Skip provider matching if event is from a local provider (don't self-assign)
+      const isOwnEvent = providerUsers.some(u => u.nostrPubkey === event.pubkey)
+      if (isOwnEvent) continue
+
+      // Skip if we already have provider records for this event
+      const existingProvider = await db
+        .select({ id: dvmJobs.id })
+        .from(dvmJobs)
+        .where(and(eq(dvmJobs.requestEventId, event.id), eq(dvmJobs.role, 'provider')))
+        .limit(1)
+      if (existingProvider.length > 0) continue
+
       // Parse min_zap_sats from param tags
       const minZapParam = paramTags.find(t => t[1] === 'min_zap_sats')
       const minZapSats = minZapParam ? parseInt(minZapParam[2]) : 0
 
-      // Create provider job for each matching user
+      // 3. Create provider job for each matching local provider
       for (const [userId, kinds] of userKindsMap) {
         if (!kinds.has(event.kind)) continue
 
@@ -484,10 +540,6 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
           updatedAt: new Date(),
         })
         console.log(`[DVM] Created provider job ${jobId} for user ${userId} (kind ${event.kind})`)
-      }
-
-      if (event.created_at > maxCreatedAt) {
-        maxCreatedAt = event.created_at
       }
     }
 

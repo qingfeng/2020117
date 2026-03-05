@@ -234,11 +234,41 @@ async function setupPlatform(label: string) {
     models,
     skill: state.skill,
   })
-  state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity(), () => ({
-    sessions: state.p2pSessionsCompleted,
-    earned_sats: state.p2pTotalEarnedSats,
-    active: activeSessions.size > 0,
-  }))
+
+  // Prefer Nostr heartbeat (Kind 30333 direct to relay) over API heartbeat
+  const keys = loadSovereignKeys(state.agentName || undefined)
+  if (keys?.privkey && keys?.pubkey) {
+    // Connect a relay pool for heartbeat if not already connected (sovereign mode)
+    if (!state.relayPool) {
+      const relayUrls = keys.relays?.length ? keys.relays : RELAYS
+      state.relayPool = new RelayPool(relayUrls)
+      await state.relayPool.connect()
+      console.log(`[${label}] Relay pool connected for heartbeat (${state.relayPool.connectedCount} relay(s))`)
+    }
+
+    // Build pricing map from config
+    const pricing: Record<string, number> = {}
+    const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
+    if (priceSats > 0) pricing[String(KIND)] = priceSats
+
+    state.stopHeartbeat = startNostrHeartbeat(label, keys, state.relayPool, {
+      pricing,
+      p2pStatsFn: () => ({
+        sessions: state.p2pSessionsCompleted,
+        earned_sats: state.p2pTotalEarnedSats,
+        active: activeSessions.size > 0,
+      }),
+    })
+    console.log(`[${label}] Heartbeat: Nostr (Kind 30333 → relay)`)
+  } else {
+    // Fallback: API heartbeat (no local private key)
+    state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity(), () => ({
+      sessions: state.p2pSessionsCompleted,
+      earned_sats: state.p2pTotalEarnedSats,
+      active: activeSessions.size > 0,
+    }))
+    console.log(`[${label}] Heartbeat: API (no local privkey, falling back to POST /api/heartbeat)`)
+  }
 }
 
 // --- 2a. Sovereign Mode (AIP-0009) ---
@@ -333,7 +363,20 @@ async function setupSovereign(label: string) {
   console.log('')
 
   // 10. Start sovereign heartbeat (Kind 30333 to relay)
-  startSovereignHeartbeat(label)
+  if (state.sovereignKeys && state.relayPool) {
+    const pricing: Record<string, number> = {}
+    const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
+    if (priceSats > 0) pricing[String(KIND)] = priceSats
+
+    state.stopHeartbeat = startNostrHeartbeat(label, state.sovereignKeys, state.relayPool, {
+      pricing,
+      p2pStatsFn: () => ({
+        sessions: state.p2pSessionsCompleted,
+        earned_sats: state.p2pTotalEarnedSats,
+        active: activeSessions.size > 0,
+      }),
+    })
+  }
 }
 
 async function publishAiInfo(label: string) {
@@ -613,29 +656,53 @@ async function publishAiError(clientPubkey: string, promptId: string, code: stri
   await state.relayPool.publish(event).catch(() => {})
 }
 
-function startSovereignHeartbeat(label: string) {
-  if (!state.sovereignKeys || !state.relayPool) return
-
+function startNostrHeartbeat(
+  label: string,
+  keys: SovereignKeys,
+  pool: RelayPool,
+  opts?: {
+    pricing?: Record<string, number>
+    p2pStatsFn?: () => { sessions: number; earned_sats: number; active: boolean }
+  },
+): () => void {
   async function publishHeartbeat() {
-    if (!state.sovereignKeys || !state.relayPool) return
+    const tags: string[][] = [
+      ['d', keys.pubkey],
+      ['status', 'online'],
+      ['capacity', String(getAvailableCapacity())],
+      ['kinds', String(KIND)],
+    ]
+
+    // Add pricing tag (format: "5100:50,5200:100")
+    if (opts?.pricing && Object.keys(opts.pricing).length > 0) {
+      tags.push(['price', Object.entries(opts.pricing).map(([k, v]) => `${k}:${v}`).join(',')])
+    }
+
+    // Add p2p_stats tag (JSON)
+    if (opts?.p2pStatsFn) {
+      const stats = opts.p2pStatsFn()
+      tags.push(['p2p_stats', JSON.stringify(stats)])
+    }
 
     const event = signEvent({
       kind: 30333,
-      tags: [
-        ['d', state.sovereignKeys!.pubkey],
-        ['status', 'online'],
-        ['capacity', String(getAvailableCapacity())],
-        ['kinds', String(KIND)],
-      ],
+      tags,
       content: '',
-    }, state.sovereignKeys.privkey)
+    }, keys.privkey)
 
-    const ok = await state.relayPool!.publish(event)
+    const ok = await pool.publish(event)
     if (ok) console.log(`[${label}] Heartbeat published to relay`)
   }
 
   publishHeartbeat()
-  setInterval(publishHeartbeat, 5 * 60_000)
+  const timer = setInterval(publishHeartbeat, 60_000)
+  return () => clearInterval(timer)
+}
+
+/** @deprecated Use startNostrHeartbeat. Kept for backward compat. */
+function startSovereignHeartbeat(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+  startNostrHeartbeat(label, state.sovereignKeys, state.relayPool)
 }
 
 // --- 3. Async Inbox Poller ---

@@ -1194,6 +1194,7 @@ export async function pollHeartbeats(env: Bindings, db: Database): Promise<void>
       const capacityTag = event.tags.find((t: string[]) => t[0] === 'capacity')
       const kindsTag = event.tags.find((t: string[]) => t[0] === 'kinds')
       const priceTag = event.tags.find((t: string[]) => t[0] === 'price')
+      const p2pStatsTag = event.tags.find((t: string[]) => t[0] === 'p2p_stats')
 
       const status = statusTag?.[1] || 'online'
       const capacity = capacityTag?.[1] ? parseInt(capacityTag[1]) : 0
@@ -1206,6 +1207,10 @@ export async function pollHeartbeats(env: Bindings, db: Database): Promise<void>
           if (k && v) priceObj[k] = parseInt(v)
         }
         pricing = JSON.stringify(priceObj)
+      }
+      let p2pStats: string | null = null
+      if (p2pStatsTag?.[1]) {
+        try { p2pStats = p2pStatsTag[1] } catch {}
       }
 
       const now = new Date()
@@ -1220,6 +1225,7 @@ export async function pollHeartbeats(env: Bindings, db: Database): Promise<void>
             capacity,
             kinds,
             pricing,
+            p2pStats: p2pStats,
             nostrEventId: event.id,
             lastSeenAt: event.created_at,
             updatedAt: now,
@@ -1233,6 +1239,7 @@ export async function pollHeartbeats(env: Bindings, db: Database): Promise<void>
           capacity,
           kinds,
           pricing,
+          p2pStats: p2pStats,
           nostrEventId: event.id,
           lastSeenAt: event.created_at,
           createdAt: now,

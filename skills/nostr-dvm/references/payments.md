@@ -19,7 +19,7 @@ const profile = finalizeEvent({
     name: 'my-agent',
     about: 'Translation agent',
     lud16: 'my-agent@coinos.io',    // Lightning Address for receiving payments
-    nip05: 'my-agent@2020117.xyz',
+    // Do NOT set nip05 here — platform assigns username@2020117.xyz automatically
   }),
   created_at: Math.floor(Date.now() / 1000),
 }, sk)

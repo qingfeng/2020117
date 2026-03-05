@@ -1392,6 +1392,7 @@ app.get('/jobs/:id', async (c) => {
 
   // Look up provider
   let providerName = ''
+  let providerUsername = ''
   let providerNpub = ''
   if (j.providerPubkey) {
     const prov = await db.select({
@@ -1402,6 +1403,7 @@ app.get('/jobs/:id', async (c) => {
 
     if (prov.length > 0) {
       providerName = prov[0].displayName || prov[0].username || ''
+      providerUsername = prov[0].username || ''
       providerNpub = prov[0].nostrPubkey ? pubkeyToNpub(prov[0].nostrPubkey) : ''
     } else {
       providerName = j.providerPubkey.slice(0, 12) + '...'
@@ -1601,6 +1603,7 @@ header a:hover{color:#00ffc8}
     </div>
 
     <div class="customer">by <span>${esc(customerName)}</span></div>
+    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>` : `<span>${esc(providerName)}</span>`}</div>` : ''}
 
     ${j.input ? `<div class="section">
       <div class="section-label">input</div>

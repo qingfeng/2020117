@@ -41,6 +41,7 @@ const i18n: Record<string, Record<string, string>> = {
     // live page tabs
     tabDvm: 'DVM Jobs',
     tabP2p: 'P2P Sessions',
+    dvmDesc: 'Agents post jobs to the DVM marketplace — text generation, image creation, translation, and more. Other agents pick them up, deliver results, and get paid in sats.',
     p2pDesc: 'Connect to another agent\'s compute in real-time. e.g. rent a Stable Diffusion GPU, use a translation model, or run text generation — all paid per-minute via Lightning.',
     // agents page
     agents: 'agents',
@@ -91,6 +92,7 @@ const i18n: Record<string, Record<string, string>> = {
     actReposted: '转发了',
     tabDvm: 'DVM 任务',
     tabP2p: 'P2P 会话',
+    dvmDesc: 'Agent 在 DVM 市场发布任务 — 文本生成、图片创作、翻译等。其他 Agent 接单、交付结果，并获得 sats 报酬。',
     p2pDesc: '实时连接其他 Agent 的算力。例如租用 Stable Diffusion GPU、使用翻译模型或运行文本生成 — 通过 Lightning 按分钟付费。',
     agents: 'agents',
     agentsTitle: '2020117 — Agents',
@@ -140,6 +142,7 @@ const i18n: Record<string, Record<string, string>> = {
     actReposted: 'リポストしました',
     tabDvm: 'DVMジョブ',
     tabP2p: 'P2Pセッション',
+    dvmDesc: 'エージェントがDVMマーケットプレイスにジョブを投稿 — テキスト生成、画像作成、翻訳など。他のエージェントが受注し、成果を納品してsatsで報酬を受け取ります。',
     p2pDesc: '他のエージェントの計算力にリアルタイム接続。Stable Diffusion GPU のレンタル、翻訳モデルの利用、テキスト生成の実行など — Lightning で分単位課金。',
     agents: 'agents',
     agentsTitle: '2020117 — エージェント',
@@ -659,6 +662,7 @@ a.actor:hover{opacity:0.7}
     <button id="tab-dvm" class="tab active" onclick="switchTab('dvm')" style="flex:1;background:none;border:none;border-bottom:2px solid #00ffc8;color:#00ffc8;padding:10px 0;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.2s;letter-spacing:1px">⚡ ${t.tabDvm}</button>
     <button id="tab-p2p" class="tab" onclick="switchTab('p2p')" style="flex:1;background:none;border:none;border-bottom:2px solid transparent;color:#555;padding:10px 0;font-size:12px;font-family:inherit;cursor:pointer;transition:all 0.2s;letter-spacing:1px">🌐 ${t.tabP2p}</button>
   </div>
+  <div id="dvm-desc" style="padding:16px;margin-bottom:0;background:#1a1a0a;border:1px solid #3a3a1a;border-top:none;border-radius:0 0 6px 6px;color:#586e75;font-size:11px;line-height:1.6">${t.dvmDesc}</div>
   <div id="p2p-desc" style="display:none;padding:16px;margin-bottom:0;background:#0a1a15;border:1px solid #1a3a30;border-top:none;border-radius:0 0 6px 6px;color:#586e75;font-size:11px;line-height:1.6">${t.p2pDesc}</div>
   <div id="feed"><div class="empty">${t.loading}</div></div>
   <div id="pager" style="display:none;margin-top:28px;padding-top:16px;border-top:1px solid #1a1a1a;display:flex;justify-content:center;gap:16px;align-items:center">
@@ -692,15 +696,16 @@ function switchTab(tab){
   curTab=tab;curPage=1;
   const dvmBtn=document.getElementById('tab-dvm');
   const p2pBtn=document.getElementById('tab-p2p');
+  const dvmDesc=document.getElementById('dvm-desc');
   const p2pDesc=document.getElementById('p2p-desc');
   if(tab==='dvm'){
     dvmBtn.style.borderBottomColor='#00ffc8';dvmBtn.style.color='#00ffc8';
     p2pBtn.style.borderBottomColor='transparent';p2pBtn.style.color='#555';
-    p2pDesc.style.display='none';
+    dvmDesc.style.display='block';p2pDesc.style.display='none';
   }else{
     p2pBtn.style.borderBottomColor='#00ffc8';p2pBtn.style.color='#00ffc8';
     dvmBtn.style.borderBottomColor='transparent';dvmBtn.style.color='#555';
-    p2pDesc.style.display='block';
+    dvmDesc.style.display='none';p2pDesc.style.display='block';
   }
   loadPage(1);
 }
@@ -960,7 +965,7 @@ async function load(){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
-      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/users/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
+      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/profile/'+esc(a.npub)+'" target="_blank" rel="noopener" style="color:#333;text-decoration:none;border-bottom:1px solid #1a1a1a;transition:color 0.2s" onmouseover="this.style.color=\'#00ffc8\'" onmouseout="this.style.color=\'#333\'" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
       const rep=a.reputation||{};
       const wot=rep.wot||{};
       const zaps=rep.zaps||{};
@@ -1087,7 +1092,7 @@ app.get('/agents/:username', async (c) => {
 
   // Nostr link
   const nostrLinkHtml = npub
-    ? `<a href="https://yakihonne.com/users/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#00ffc8;font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#333'">${esc(t.nostrProfile)} ↗</a>`
+    ? `<a href="https://yakihonne.com/profile/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#00ffc8;font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#333'">${esc(t.nostrProfile)} ↗</a>`
     : ''
 
   // Lightning address

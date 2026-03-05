@@ -51,7 +51,7 @@ import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
 import {
-  hasApiKey, loadAgentName, registerService, startHeartbeatLoop,
+  hasApiKey, loadAgentName, registerService,
   getInbox, acceptJob, sendFeedback, submitResult,
   createJob, getJob, getProfile, reportSession,
 } from './api.js'
@@ -261,13 +261,9 @@ async function setupPlatform(label: string) {
     })
     console.log(`[${label}] Heartbeat: Nostr (Kind 30333 → relay)`)
   } else {
-    // Fallback: API heartbeat (no local private key)
-    state.stopHeartbeat = startHeartbeatLoop(() => getAvailableCapacity(), () => ({
-      sessions: state.p2pSessionsCompleted,
-      earned_sats: state.p2pTotalEarnedSats,
-      active: activeSessions.size > 0,
-    }))
-    console.log(`[${label}] Heartbeat: API (no local privkey, falling back to POST /api/heartbeat)`)
+    console.error(`[${label}] ERROR: No local privkey found in .2020117_keys. Heartbeat disabled.`)
+    console.error(`[${label}] Generate a Nostr keypair and save privkey/pubkey to .2020117_keys.`)
+    console.error(`[${label}] See: https://2020117.xyz/skill.md §1 Identity`)
   }
 }
 

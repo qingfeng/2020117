@@ -6,7 +6,7 @@ import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
 import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildHeartbeatEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow, buildReputationEndorsementEvent } from '../services/dvm'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow, buildReputationEndorsementEvent } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress, nwcGetBalance } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 
@@ -874,106 +874,9 @@ api.get('/jobs/:id', async (c) => {
 // ─── 公开端点：注册 ───
 
 api.post('/auth/register', async (c) => {
-  const db = c.get('db')
-  const body = await c.req.json().catch(() => ({})) as { name?: string }
-  const name = body.name?.trim()
-
-  if (!name || name.length < 1 || name.length > 50) {
-    return c.json({ error: 'name is required (1-50 chars)' }, 400)
-  }
-
-  // KV 限流：每 IP 5 分钟 1 次（暂时关闭用于调试）
-  // const kv = c.env.KV
-  // const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown'
-  // const rateKey = `api_reg:${ip}`
-  // const existing = await kv.get(rateKey)
-  // if (existing) {
-  //   return c.json({ error: 'Rate limited. Try again in 5 minutes.' }, 429)
-  // }
-  // await kv.put(rateKey, '1', { expirationTtl: 300 })
-
-  // 生成 username（slug 化 name）
-  const baseUsername = name.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
-  const username = await ensureUniqueUsername(db, baseUsername)
-
-  // 生成 API key
-  const { key, hash, keyId } = await generateApiKey()
-
-  const userId = generateId()
-  const now = new Date()
-
-  // 创建用户
-  try {
-    await db.insert(users).values({
-      id: userId,
-      username,
-      displayName: name,
-      createdAt: now,
-      updatedAt: now,
-    })
-  } catch (e) {
-    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : ''
-    const cause2 = e instanceof Error && e.cause instanceof Error && e.cause.cause instanceof Error ? e.cause.cause.message : ''
-    console.error('[Register] insert user failed:', e instanceof Error ? e.message : e)
-    return c.json({ error: 'Failed to create user', detail: e instanceof Error ? e.message : 'unknown', cause, cause2 }, 500)
-  }
-
-  // 创建 authProvider
-  try {
-    await db.insert(authProviders).values({
-      id: keyId,
-      userId,
-      providerType: 'apikey',
-      providerId: `apikey:${username}`,
-      accessToken: hash,
-      createdAt: now,
-    })
-  } catch (e) {
-    console.error('[Register] insert authProvider failed:', e instanceof Error ? e.message : e, e instanceof Error ? e.cause : '')
-    return c.json({ error: 'Failed to create auth', detail: e instanceof Error ? e.message : 'unknown' }, 500)
-  }
-
-  // 自动生成 Nostr 密钥并开启同步
-  if (c.env.NOSTR_MASTER_KEY) {
-    try {
-      const { pubkey, privEncrypted, iv } = await generateNostrKeypair(c.env.NOSTR_MASTER_KEY)
-      await db.update(users).set({
-        nostrPubkey: pubkey,
-        nostrPrivEncrypted: privEncrypted,
-        nostrPrivIv: iv,
-        nostrKeyVersion: 1,
-        nostrSyncEnabled: 1,
-        updatedAt: new Date(),
-      }).where(eq(users.id, userId))
-
-      // 广播 Kind 0 metadata
-      if (c.env.NOSTR_QUEUE) {
-        const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-        const host = new URL(baseUrl).host
-        const metaEvent = await buildSignedEvent({
-          privEncrypted, iv, masterKey: c.env.NOSTR_MASTER_KEY,
-          kind: 0,
-          content: JSON.stringify({
-            name,
-            about: '',
-            picture: `https://robohash.org/${encodeURIComponent(username)}`,
-            ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
-          }),
-          tags: [],
-        })
-        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [metaEvent] }))
-      }
-    } catch (e) {
-      console.error('[API] Failed to generate Nostr keys:', e)
-    }
-  }
-
   return c.json({
-    user_id: userId,
-    username,
-    api_key: key,
-    message: 'Save your API key — it will not be shown again.',
-  }, 201)
+    error: 'Registration via API has been removed. Generate a Nostr keypair and publish a Kind 0 profile to wss://relay.2020117.xyz — the platform will discover your agent automatically. See https://2020117.xyz/skill.md for details.',
+  }, 410)
 })
 
 // ─── 认证端点 ───
@@ -3789,88 +3692,11 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
 
 // ─── Phase 1: Kind 30333 — Agent Heartbeat ───
 
-// POST /api/heartbeat — 发送心跳
+// POST /api/heartbeat — deprecated, use Kind 30333 Nostr event
 api.post('/heartbeat', requireApiAuth, async (c) => {
-  const db = c.get('db')
-  const user = c.get('user')!
-
-  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !user.nostrPubkey || !c.env.NOSTR_MASTER_KEY) {
-    return c.json({ error: 'Nostr keys not configured' }, 400)
-  }
-
-  const body = await c.req.json().catch(() => ({})) as {
-    capacity?: number
-    p2p_stats?: { sessions?: number; earned_sats?: number; active?: boolean }
-  }
-
-  // Auto-read kinds/pricing from dvmServices
-  const svc = await db.select({ kinds: dvmServices.kinds, pricingMin: dvmServices.pricingMin, pricingMax: dvmServices.pricingMax, models: dvmServices.models })
-    .from(dvmServices)
-    .where(and(eq(dvmServices.userId, user.id), eq(dvmServices.active, 1)))
-    .limit(1)
-
-  let kinds: number[] = []
-  let pricing: Record<string, number> = {}
-  let models: string[] = []
-  if (svc.length > 0) {
-    kinds = JSON.parse(svc[0].kinds)
-    if (svc[0].pricingMin) {
-      for (const k of kinds) pricing[String(k)] = Math.floor(svc[0].pricingMin / 1000)
-    }
-    if (svc[0].models) models = JSON.parse(svc[0].models)
-  }
-
-  const event = await buildHeartbeatEvent({
-    privEncrypted: user.nostrPrivEncrypted,
-    iv: user.nostrPrivIv,
-    masterKey: c.env.NOSTR_MASTER_KEY,
-    pubkey: user.nostrPubkey,
-    capacity: body.capacity,
-    kinds,
-    pricing,
-    models,
-  })
-
-  // Upsert heartbeat locally
-  const now = new Date()
-  const existing = await db.select({ id: agentHeartbeats.id }).from(agentHeartbeats)
-    .where(eq(agentHeartbeats.userId, user.id)).limit(1)
-
-  const p2pStatsJson = body.p2p_stats ? JSON.stringify(body.p2p_stats) : null
-
-  if (existing.length > 0) {
-    await db.update(agentHeartbeats).set({
-      status: 'online',
-      capacity: body.capacity || 0,
-      kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
-      pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
-      p2pStats: p2pStatsJson,
-      nostrEventId: event.id,
-      lastSeenAt: Math.floor(Date.now() / 1000),
-      updatedAt: now,
-    }).where(eq(agentHeartbeats.id, existing[0].id))
-  } else {
-    await db.insert(agentHeartbeats).values({
-      id: generateId(),
-      userId: user.id,
-      status: 'online',
-      capacity: body.capacity || 0,
-      kinds: kinds.length > 0 ? JSON.stringify(kinds) : null,
-      pricing: Object.keys(pricing).length > 0 ? JSON.stringify(pricing) : null,
-      p2pStats: p2pStatsJson,
-      nostrEventId: event.id,
-      lastSeenAt: Math.floor(Date.now() / 1000),
-      createdAt: now,
-      updatedAt: now,
-    })
-  }
-
-  // Publish to relay
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-  }
-
-  return c.json({ ok: true, event_id: event.id })
+  return c.json({
+    error: 'Heartbeat via API has been removed. Sign a Kind 30333 event and publish to relay directly. See https://2020117.xyz/skill.md for details.',
+  }, 410)
 })
 
 // POST /api/dvm/session-report — P2P session 结算上报（Provider 调用）

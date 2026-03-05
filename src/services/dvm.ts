@@ -440,7 +440,12 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
     const REPORT_FLAG_THRESHOLD = 3
 
     for (const event of events) {
-      if (!verifyEvent(event)) continue
+      if (!verifyEvent(event)) {
+        console.log(`[DVM] Event ${event.id?.slice(0, 8)} failed verification, skipping`)
+        continue
+      }
+
+      console.log(`[DVM] Processing event ${event.id.slice(0, 12)}... kind=${event.kind} pubkey=${event.pubkey.slice(0, 12)}...`)
 
       // Skip if we already have a customer record for this request event
       const existingCustomer = await db
@@ -464,8 +469,10 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
 
       // 1. Index as customer record (any pubkey, local or external)
       if (existingCustomer.length === 0) {
+        console.log(`[DVM] Creating customer record for event ${event.id.slice(0, 12)}...`)
         try {
           const customerUserId = await ensureUserForPubkey(db, event.pubkey)
+          console.log(`[DVM] User for pubkey: ${customerUserId}`)
           const customerJobId = generateId()
           await db.insert(dvmJobs).values({
             id: customerJobId,

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Unified Agent Runtime — runs as a long-lived daemon that handles:
- *   1. Async platform tasks (inbox polling → accept → process → submit result)
+ * Agent Runtime — Nostr-native daemon that handles:
+ *   1. DVM requests via relay subscription (Kind 5xxx → process → Kind 6xxx result)
  *   2. P2P sessions (Hyperswarm + Lightning invoice per-minute billing)
  *
- * Both channels share a single capacity counter so the agent never overloads.
+ * All agents sign Nostr events with their own private key and publish directly
+ * to relays. The platform API is only used for read operations (pipeline sub-tasks).
  *
  * Usage:
  *   AGENT=translator DVM_KIND=5302 OLLAMA_MODEL=qwen2.5:0.5b npm run agent
  *   AGENT=my-agent DVM_KIND=5100 MAX_JOBS=5 npm run agent
- *   DVM_KIND=5100 npm run agent          # no API key → P2P-only mode
  *   AGENT=broker DVM_KIND=5302 PROCESSOR=none SUB_KIND=5100 npm run agent
  *   AGENT=custom DVM_KIND=5100 PROCESSOR=exec:./my-model.sh npm run agent
  *   AGENT=remote DVM_KIND=5100 PROCESSOR=http://localhost:8080 npm run agent
@@ -21,7 +21,7 @@ for (const arg of process.argv.slice(2)) {
   const eq = arg.indexOf('=')
   if (eq === -1) {
     // Bare flags (no value)
-    if (arg === '--sovereign') process.env.SOVEREIGN = '1'
+    if (arg === '--sovereign') {} // legacy flag, all agents are now Nostr-native
     continue
   }
   const key = arg.slice(0, eq)
@@ -40,7 +40,7 @@ for (const arg of process.argv.slice(2)) {
     case '--models':       process.env.MODELS = val; break
     case '--skill':        process.env.SKILL_FILE = val; break
     case '--lightning-address': process.env.LIGHTNING_ADDRESS = val; break
-    case '--sovereign':    process.env.SOVEREIGN = val || '1'; break
+    case '--sovereign':    break // legacy flag, all agents are now Nostr-native
     case '--privkey':      process.env.NOSTR_PRIVKEY = val; break
     case '--nwc':          process.env.NWC_URI = val; break
     case '--relays':       process.env.NOSTR_RELAYS = val; break
@@ -51,8 +51,7 @@ import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
 import {
-  hasApiKey, loadAgentName, registerService,
-  getInbox, acceptJob, sendFeedback, submitResult,
+  hasApiKey, loadAgentName,
   createJob, getJob, getProfile, reportSession,
 } from './api.js'
 import { generateInvoice } from './clink.js'
@@ -74,15 +73,13 @@ if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 const KIND = Number(process.env.DVM_KIND) || 5100
 const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
-const POLL_INTERVAL = Number(process.env.POLL_INTERVAL) || 30_000
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 
 // --- Lightning payment config ---
 let LIGHTNING_ADDRESS = process.env.LIGHTNING_ADDRESS || ''
 
-// --- Sovereign mode config ---
-const SOVEREIGN = process.env.SOVEREIGN === '1' || process.env.SOVEREIGN === 'true'
+// --- Relay config ---
 const DEFAULT_RELAYS = ['wss://relay.2020117.xyz', 'wss://relay.damus.io', 'wss://nos.lol']
 const RELAYS = process.env.NOSTR_RELAYS?.split(',').map(s => s.trim()) || DEFAULT_RELAYS
 
@@ -118,14 +115,13 @@ interface AgentState {
   activeJobs: number
   shuttingDown: boolean
   stopHeartbeat: (() => void) | null
-  pollTimer: ReturnType<typeof setTimeout> | null
   swarmNode: SwarmNode | null
   processor: Processor | null
   skill: Record<string, unknown> | null
   // P2P session lifetime counters (in-memory, resets on restart)
   p2pSessionsCompleted: number
   p2pTotalEarnedSats: number
-  // Sovereign mode
+  // Nostr identity + relay
   sovereignKeys: SovereignKeys | null
   relayPool: RelayPool | null
   nwcParsed: NwcParsed | null
@@ -136,7 +132,6 @@ const state: AgentState = {
   activeJobs: 0,
   shuttingDown: false,
   stopHeartbeat: null,
-  pollTimer: null,
   swarmNode: null,
   processor: null,
   skill: loadSkill(),
@@ -168,7 +163,7 @@ function getAvailableCapacity(): number {
 
 async function main() {
   const label = state.agentName || 'agent'
-  console.log(`[${label}] Starting unified agent runtime`)
+  console.log(`[${label}] Starting agent runtime`)
 
   // 1. Create and verify processor
   state.processor = await createProcessor()
@@ -194,102 +189,22 @@ async function main() {
     }
   }
 
-  // 3. Sovereign mode: Nostr identity + relay connections + NIP-XX
-  if (SOVEREIGN) {
-    await setupSovereign(label)
-  }
+  // 3. Nostr identity + relay + subscriptions (all agents are Nostr-native)
+  await setupNostr(label)
 
-  // 4. Platform registration + heartbeat (skipped in sovereign-only mode)
-  if (!SOVEREIGN || hasApiKey()) {
-    await setupPlatform(label)
-  }
-
-  // 5. Async inbox poller (platform mode — fallback when no relay subscription)
-  // If relay subscription is active, relay is the primary job discovery channel.
-  // Inbox poller is only needed when agent has no privkey (can't subscribe to relay).
-  if (!state.sovereignKeys || !state.relayPool) {
-    startInboxPoller(label)
-  } else {
-    console.log(`[${label}] Relay subscription active — inbox polling disabled (Nostr-native mode)`)
-  }
-
-  // 6. P2P swarm listener
+  // 4. P2P swarm listener
   await startSwarmListener(label)
 
-  // 7. Graceful shutdown
+  // 5. Graceful shutdown
   setupShutdown(label)
 
-  const mode = SOVEREIGN ? 'sovereign' : (hasApiKey() ? 'platform' : 'P2P-only')
-  console.log(`[${label}] Agent ready — mode=${mode}, channels active\n`)
+  console.log(`[${label}] Agent ready\n`)
 }
 
-// --- 2. Platform registration ---
+// --- 2. Nostr Setup (all agents are Nostr-native) ---
 
-async function setupPlatform(label: string) {
-  if (!hasApiKey()) {
-    console.log(`[${label}] No API key — P2P-only mode (inbox polling disabled)`)
-    return
-  }
-  console.log(`[${label}] Registering on platform...`)
-  const models = process.env.MODELS ? process.env.MODELS.split(',').map(s => s.trim()) : undefined
-  await registerService({
-    kind: KIND,
-    satsPerChunk: SATS_PER_CHUNK,
-    chunksPerPayment: CHUNKS_PER_PAYMENT,
-    model: state.processor?.name || 'unknown',
-    models,
-    skill: state.skill,
-  })
-
-  // Prefer Nostr heartbeat (Kind 30333 direct to relay) over API heartbeat
-  const keys = loadSovereignKeys(state.agentName || undefined)
-  if (keys?.privkey && keys?.pubkey) {
-    // Store keys for Nostr-native operations (relay subscribe, Kind 7000/6xxx signing)
-    if (!state.sovereignKeys) {
-      state.sovereignKeys = keys
-      // Apply NWC/relays from env if not already in keys
-      if (!keys.nwc_uri && process.env.NWC_URI) keys.nwc_uri = process.env.NWC_URI
-      if (!keys.relays?.length) keys.relays = RELAYS
-      if (!keys.lightning_address && LIGHTNING_ADDRESS) keys.lightning_address = LIGHTNING_ADDRESS
-    }
-
-    // Connect a relay pool if not already connected (sovereign mode)
-    if (!state.relayPool) {
-      const relayUrls = keys.relays?.length ? keys.relays : RELAYS
-      state.relayPool = new RelayPool(relayUrls)
-      await state.relayPool.connect()
-      console.log(`[${label}] Relay pool connected (${state.relayPool.connectedCount} relay(s))`)
-    }
-
-    // Subscribe to DVM requests via relay (Nostr-native job discovery)
-    subscribeDvmRequests(label)
-    subscribeDvmResults(label)
-
-    // Build pricing map from config
-    const pricing: Record<string, number> = {}
-    const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
-    if (priceSats > 0) pricing[String(KIND)] = priceSats
-
-    state.stopHeartbeat = startNostrHeartbeat(label, keys, state.relayPool, {
-      pricing,
-      p2pStatsFn: () => ({
-        sessions: state.p2pSessionsCompleted,
-        earned_sats: state.p2pTotalEarnedSats,
-        active: activeSessions.size > 0,
-      }),
-    })
-    console.log(`[${label}] Heartbeat: Nostr (Kind 30333 → relay)`)
-  } else {
-    console.error(`[${label}] ERROR: No local privkey found in .2020117_keys. Heartbeat disabled.`)
-    console.error(`[${label}] Generate a Nostr keypair and save privkey/pubkey to .2020117_keys.`)
-    console.error(`[${label}] See: https://2020117.xyz/skill.md §1 Identity`)
-  }
-}
-
-// --- 2a. Sovereign Mode (AIP-0009) ---
-
-async function setupSovereign(label: string) {
-  const agentName = state.agentName || 'sovereign-agent'
+async function setupNostr(label: string) {
+  const agentName = state.agentName || 'agent'
 
   // 1. Load or generate Nostr keys
   let keys = loadSovereignKeys(agentName)
@@ -326,7 +241,7 @@ async function setupSovereign(label: string) {
   if (!keys.lightning_address && LIGHTNING_ADDRESS) keys.lightning_address = LIGHTNING_ADDRESS
 
   state.sovereignKeys = keys
-  console.log(`[${label}] Sovereign identity: ${keys.pubkey}`)
+  console.log(`[${label}] Identity: ${keys.pubkey}`)
 
   // 2. Parse NWC URI if available
   const nwcUri = keys.nwc_uri || process.env.NWC_URI
@@ -364,7 +279,21 @@ async function setupSovereign(label: string) {
   subscribeDvmRequests(label)
   subscribeDvmResults(label)
 
-  // 9. Print startup summary
+  // 9. Start heartbeat (Kind 30333 to relay)
+  const pricing: Record<string, number> = {}
+  const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
+  if (priceSats > 0) pricing[String(KIND)] = priceSats
+
+  state.stopHeartbeat = startNostrHeartbeat(label, state.sovereignKeys, state.relayPool, {
+    pricing,
+    p2pStatsFn: () => ({
+      sessions: state.p2pSessionsCompleted,
+      earned_sats: state.p2pTotalEarnedSats,
+      active: activeSessions.size > 0,
+    }),
+  })
+
+  // 10. Print startup summary
   const relays = (keys.relays || RELAYS).join(', ')
   console.log('')
   console.log(`═══════════════════════════════════════════════`)
@@ -377,22 +306,6 @@ async function setupSovereign(label: string) {
   console.log(`  Processor:   ${state.processor?.name || 'none'}`)
   console.log(`═══════════════════════════════════════════════`)
   console.log('')
-
-  // 10. Start sovereign heartbeat (Kind 30333 to relay)
-  if (state.sovereignKeys && state.relayPool) {
-    const pricing: Record<string, number> = {}
-    const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
-    if (priceSats > 0) pricing[String(KIND)] = priceSats
-
-    state.stopHeartbeat = startNostrHeartbeat(label, state.sovereignKeys, state.relayPool, {
-      pricing,
-      p2pStatsFn: () => ({
-        sessions: state.p2pSessionsCompleted,
-        earned_sats: state.p2pTotalEarnedSats,
-        active: activeSessions.size > 0,
-      }),
-    })
-  }
 }
 
 async function publishAiInfo(label: string) {
@@ -779,102 +692,6 @@ function startNostrHeartbeat(
 function startSovereignHeartbeat(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
   startNostrHeartbeat(label, state.sovereignKeys, state.relayPool)
-}
-
-// --- 3. Async Inbox Poller ---
-
-function startInboxPoller(label: string) {
-  if (!hasApiKey()) return
-
-  console.log(`[${label}] Inbox polling every ${POLL_INTERVAL / 1000}s`)
-
-  async function poll() {
-    if (state.shuttingDown) return
-
-    try {
-      if (getAvailableCapacity() <= 0) {
-        // No capacity — skip this round
-        scheduleNext()
-        return
-      }
-
-      const jobs = await getInbox({ kind: KIND, status: 'open', limit: 5 })
-      for (const job of jobs) {
-        if (state.shuttingDown) break
-        if (!acquireSlot()) break
-
-        // Check bid meets minimum pricing
-        const bidSats = job.bid_sats ?? 0
-        if (MIN_BID_SATS > 0 && bidSats < MIN_BID_SATS) {
-          console.log(`[${label}] Skipping job ${job.id}: bid ${bidSats} < min ${MIN_BID_SATS} sats`)
-          releaseSlot()
-          continue
-        }
-
-        // Process in background — don't await
-        processAsyncJob(label, job.id, job.input, job.params).catch((err) => {
-          console.error(`[${label}] Async job ${job.id} error: ${err.message}`)
-        })
-      }
-    } catch (e: any) {
-      console.warn(`[${label}] Poll error: ${e.message}`)
-    }
-
-    scheduleNext()
-  }
-
-  function scheduleNext() {
-    if (state.shuttingDown) return
-    state.pollTimer = setTimeout(poll, POLL_INTERVAL)
-  }
-
-  // First poll after a short delay to let swarm set up
-  state.pollTimer = setTimeout(poll, 2000)
-}
-
-async function processAsyncJob(label: string, inboxJobId: string, input: string, params?: Record<string, unknown>) {
-  try {
-    console.log(`[${label}] Accepting job ${inboxJobId}...`)
-    const accepted = await acceptJob(inboxJobId)
-    if (!accepted) {
-      console.warn(`[${label}] Failed to accept job ${inboxJobId}`)
-      return
-    }
-
-    const providerJobId = accepted.job_id
-    console.log(`[${label}] Job ${providerJobId}: processing "${input.slice(0, 60)}..."`)
-
-    await sendFeedback(providerJobId, 'processing')
-
-    let result: string
-
-    // Pipeline: delegate sub-task via API then process locally
-    if (SUB_KIND) {
-      console.log(`[${label}] Job ${providerJobId}: delegating to kind ${SUB_KIND}...`)
-      try {
-        const subResult = await delegateAPI(SUB_KIND, input, SUB_BID, SUB_PROVIDER)
-        console.log(`[${label}] Job ${providerJobId}: sub-task returned ${subResult.length} chars`)
-        result = await state.processor!.generate({ input: subResult, params })
-      } catch (e: any) {
-        console.error(`[${label}] Job ${providerJobId}: sub-task failed: ${e.message}, using original input`)
-        result = await state.processor!.generate({ input, params })
-      }
-    } else {
-      // No pipeline — direct local processing
-      result = await state.processor!.generate({ input, params })
-    }
-
-    console.log(`[${label}] Job ${providerJobId}: generated ${result.length} chars`)
-
-    const ok = await submitResult(providerJobId, result)
-    if (ok) {
-      console.log(`[${label}] Job ${providerJobId}: result submitted`)
-    } else {
-      console.warn(`[${label}] Job ${providerJobId}: failed to submit result`)
-    }
-  } finally {
-    releaseSlot()
-  }
 }
 
 // --- Sub-task delegation ---
@@ -1403,8 +1220,7 @@ function setupShutdown(label: string) {
     state.shuttingDown = true
     console.log(`\n[${label}] Shutting down...`)
 
-    // Stop poller & heartbeat
-    if (state.pollTimer) clearTimeout(state.pollTimer)
+    // Stop heartbeat
     if (state.stopHeartbeat) state.stopHeartbeat()
 
     // Wait for active jobs to finish (max 10s)

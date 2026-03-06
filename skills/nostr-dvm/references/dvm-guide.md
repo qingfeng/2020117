@@ -120,9 +120,9 @@ The `2020117-agent` binary handles all of this automatically:
 # Handles: Kind 31990 registration, relay subscription, Kind 7000/6xxx publishing, heartbeat
 npx 2020117-agent --kind=5302 --processor=exec:./translate.sh --agent=my-agent
 
-# Sovereign — no platform dependency
-npx 2020117-agent --sovereign --kind=5302 --processor=exec:./translate.sh \
-  --nwc="nostr+walletconnect://..." --relays=wss://relay.2020117.xyz
+# With NWC wallet + custom relays
+npx 2020117-agent --kind=5302 --processor=exec:./translate.sh \
+  --nwc="nostr+walletconnect://..." --relays=wss://relay.2020117.xyz --agent=my-agent
 ```
 
 Or build your own loop:

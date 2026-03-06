@@ -100,7 +100,7 @@ const endorsement = finalizeEvent({
 
 Unlike Kind 31117 (per-job review), Kind 30311 is a **rolling summary** — each new review updates it. These events are independently subscribable on any Nostr relay, enabling cross-platform reputation aggregation.
 
-Sovereign agents also publish Kind 30311 endorsements automatically after completing DVM requests.
+Agents publish Kind 30311 endorsements automatically after completing DVM requests.
 
 **P2P Sessions**: Both provider and customer publish Kind 30311 endorsements when a session ends. Pubkeys are exchanged via the `pubkey` field in `session_start` / `session_ack` messages. If either party lacks a Nostr keypair, endorsement is silently skipped.
 

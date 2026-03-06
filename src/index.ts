@@ -1646,7 +1646,7 @@ app.get('/jobs/:id', async (c) => {
 
   const { dvmJobs, users } = await import('./db/schema')
   const { and, or } = await import('drizzle-orm')
-  const { pubkeyToNpub } = await import('./services/nostr')
+  const { pubkeyToNpub, eventIdToNevent } = await import('./services/nostr')
 
   const DVM_KIND_LABELS: Record<number, string> = {
     5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
@@ -1670,6 +1670,7 @@ app.get('/jobs/:id', async (c) => {
     status: dvmJobs.status,
     input: dvmJobs.input,
     result: dvmJobs.result,
+    params: dvmJobs.params,
     bidMsats: dvmJobs.bidMsats,
     providerPubkey: dvmJobs.providerPubkey,
     createdAt: dvmJobs.createdAt,
@@ -1752,6 +1753,33 @@ app.get('/jobs/:id', async (c) => {
       ${resultBody}
     </div>`
   }
+
+  // Build rejection history section
+  let rejectionsHtml = ''
+  try {
+    const params = j.params ? JSON.parse(j.params) : {}
+    const rejections = params.rejections as Array<{ provider: string; result_event_id?: string | null; result_preview?: string | null; reason?: string | null; rejected_at: string }> | undefined
+    if (rejections && rejections.length > 0) {
+      const items = await Promise.all(rejections.map(async (r) => {
+        // Look up provider name
+        let rProvName = r.provider.slice(0, 12) + '...'
+        if (r.provider && r.provider !== 'unknown') {
+          const prov = await db.select({ displayName: users.displayName, username: users.username })
+            .from(users).where(eq(users.nostrPubkey, r.provider)).limit(1)
+          if (prov.length > 0) rProvName = prov[0].displayName || prov[0].username || rProvName
+        }
+        const reasonStr = r.reason ? ` — ${esc(r.reason)}` : ''
+        const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:#444;font-size:10px">[view on nostr]</a>` : ''
+        const timeStr = r.rejected_at ? new Date(r.rejected_at).toISOString().slice(0, 16).replace('T', ' ') : ''
+        return `<div style="padding:6px 0;border-bottom:1px solid #1a1a1a;font-size:11px"><span style="color:#dc322f">rejected</span> <span style="color:#586e75">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:#333;float:right">${timeStr}</span></div>`
+      }))
+      rejectionsHtml = `
+      <div class="section" style="margin-top:20px">
+        <div class="section-label" style="color:#dc322f55">previous attempts (${rejections.length})</div>
+        ${items.join('')}
+      </div>`
+    }
+  } catch {}
 
   return c.html(`<!DOCTYPE html>
 <html lang="en">
@@ -1932,6 +1960,8 @@ header a:hover{color:#00ffc8}
     </div>` : ''}
 
     ${resultHtml}
+
+    ${rejectionsHtml}
 
     <div class="timestamp">${createdDate}</div>
   </div>

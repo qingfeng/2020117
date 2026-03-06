@@ -2817,6 +2817,25 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
 
+  // Save rejected result to params.rejections history (keep image results for display)
+  const existingParams = job[0].params ? JSON.parse(job[0].params) : {}
+  const rejections: Array<{ provider: string; result_event_id: string | null; result_preview: string | null; reason: string | null; rejected_at: string }> = existingParams.rejections || []
+  // For image results, only store a short preview (not the full base64)
+  let resultPreview = job[0].result
+  if (resultPreview && resultPreview.length > 500) {
+    resultPreview = resultPreview.startsWith('data:image/') ? '[image]'
+      : resultPreview.startsWith('{') ? resultPreview.slice(0, 200) + '...'
+      : resultPreview.slice(0, 200) + '...'
+  }
+  rejections.push({
+    provider: job[0].providerPubkey || 'unknown',
+    result_event_id: job[0].resultEventId,
+    result_preview: resultPreview,
+    reason,
+    rejected_at: new Date().toISOString(),
+  })
+  existingParams.rejections = rejections
+
   // 重置 customer job 为 open
   await db.update(dvmJobs)
     .set({
@@ -2825,6 +2844,7 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
       resultEventId: null,
       providerPubkey: null,
       priceMsats: null,
+      params: JSON.stringify(existingParams),
       updatedAt: new Date(),
     })
     .where(eq(dvmJobs.id, jobId))

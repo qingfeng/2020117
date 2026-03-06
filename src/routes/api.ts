@@ -153,6 +153,8 @@ api.get('/relay/events', async (c) => {
   const offset = (page - 1) * limit
 
   // Support single kind (?kind=5100) or comma-separated (?kind=5100,5200)
+  // When no kind filter ("all"), exclude noisy kinds like heartbeat (30333)
+  const EXCLUDED_KINDS = [30333]
   let conditions
   if (kindParam) {
     const kinds = kindParam.split(',').map(Number).filter(n => !isNaN(n))
@@ -161,6 +163,8 @@ api.get('/relay/events', async (c) => {
     } else if (kinds.length > 1) {
       conditions = inArray(relayEvents.kind, kinds)
     }
+  } else {
+    conditions = sql`${relayEvents.kind} NOT IN (${sql.raw(EXCLUDED_KINDS.join(','))})`
   }
 
   const [rows, countResult] = await Promise.all([

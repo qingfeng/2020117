@@ -2601,6 +2601,80 @@ api.get('/dvm/jobs/:id/public', async (c) => {
   })
 })
 
+// POST /api/dvm/jobs/:id/repoll — Re-fetch latest result from relay (fixes stale/timeout results)
+api.post('/dvm/jobs/:id/repoll', async (c) => {
+  const db = c.get('db')
+  const env = c.env
+  const jobId = c.req.param('id')
+
+  // Find the customer job
+  const jobs = await db.select({
+    id: dvmJobs.id,
+    kind: dvmJobs.kind,
+    status: dvmJobs.status,
+    requestEventId: dvmJobs.requestEventId,
+    resultEventId: dvmJobs.resultEventId,
+  }).from(dvmJobs)
+    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+    .limit(1)
+
+  if (jobs.length === 0) return c.json({ error: 'Job not found' }, 404)
+  const job = jobs[0]
+  if (!job.requestEventId) return c.json({ error: 'No request event ID' }, 400)
+
+  // Fetch all Kind 6xxx results from relay for this request
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return c.json({ error: 'No relay configured' }, 500)
+
+  const { fetchEventsFromRelay } = await import('../services/nostr-community')
+  const { verifyEvent } = await import('../services/nostr')
+  const resultKind = job.kind + 1000
+
+  const { events } = await fetchEventsFromRelay(relayUrls[0], {
+    kinds: [resultKind],
+    '#e': [job.requestEventId],
+  })
+
+  if (events.length === 0) return c.json({ error: 'No results found on relay', job_id: job.id })
+
+  // Find the newest valid result event
+  const validEvents = events.filter((e: NostrEvent) => verifyEvent(e)).sort((a: NostrEvent, b: NostrEvent) => b.created_at - a.created_at)
+  if (validEvents.length === 0) return c.json({ error: 'No valid results on relay' })
+
+  const newest = validEvents[0]
+
+  // Skip if already up to date
+  if (job.resultEventId === newest.id) {
+    return c.json({ message: 'Already up to date', job_id: job.id, result_event_id: newest.id })
+  }
+
+  // Extract tags
+  const amountTag = newest.tags.find((t: string[]) => t[0] === 'amount')
+  const bolt11 = amountTag?.[2] || null
+  const priceMsats = amountTag?.[1] ? parseInt(amountTag[1]) : null
+
+  await db.update(dvmJobs)
+    .set({
+      status: 'result_available',
+      result: newest.content,
+      providerPubkey: newest.pubkey,
+      resultEventId: newest.id,
+      bolt11,
+      priceMsats,
+      updatedAt: new Date(),
+    })
+    .where(eq(dvmJobs.id, job.id))
+
+  return c.json({
+    message: 'Result updated',
+    job_id: job.id,
+    old_event_id: job.resultEventId,
+    new_event_id: newest.id,
+    content_length: newest.content?.length || 0,
+    events_found: validEvents.length,
+  })
+})
+
 // POST /api/dvm/jobs/:id/accept — Provider: 接单（为自己创建 provider job）
 api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   const db = c.get('db')

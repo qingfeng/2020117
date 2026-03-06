@@ -194,7 +194,7 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
     .from(dvmJobs)
     .where(and(
       eq(dvmJobs.role, 'customer'),
-      inArray(dvmJobs.status, ['open', 'processing']),
+      inArray(dvmJobs.status, ['open', 'processing', 'result_available']),
       isNotNull(dvmJobs.requestEventId),
     ))
 
@@ -276,6 +276,13 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
           // Extract lightning_address tag (sovereign agents include this)
           const laTag = event.tags.find((t: string[]) => t[0] === 'lightning_address')?.[1]
 
+          // Skip if we already have this exact result event
+          if (job.status === 'result_available') {
+            const existing = await db.select({ resultEventId: dvmJobs.resultEventId })
+              .from(dvmJobs).where(eq(dvmJobs.id, job.id)).limit(1)
+            if (existing.length > 0 && existing[0].resultEventId === event.id) continue
+          }
+
           await db.update(dvmJobs)
             .set({
               status: 'result_available',
@@ -287,7 +294,8 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
               updatedAt: new Date(),
             })
             .where(eq(dvmJobs.id, job.id))
-          console.log(`[DVM] Job ${job.id} → result_available (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''}${laTag ? ', has lightning_address' : ''})`)
+          const wasUpdated = job.status === 'result_available' ? ' (updated)' : ''
+          console.log(`[DVM] Job ${job.id} → result_available${wasUpdated} (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''}${laTag ? ', has lightning_address' : ''})`)
 
           // Backfill external_dvm lightning_address if present and not yet stored
           if (laTag) {

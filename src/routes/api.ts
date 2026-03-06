@@ -2880,6 +2880,31 @@ api.post('/dvm/jobs/:id/reject', requireApiAuth, async (c) => {
     }
   }
 
+  // Publish Kind 7000 rejection feedback to relay so provider's agent gets notified
+  if (job[0].requestEventId && job[0].providerPubkey && user.nostrPrivEncrypted && user.nostrPrivIv) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const { publishEventToRelay } = await import('../services/nostr-community')
+        const feedbackEvent = await buildJobFeedbackEvent({
+          privEncrypted: user.nostrPrivEncrypted!,
+          iv: user.nostrPrivIv!,
+          masterKey: c.env.NOSTR_MASTER_KEY,
+          requestEventId: job[0].requestEventId!,
+          customerPubkey: job[0].providerPubkey!,
+          status: 'error',
+          content: reason ? `rejected: ${reason}` : 'rejected: result not accepted',
+        })
+        const relayUrls = (c.env.NOSTR_RELAYS || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+        for (const url of relayUrls.slice(0, 2)) {
+          await publishEventToRelay(url, feedbackEvent).catch(() => {})
+        }
+        console.log(`[DVM] Published Kind 7000 rejection feedback for job ${jobId}`)
+      } catch (e) {
+        console.error('[DVM] Failed to publish rejection feedback:', e)
+      }
+    })())
+  }
+
   // 重新同站直投：给注册了对应 Kind 的 Provider 创建新的 provider job（排除已被拒绝的）
   const cj = job[0]
   c.executionCtx.waitUntil((async () => {

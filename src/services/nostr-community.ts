@@ -77,6 +77,34 @@ export async function pollCommunityPosts(env: Bindings, db: Database) {
   }
 }
 
+// --- WebSocket Publish ---
+
+export async function publishEventToRelay(relayUrl: string, event: NostrEvent): Promise<boolean> {
+  try {
+    const httpUrl = relayUrl.replace('wss://', 'https://').replace('ws://', 'http://')
+    const resp = await fetch(httpUrl, { headers: { Upgrade: 'websocket' } })
+    const ws = (resp as any).webSocket as WebSocket
+    if (!ws) return false
+    ws.accept()
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => { try { ws.close() } catch {} resolve(false) }, 5000)
+      ws.addEventListener('message', (msg: MessageEvent) => {
+        try {
+          const data = JSON.parse(msg.data as string)
+          if (data[0] === 'OK' && data[1] === event.id) {
+            clearTimeout(timeout)
+            try { ws.close() } catch {}
+            resolve(!!data[2])
+          }
+        } catch {}
+      })
+      ws.send(JSON.stringify(['EVENT', event]))
+    })
+  } catch {
+    return false
+  }
+}
+
 // --- WebSocket REQ ---
 
 export type RelayResult = { events: NostrEvent[]; success: boolean }

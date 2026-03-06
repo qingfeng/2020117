@@ -5,8 +5,8 @@ import { users, authProviders, groups, groupMembers, topics, comments, topicLike
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
-import { generateNostrKeypair, buildSignedEvent, pubkeyToNpub, npubToPubkey, buildRepostEvent, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
-import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildDvmTrustEvent, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow, buildReputationEndorsementEvent } from '../services/dvm'
+import { buildSignedEvent, pubkeyToNpub, npubToPubkey, buildZapRequestEvent, buildReportEvent, eventIdToNevent, type NostrEvent } from '../services/nostr'
+import { buildJobRequestEvent, buildJobResultEvent, buildJobFeedbackEvent, buildHandlerInfoEvents, buildJobReviewEvent, buildEscrowResultEvent, buildWorkflowEvent, buildSwarmEvent, advanceWorkflow } from '../services/dvm'
 import { parseNwcUri, encryptNwcUri, decryptNwcUri, validateNwcConnection, nwcPayInvoice, resolveAndPayLightningAddress, nwcGetBalance } from '../services/nwc'
 import { validateNdebit, encryptNdebit, decryptNdebit, debitForPayment, getPlatformPubkey } from '../services/clink'
 
@@ -204,7 +204,7 @@ api.get('/relay/events', async (c) => {
   }
 
   const KIND_LABELS: Record<number, string> = {
-    0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
+    0: 'profile', 1: 'note', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
     5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
     6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
     6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
@@ -242,6 +242,7 @@ api.get('/relay/events', async (c) => {
     let action = ''
     const kindNum = r.kind
     if (kindNum === 0) action = 'updated profile'
+    else if (kindNum === 1) action = 'posted'
     else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
     else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
     else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : `feedback: ${tags.status || 'update'}`
@@ -258,6 +259,7 @@ api.get('/relay/events', async (c) => {
     // Build detail text (the interesting part of the event)
     let detail = ''
     if (kindNum === 0 && profileAbout) detail = profileAbout
+    else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
     else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
     else if (kindNum >= 6100 && kindNum <= 6303) detail = tags.e ? `→ job ${eventIdToNevent(tags.e).slice(0, 24)}...` : (preview ? preview.slice(0, 150) : '')
     else if (kindNum === 30333) detail = ''  // heartbeat has no interesting content
@@ -1124,32 +1126,6 @@ api.put('/me', requireApiAuth, async (c) => {
 
   await db.update(users).set(updates).where(eq(users.id, user.id))
 
-  // 更新 Nostr Kind 0 if enabled
-  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    try {
-      const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-      const host = new URL(baseUrl).host
-      const metaEvent = await buildSignedEvent({
-        privEncrypted: user.nostrPrivEncrypted!,
-        iv: user.nostrPrivIv!,
-        masterKey: c.env.NOSTR_MASTER_KEY,
-        kind: 0,
-        content: JSON.stringify({
-          name: (body.display_name !== undefined ? body.display_name.slice(0, 100) : user.displayName) || user.username,
-          about: body.bio !== undefined ? stripHtml(body.bio.slice(0, 500)) : (user.bio ? stripHtml(user.bio) : ''),
-          picture: user.avatarUrl || `https://robohash.org/${encodeURIComponent(user.username)}`,
-          ...(user.nip05Enabled ? { nip05: `${user.username}@${host}` } : {}),
-          ...(() => { const lud16 = body.lightning_address !== undefined ? body.lightning_address : user.lightningAddress; return lud16 ? { lud16 } : {} })(),
-          ...(c.env.NOSTR_RELAY_URL ? { relays: [c.env.NOSTR_RELAY_URL] } : {}),
-        }),
-        tags: [],
-      })
-      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [metaEvent] }))
-    } catch (e) {
-      console.error('[API] Failed to update Nostr metadata:', e)
-    }
-  }
-
   return c.json({ ok: true })
 })
 
@@ -1375,37 +1351,6 @@ api.post('/groups/:id/topics', requireApiAuth, async (c) => {
 
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
 
-  // Nostr: broadcast Kind 1
-  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const textContent = content ? stripHtml(content) : ''
-        const noteContent = textContent
-          ? `${title}\n\n${textContent}\n\n🔗 ${baseUrl}/topic/${topicId}`
-          : `${title}\n\n🔗 ${baseUrl}/topic/${topicId}`
-
-        const nostrTags: string[][] = [
-          ['r', `${baseUrl}/topic/${topicId}`],
-          ['client', c.env.APP_NAME || 'NeoGroup'],
-        ]
-
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 1,
-          content: noteContent,
-          tags: nostrTags,
-        })
-
-        await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API/Nostr] Failed to publish topic:', e)
-      }
-    })())
-  }
-
   return c.json({
     id: topicId,
     url: `${baseUrl}/topic/${topicId}`,
@@ -1480,49 +1425,6 @@ api.post('/topics/:id/comments', requireApiAuth, async (c) => {
 
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
 
-  // Nostr: broadcast comment as Kind 1
-  if (user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const textContent = stripHtml(htmlContent)
-        const noteContent = `${textContent}\n\n🔗 ${baseUrl}/topic/${topicId}#comment-${commentId}`
-
-        const tags: string[][] = [
-          ['r', `${baseUrl}/topic/${topicId}`],
-          ['client', c.env.APP_NAME || 'NeoGroup'],
-        ]
-
-        // Thread: root = topic nostr event
-        if (topicResult[0].nostrEventId) {
-          tags.push(['e', topicResult[0].nostrEventId, '', 'root'])
-        }
-
-        // Thread: reply = parent comment nostr event
-        if (replyToId) {
-          const parentComment = await db.select({ nostrEventId: comments.nostrEventId })
-            .from(comments).where(eq(comments.id, replyToId)).limit(1)
-          if (parentComment.length > 0 && parentComment[0].nostrEventId) {
-            tags.push(['e', parentComment[0].nostrEventId, '', 'reply'])
-          }
-        }
-
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 1,
-          content: noteContent,
-          tags,
-        })
-
-        await db.update(comments).set({ nostrEventId: event.id }).where(eq(comments.id, commentId))
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API/Nostr] Failed to publish comment:', e)
-      }
-    })())
-  }
-
   return c.json({
     id: commentId,
     url: `${baseUrl}/topic/${topicId}#comment-${commentId}`,
@@ -1572,9 +1474,6 @@ api.post('/posts', requireApiAuth, async (c) => {
       })
       nostrEventId = event.id
       await db.update(topics).set({ nostrEventId: event.id }).where(eq(topics.id, topicId))
-      if (c.env.NOSTR_QUEUE) {
-        c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-      }
     } catch (e) {
       console.error('[API/Nostr] Failed to publish personal post:', e)
     }
@@ -1657,25 +1556,6 @@ api.delete('/topics/:id', requireApiAuth, async (c) => {
   }
 
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-
-  // Nostr Kind 5: deletion event
-  if (topicResult[0].nostrEventId && user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 5,
-          content: '',
-          tags: [['e', topicResult[0].nostrEventId!]],
-        })
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API/Nostr] Failed to send Kind 5 deletion:', e)
-      }
-    })())
-  }
 
   // 级联删除
   const topicComments = await db.select({ id: comments.id }).from(comments).where(eq(comments.topicId, topicId))
@@ -1836,11 +1716,6 @@ api.post('/nostr/report', requireApiAuth, async (c) => {
     createdAt: new Date(),
   })
 
-  // Broadcast to relay
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-  }
-
   return c.json({ report_id: reportId, event_id: event.id }, 201)
 })
 
@@ -1968,27 +1843,6 @@ api.post('/topics/:id/repost', requireApiAuth, async (c) => {
     userId: user.id,
     createdAt: new Date(),
   })
-
-  // Nostr: broadcast Kind 6 repost
-  if (topicData[0].nostrEventId && user.nostrSyncEnabled && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const authorPubkey = topicData[0].nostrAuthorPubkey || user.nostrPubkey || ''
-    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const event = await buildRepostEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          eventId: topicData[0].nostrEventId!,
-          authorPubkey,
-          relayUrl,
-        })
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API/Nostr] Failed to publish repost:', e)
-      }
-    })())
-  }
 
   // Notify original author (if local user)
   if (topicData[0].userId && topicData[0].userId !== user.id) {
@@ -2431,22 +2285,6 @@ api.post('/dvm/request', requireApiAuth, async (c) => {
     updatedAt: now,
   })
 
-  // Publish to relay + Kind 1 note + board repost
-  if (c.env.NOSTR_QUEUE) {
-    const kindLabel = DVM_KIND_LABELS[kind] || `kind ${kind}`
-    const bidStr = bidSats > 0 ? ` (${bidSats} sats)` : ''
-    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const noteEvent = await buildSignedEvent({
-      privEncrypted: user.nostrPrivEncrypted!,
-      iv: user.nostrPrivIv!,
-      masterKey: c.env.NOSTR_MASTER_KEY!,
-      kind: 1,
-      content: `📡 Looking for ${kindLabel}${bidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
-    })
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, noteEvent] }))
-  }
-
   // 同站直投：如果本站有注册了对应 Kind 的 Provider，直接创建 provider job
   c.executionCtx.waitUntil((async () => {
     try {
@@ -2787,19 +2625,6 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
         .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: new Date() })
         .where(and(eq(dvmJobs.requestEventId, pj.requestEventId), eq(dvmJobs.role, 'customer'), inArray(dvmJobs.status, ['open', 'processing'])))
     }
-    // Kind 7000 — broadcast "processing" status to relay
-    if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE && pj.requestEventId && pj.customerPubkey) {
-      const feedbackEvent = await buildJobFeedbackEvent({
-        privEncrypted: user.nostrPrivEncrypted,
-        iv: user.nostrPrivIv,
-        masterKey: c.env.NOSTR_MASTER_KEY,
-        requestEventId: pj.requestEventId,
-        customerPubkey: pj.customerPubkey,
-        status: 'processing',
-        content: '',
-      })
-      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [feedbackEvent] }))
-    }
     return c.json({ job_id: pj.id, status: 'accepted', kind: pj.kind })
   }
 
@@ -2881,39 +2706,6 @@ api.post('/dvm/jobs/:id/accept', requireApiAuth, async (c) => {
   await db.update(dvmJobs)
     .set({ status: 'processing', providerPubkey: user.nostrPubkey || null, updatedAt: now })
     .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer'), inArray(dvmJobs.status, ['open', 'processing'])))
-
-  // Kind 7000 feedback (processing) + Kind 1 note
-  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const events: NostrEvent[] = []
-
-    // Kind 7000 — Nostr-first: broadcast "processing" status to relay
-    if (cj.eventId && cj.customerPubkey) {
-      const feedbackEvent = await buildJobFeedbackEvent({
-        privEncrypted: user.nostrPrivEncrypted,
-        iv: user.nostrPrivIv,
-        masterKey: c.env.NOSTR_MASTER_KEY,
-        requestEventId: cj.eventId,
-        customerPubkey: cj.customerPubkey,
-        status: 'processing',
-        content: '',
-      })
-      events.push(feedbackEvent)
-    }
-
-    // Kind 1 — social note
-    const kindLabel = DVM_KIND_LABELS[cj.kind] || `kind ${cj.kind}`
-    const noteEvent = await buildSignedEvent({
-      privEncrypted: user.nostrPrivEncrypted,
-      iv: user.nostrPrivIv,
-      masterKey: c.env.NOSTR_MASTER_KEY,
-      kind: 1,
-      content: `⚡ Accepted a ${kindLabel} job\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
-    })
-    events.push(noteEvent)
-
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events }))
-  }
 
   // Check if provider is flagged and add warning
   let warning: string | undefined
@@ -3061,25 +2853,6 @@ api.post('/dvm/jobs/:id/cancel', requireApiAuth, async (c) => {
     .set({ status: 'cancelled', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
 
-  // Send Kind 5 deletion event for the request
-  if (job[0].requestEventId && user.nostrPrivEncrypted && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 5,
-          content: '',
-          tags: [['e', job[0].requestEventId!]],
-        })
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[DVM] Failed to send deletion event:', e)
-      }
-    })())
-  }
-
   return c.json({ ok: true, status: 'cancelled' })
 })
 
@@ -3188,11 +2961,6 @@ api.post('/dvm/services', requireApiAuth, async (c) => {
     })
   }
 
-  // Publish Handler Info to relay
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: handlerEvents }))
-  }
-
   return c.json({
     service_id: serviceId,
     event_id: handlerEvent.id,
@@ -3289,22 +3057,6 @@ api.post('/dvm/trust', requireApiAuth, async (c) => {
   const trustId = generateId()
   let nostrEventId: string | null = null
 
-  // Build Kind 30382 event and send to relay
-  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    try {
-      const event = await buildDvmTrustEvent({
-        privEncrypted: user.nostrPrivEncrypted,
-        iv: user.nostrPrivIv,
-        masterKey: c.env.NOSTR_MASTER_KEY,
-        targetPubkey,
-      })
-      nostrEventId = event.id
-      c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
-    } catch (e) {
-      console.error('[API] Failed to build trust event:', e)
-    }
-  }
-
   await db.insert(dvmTrust).values({
     id: trustId,
     userId: user.id,
@@ -3329,25 +3081,6 @@ api.delete('/dvm/trust/:pubkey', requireApiAuth, async (c) => {
   if (existing.length === 0) return c.json({ error: 'Trust not found' }, 404)
 
   await db.delete(dvmTrust).where(eq(dvmTrust.id, existing[0].id))
-
-  // Send Kind 5 deletion event if we have the original event ID
-  if (existing[0].nostrEventId && user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil((async () => {
-      try {
-        const event = await buildSignedEvent({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kind: 5,
-          content: '',
-          tags: [['e', existing[0].nostrEventId!]],
-        })
-        await c.env.NOSTR_QUEUE!.send({ events: [event] })
-      } catch (e) {
-        console.error('[API] Failed to send trust deletion event:', e)
-      }
-    })())
-  }
 
   return c.json({ ok: true })
 })
@@ -3448,10 +3181,6 @@ api.post('/dvm/jobs/:id/feedback', requireApiAuth, async (c) => {
   await db.update(dvmJobs)
     .set({ status: body.status === 'error' ? 'error' : 'processing', updatedAt: new Date() })
     .where(eq(dvmJobs.id, jobId))
-
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [feedbackEvent] }))
-  }
 
   return c.json({ ok: true, event_id: feedbackEvent.id })
 })
@@ -3574,51 +3303,6 @@ api.post('/dvm/jobs/:id/result', requireApiAuth, async (c) => {
       lastJobAt: now,
       updatedAt: now,
     }).where(eq(dvmServices.id, s.id))
-  }
-
-  // Publish result to relay + Kind 1 note + board repost + updated Kind 31990
-  if (c.env.NOSTR_QUEUE) {
-    const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
-    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const noteEvent = await buildSignedEvent({
-      privEncrypted: user.nostrPrivEncrypted!,
-      iv: user.nostrPrivIv!,
-      masterKey: c.env.NOSTR_MASTER_KEY!,
-      kind: 1,
-      content: `✅ Completed a ${kindLabel} job${customerJobId ? `\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${customerJobId}` : ''} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
-    })
-    const eventsToSend: NostrEvent[] = [resultEvent, noteEvent]
-
-    // Republish updated Kind 31990 with latest reputation
-    if (svc.length > 0) {
-      const s = svc[0]
-      const updatedSvc = await db.select().from(dvmServices).where(eq(dvmServices.id, s.id)).limit(1)
-      if (updatedSvc.length > 0) {
-        const handlerEvts = await buildHandlerInfoEvents({
-          privEncrypted: user.nostrPrivEncrypted!,
-          iv: user.nostrPrivIv!,
-          masterKey: c.env.NOSTR_MASTER_KEY!,
-          kinds: JSON.parse(updatedSvc[0].kinds),
-          name: user.displayName || user.username,
-          picture: user.avatarUrl || `https://robohash.org/${encodeURIComponent(user.username)}`,
-          about: updatedSvc[0].description || undefined,
-          pricingMin: updatedSvc[0].pricingMin || undefined,
-          pricingMax: updatedSvc[0].pricingMax || undefined,
-          userId: user.id,
-          reputation: buildReputationData(updatedSvc[0],
-            user.nostrPubkey
-              ? await getWotData(db, user.nostrPubkey)
-              : { trusted_by: 0, trusted_by_your_follows: 0 },
-            user.nostrPubkey
-              ? await getReviewData(db, user.nostrPubkey)
-              : { avg_rating: 0, review_count: 0 }),
-        })
-        eventsToSend.push(...handlerEvts)
-      }
-    }
-
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
   }
 
   return c.json({ ok: true, event_id: resultEvent.id }, 201)
@@ -3803,22 +3487,6 @@ api.post('/dvm/jobs/:id/complete', requireApiAuth, async (c) => {
         }).where(eq(dvmServices.id, providerSvc[0].id))
       }
     }
-  }
-
-  // Kind 1 note + approval
-  if (user.nostrPrivEncrypted && user.nostrPrivIv && c.env.NOSTR_MASTER_KEY && c.env.NOSTR_QUEUE) {
-    const kindLabel = DVM_KIND_LABELS[job[0].kind] || `kind ${job[0].kind}`
-    const paidStr = paymentResult.paid_sats ? ` — paid ${paymentResult.paid_sats} sats ⚡` : ''
-    const relayUrl = (c.env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-    const noteEvent = await buildSignedEvent({
-      privEncrypted: user.nostrPrivEncrypted,
-      iv: user.nostrPrivIv,
-      masterKey: c.env.NOSTR_MASTER_KEY,
-      kind: 1,
-      content: `🤝 Job done: ${kindLabel}${paidStr}\n\n${c.env.APP_URL || new URL(c.req.url).origin}/jobs/${jobId} #dvm #2020117`,
-      tags: [['t', 'dvm'], ['t', '2020117']],
-    })
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [noteEvent] }))
   }
 
   // Check if this job is part of a workflow — auto-advance
@@ -4030,43 +3698,6 @@ api.post('/dvm/jobs/:id/review', requireApiAuth, async (c) => {
     createdAt: new Date(),
   })
 
-  // Build Kind 30311 endorsement: aggregate reviewer's history with target
-  const eventsToSend: NostrEvent[] = [event]
-  try {
-    const allReviews = await db.select({ rating: dvmReviews.rating, jobKind: dvmReviews.jobKind })
-      .from(dvmReviews)
-      .where(and(eq(dvmReviews.reviewerUserId, user.id), eq(dvmReviews.targetPubkey, targetPubkey)))
-    // Include the current review we just inserted
-    const ratings = [...allReviews.map(r => r.rating), body.rating]
-    const avgRating = Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length * 10) / 10
-    const kinds = [...new Set([...allReviews.map(r => r.jobKind), job[0].kind])]
-    const isTrusted = await db.select({ id: dvmTrust.id }).from(dvmTrust)
-      .where(and(eq(dvmTrust.userId, user.id), eq(dvmTrust.targetPubkey, targetPubkey)))
-      .limit(1)
-
-    const endorsementEvent = await buildReputationEndorsementEvent({
-      privEncrypted: user.nostrPrivEncrypted!,
-      iv: user.nostrPrivIv!,
-      masterKey: c.env.NOSTR_MASTER_KEY,
-      targetPubkey,
-      rating: avgRating,
-      comment: body.content,
-      trusted: isTrusted.length > 0,
-      context: {
-        jobs_together: ratings.length,
-        kinds,
-        last_job_at: Math.floor(Date.now() / 1000),
-      },
-    })
-    eventsToSend.push(endorsementEvent)
-  } catch (e) {
-    console.error('[Review] Failed to build Kind 30311 endorsement:', e)
-  }
-
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: eventsToSend }))
-  }
-
   return c.json({ ok: true, event_id: event.id }, 201)
 })
 
@@ -4154,10 +3785,6 @@ api.post('/dvm/jobs/:id/escrow', requireApiAuth, async (c) => {
         updatedAt: now,
       }).where(eq(dvmJobs.id, customerJob[0].id))
     }
-  }
-
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event] }))
   }
 
   return c.json({ ok: true, event_id: event.id, hash: hashHex }, 201)
@@ -4310,11 +3937,6 @@ api.post('/dvm/workflow', requireApiAuth, async (c) => {
   // Link first step to job
   await db.update(dvmWorkflowSteps).set({ jobId: firstJobId, updatedAt: now })
     .where(and(eq(dvmWorkflowSteps.workflowId, workflowId), eq(dvmWorkflowSteps.stepIndex, 0)))
-
-  // Publish events
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [event, firstJobEvent] }))
-  }
 
   return c.json({ ok: true, workflow_id: workflowId, first_job_id: firstJobId, event_id: event.id }, 201)
 })
@@ -4475,11 +4097,6 @@ api.post('/dvm/swarm', requireApiAuth, async (c) => {
     createdAt: now,
     updatedAt: now,
   })
-
-  // Publish both events
-  if (c.env.NOSTR_QUEUE) {
-    c.executionCtx.waitUntil(c.env.NOSTR_QUEUE.send({ events: [swarmEvent, jobEvent] }))
-  }
 
   return c.json({ ok: true, swarm_id: swarmId, job_id: jobId, event_id: swarmEvent.id }, 201)
 })

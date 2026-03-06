@@ -1,7 +1,7 @@
 import type { NostrEvent, NostrFilter, Env } from './types'
-import { isEphemeral, isDvmKind, isDvmRequestKind, isAllowedKind, checkPow } from './types'
+import { isEphemeral, isAllowedKind, checkPow } from './types'
 import { verifyEvent } from './crypto'
-import { saveEvent, queryEvents, isAllowedPubkey, hasZappedRelay } from './db'
+import { saveEvent, queryEvents } from './db'
 
 interface Session {
   subscriptions: Map<string, NostrFilter[]>
@@ -113,36 +113,15 @@ export class RelayDO implements DurableObject {
       return
     }
 
-    // 4. Registered users bypass POW/Zap checks
-    const isRegistered = await isAllowedPubkey(this.env.APP_DB, event.pubkey)
-    if (!isRegistered) {
-      // 5. DVM result/feedback kinds (6xxx/7000) — open to external providers
-      const isDvmResult = isDvmKind(event.kind)
-      // 6. Zap receipt (9735) — must be writable for zap verification to work
-      const isZapReceipt = event.kind === 9735
-      // Service events (metadata, app data, heartbeats)
-      const isServiceEvent = event.kind === 0 || event.kind === 30078
-
-      if (!isDvmResult && !isZapReceipt && !isServiceEvent) {
-        // 7. POW check for external users
-        const minPow = parseInt(this.env.MIN_POW || '20', 10)
-        if (!checkPow(event.id, minPow)) {
-          this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
-          return
-        }
-
-        // 8. DVM request kinds (5xxx) require zap verification
-        if (isDvmRequestKind(event.kind)) {
-          const relayPubkey = this.env.RELAY_PUBKEY
-          if (relayPubkey) {
-            const zapped = await hasZappedRelay(this.env.DB, event.pubkey, relayPubkey)
-            if (!zapped) {
-              const addr = this.env.RELAY_LIGHTNING_ADDRESS || ''
-              this.sendOk(ws, event.id, false, `blocked: zap ${addr} (21 sats) before submitting DVM requests`)
-              return
-            }
-          }
-        }
+    // 4. POW required for social kinds (anti-spam for profile/note/contacts/deletion)
+    //    DVM protocol kinds (5xxx/6xxx/7000), heartbeat (30333), zap (9735),
+    //    and other DVM metadata (30311/31117/31990/30382/21117/21002) are exempt
+    const POW_REQUIRED_KINDS = new Set([0, 1, 3, 5, 30078])
+    if (POW_REQUIRED_KINDS.has(event.kind)) {
+      const minPow = parseInt(this.env.MIN_POW || '20', 10)
+      if (!checkPow(event.id, minPow)) {
+        this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
+        return
       }
     }
 

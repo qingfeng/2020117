@@ -7,8 +7,6 @@ import {
   type NostrEvent,
   verifyEvent,
   countLeadingZeroBits,
-  buildApprovalEvent,
-  buildSignedEvent,
   pubkeyToNpub,
 } from './nostr'
 import { generateId, truncate, ensureUniqueUsername } from '../lib/utils'
@@ -254,25 +252,6 @@ async function processIncomingPost(
 
   console.log(`[NIP-72] Created topic ${topicId} from event ${event.id} by ${event.pubkey.slice(0, 8)}...`)
 
-  // Send Kind 4550 approval event via queue
-  if (env.NOSTR_QUEUE && env.NOSTR_MASTER_KEY && group.nostrPrivEncrypted && group.nostrPrivIv && group.nostrPubkey && group.name) {
-    try {
-      const relayUrl = (env.NOSTR_RELAYS || '').split(',')[0]?.trim() || ''
-      const approval = await buildApprovalEvent({
-        privEncrypted: group.nostrPrivEncrypted,
-        iv: group.nostrPrivIv,
-        masterKey: env.NOSTR_MASTER_KEY,
-        communityPubkey: group.nostrPubkey,
-        dTag: group.name,
-        approvedEvent: event,
-        relayUrl,
-      })
-      await env.NOSTR_QUEUE.send({ events: [approval] })
-      console.log(`[NIP-72] Queued approval event for ${event.id}`)
-    } catch (e) {
-      console.error(`[NIP-72] Failed to build/send approval:`, e)
-    }
-  }
 }
 
 // --- Poll followed Nostr users ---
@@ -551,24 +530,6 @@ export async function syncAndPublishContactList(db: Database, env: Bindings, use
     }
   }
 
-  // 4. Merge: all pubkeys from both local and relay
-  const mergedPubkeys = new Set([...localPubkeys, ...relayPubkeys])
-  const tags: string[][] = Array.from(mergedPubkeys).map(pk => ['p', pk])
-
-  // 5. Publish merged Kind 3
-  if (!user.nostrPrivEncrypted || !user.nostrPrivIv || !env.NOSTR_MASTER_KEY) return
-
-  const event = await buildSignedEvent({
-    privEncrypted: user.nostrPrivEncrypted,
-    iv: user.nostrPrivIv,
-    masterKey: env.NOSTR_MASTER_KEY,
-    kind: 3,
-    content: '',
-    tags,
-  })
-
-  await env.NOSTR_QUEUE!.send({ events: [event] })
-  console.log(`[Nostr K3] Published Kind 3 with ${tags.length} follows (local: ${localFollows.length}, relay: ${relayPubkeys.size}) for user ${user.id}`)
 }
 
 /**

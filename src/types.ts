@@ -6,13 +6,11 @@ export type Bindings = {
   APP_URL: string
   APP_NAME: string
   QUEUE?: Queue
-  NOSTR_QUEUE?: Queue
   NOSTR_MASTER_KEY?: string
   NOSTR_RELAYS?: string
   NOSTR_RELAY_URL?: string
   NOSTR_MIN_POW?: string
   SYSTEM_NOSTR_PUBKEY?: string
-  RELAY_SERVICE?: Fetcher
   PLATFORM_FEE_PERCENT?: string
   PLATFORM_LIGHTNING_ADDRESS?: string
 }

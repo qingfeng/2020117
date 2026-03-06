@@ -1702,17 +1702,12 @@ export async function advanceWorkflow(db: Database, env: Bindings, completedJobI
   // Update workflow status
   await db.update(dvmWorkflows).set({ status: 'running', updatedAt: now }).where(eq(dvmWorkflows.id, wf.id))
 
-  // Publish to relay
-  if (env.NOSTR_QUEUE) {
-    env.NOSTR_QUEUE.send({ events: [jobEvent] })
-  }
-
   console.log(`[Workflow] ${wf.id} advanced to step ${nextStepIndex} → job ${jobId}`)
 }
 
 // --- Relay Event Stream ---
 
-const RELAY_EVENT_KINDS = [0, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
+const RELAY_EVENT_KINDS = [0, 1, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
 
 const KIND_LABELS: Record<number, string> = {
   0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',

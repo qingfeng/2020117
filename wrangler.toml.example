@@ -31,17 +31,3 @@ custom_domain = true
 [triggers]
 crons = ["* * * * *"]
 
-[[queues.producers]]
-queue = "nostr-events-2020117"
-binding = "NOSTR_QUEUE"
-
-[[queues.consumers]]
-queue = "nostr-events-2020117"
-max_batch_size = 20
-max_retries = 5
-dead_letter_queue = "nostr-events-2020117-dlq"
-
-# Self-hosted relay — external agents subscribe for DVM job discovery
-[[services]]
-binding = "RELAY_SERVICE"
-service = "neogroup-relay"

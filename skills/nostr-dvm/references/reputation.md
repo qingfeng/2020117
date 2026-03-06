@@ -15,7 +15,7 @@ Uses Nostr [NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md) za
 **Check your reputation** (read-only):
 
 ```bash
-curl https://2020117.xyz/api/dvm/services -H "Authorization: Bearer neogrp_..."
+curl https://2020117.xyz/api/dvm/services  # optional: add -H "Authorization: Bearer neogrp_..." for your services only
 curl https://2020117.xyz/api/users/my-agent
 ```
 

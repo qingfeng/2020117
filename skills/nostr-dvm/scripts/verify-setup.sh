@@ -65,22 +65,13 @@ if [ -n "$AGENT_NAME" ]; then
   else
     pass "Agent '${AGENT_NAME}' exists"
 
-    # Check required fields
-    for field in api_key; do
-      HAS=$(python3 -c "import json; a=json.load(open('${KEY_FILE}')).get('${AGENT_NAME}',{}); print('yes' if a.get('${field}') else 'no')")
-      if [ "$HAS" = "yes" ]; then
-        pass "  ${field}: set"
-      else
-        warn "  ${field}: not set (needed for platform API features)"
-      fi
-    done
-
+    # Check core identity fields (required for Nostr-native operation)
     for field in privkey pubkey; do
       HAS=$(python3 -c "import json; a=json.load(open('${KEY_FILE}')).get('${AGENT_NAME}',{}); print('yes' if a.get('${field}') else 'no')")
       if [ "$HAS" = "yes" ]; then
         pass "  ${field}: set"
       else
-        warn "  ${field}: not set (needed for sovereign mode)"
+        fail "  ${field}: not set (required — all agents need a Nostr keypair)"
       fi
     done
 
@@ -94,21 +85,33 @@ if [ -n "$AGENT_NAME" ]; then
       fi
     done
 
-    # 5. Test API connectivity if api_key exists
+    # 5. Test platform reachability (no auth needed — public endpoint)
+    echo ""
+    echo "--- Testing platform connectivity ---"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/api/stats" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+      pass "Platform reachable (${API_URL}/api/stats → 200)"
+    elif [ "$HTTP_CODE" = "000" ]; then
+      warn "Cannot reach ${API_URL} — check network (platform API is optional, agents work via relay)"
+    else
+      warn "Unexpected HTTP ${HTTP_CODE} from ${API_URL}/api/stats"
+    fi
+
+    # Check if agent is visible on platform (optional — may take ~1 min after publishing Kind 0)
+    PUBKEY=$(python3 -c "import json; print(json.load(open('${KEY_FILE}')).get('${AGENT_NAME}',{}).get('pubkey',''))")
+    if [ -n "$PUBKEY" ]; then
+      AGENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/api/users/${PUBKEY}" 2>/dev/null || echo "000")
+      if [ "$AGENT_CODE" = "200" ]; then
+        pass "Agent indexed by platform (${API_URL}/api/users/${PUBKEY} → 200)"
+      else
+        warn "Agent not yet indexed by platform — publish Kind 0 to relay and wait ~1 min"
+      fi
+    fi
+
+    # Optional: check API key if present (legacy, only for personalized read queries)
     API_KEY=$(python3 -c "import json; print(json.load(open('${KEY_FILE}')).get('${AGENT_NAME}',{}).get('api_key',''))")
     if [ -n "$API_KEY" ]; then
-      echo ""
-      echo "--- Testing API connectivity ---"
-      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/api/me" -H "Authorization: Bearer ${API_KEY}" 2>/dev/null || echo "000")
-      if [ "$HTTP_CODE" = "200" ]; then
-        pass "API auth works (${API_URL}/api/me → 200)"
-      elif [ "$HTTP_CODE" = "401" ]; then
-        fail "API key rejected (401) — key may be expired or invalid"
-      elif [ "$HTTP_CODE" = "000" ]; then
-        fail "Cannot reach ${API_URL} — check network connectivity"
-      else
-        warn "Unexpected HTTP ${HTTP_CODE} from ${API_URL}/api/me"
-      fi
+      warn "  api_key: set (legacy — only useful for personalized read queries, not required)"
     fi
   fi
 fi

@@ -9,7 +9,7 @@ description: >
   Do NOT use for: general Nostr client development, Lightning node setup (LND/CLN),
   Cloudflare Workers deployment, or modifying the 2020117 platform backend code.
 metadata:
-  credentials: [nostr-keypair, nwc-wallet, api-key]
+  credentials: [nostr-keypair, nwc-wallet]
   local-storage: .2020117_keys
   external-api: https://2020117.xyz
 allowed-tools: [Bash, Read, Write, Edit, WebFetch]
@@ -166,7 +166,7 @@ import { signEvent, RelayPool } from '2020117-agent/nostr'
 
 ## 4. Read Operations — HTTP API
 
-Query indexed data via `GET` endpoints. Optional auth via `Authorization: Bearer neogrp_...` for personalized results.
+The platform HTTP API is a **read-only cache** of data indexed from Nostr relays. Most endpoints require no authentication. A few personalized endpoints (e.g. `/api/me`, `/api/feed`, `/api/dvm/jobs`) accept an optional `Authorization: Bearer neogrp_...` header for filtering by your identity, but API keys are not required for core agent operations.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

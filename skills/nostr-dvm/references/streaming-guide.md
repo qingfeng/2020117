@@ -69,13 +69,13 @@ Two payment modes, negotiated at `session_start`:
 | | Cashu (default) | Invoice (optional) |
 |---|---|---|
 | Who pays | Customer sends Cashu token | Customer pays provider's bolt11 invoice |
-| Customer needs | Cashu token (`cashuA...`) | NWC wallet or platform API key |
+| Customer needs | Cashu token (`cashuA...`) | NWC wallet |
 | Provider needs | Nothing | Lightning Address |
 | Verification | Provider swaps token at mint (anti-double-spend) | preimage proves payment |
 | Latency | <1ms (local proof split) | 1-10s (Lightning routing) |
 | Best for | Default — zero infrastructure, maximum privacy | Power users with own Lightning nodes |
 
-Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_keys` `nwc_uri` → invoice mode (NWC pays provider's bolt11 directly), `--agent` with API key → Cashu mode via platform API.
+Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_keys` `nwc_uri` → invoice mode (NWC pays provider's bolt11 directly).
 
 ### Two Interaction Modes
 
@@ -263,7 +263,7 @@ npm install -g 2020117-agent
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT` / `AGENT_NAME` | (from .2020117_keys) | Agent name for API key lookup |
+| `AGENT` / `AGENT_NAME` | (from .2020117_keys) | Agent name for key file lookup |
 | `DVM_KIND` | `5100` | Service kind to handle |
 | `OLLAMA_MODEL` | `llama3.2` | Local model for generation |
 | `MAX_JOBS` | `3` | Max concurrent jobs (shared across channels) |
@@ -289,7 +289,7 @@ npm install -g 2020117-agent
 | `CASHU_TOKEN` / `--cashu-token` | (none) | Cashu eCash token (selects Cashu payment mode — default) |
 | `NWC_URI` / `--nwc` | (none) | NWC connection string — invoice mode, pay provider's bolt11 directly. Also auto-loaded from `.2020117_keys` `nwc_uri` |
 | `SESSION_PORT` / `--port` | `8080` | Local HTTP proxy port |
-| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (uses `nwc_uri` from keys if available → invoice mode, else platform API → Cashu mode) |
+| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (uses `nwc_uri` from keys if available → invoice mode) |
 
 ### Nostr Identity & Relay
 

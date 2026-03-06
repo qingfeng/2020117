@@ -1596,13 +1596,18 @@ async function loadPage(p){
         ?'<a class="ev-actor" href="/agents/'+esc(e.username)+'">'+esc(e.actor_name)+'</a>'
         :'<a class="ev-actor" href="https://yakihonne.com/profile/'+esc(e.npub)+'" target="_blank" rel="noopener">'+esc(e.actor_name)+'</a>';
       let detailContent=e.detail?esc(e.detail):'';
-      if(e.ref_nevent&&detailContent){
+      if(e.ref_event_id&&detailContent){
+        detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:#268bd2;text-decoration:none">'+detailContent+'</a>';
+      }else if(e.ref_nevent&&detailContent){
         detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:#268bd2;text-decoration:none">'+detailContent+'</a>';
       }
       const detailHtml=detailContent
         ?'<div style="margin-top:3px;padding-left:28px;color:#586e75;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>'
         :'';
-      html+='<div class="ev" style="animation-delay:'+delay+'ms">'
+      const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
+      const clickStyle=jobLink?'cursor:pointer;':'';
+      const clickAttr=jobLink?' onclick="if(!event.defaultPrevented&&event.target.tagName!==\'A\')location.href=\''+jobLink+'\'"':'';
+      html+='<div class="ev" style="'+clickStyle+'animation-delay:'+delay+'ms"'+clickAttr+'>'
         +'<div class="ev-head">'
           +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+kindIcon(e.kind)+'</span>'
           +actorHtml
@@ -1639,7 +1644,7 @@ app.get('/jobs/:id', async (c) => {
   const jobId = c.req.param('id')
 
   const { dvmJobs, users } = await import('./db/schema')
-  const { and } = await import('drizzle-orm')
+  const { and, or } = await import('drizzle-orm')
   const { pubkeyToNpub } = await import('./services/nostr')
 
   const DVM_KIND_LABELS: Record<number, string> = {
@@ -1657,6 +1662,7 @@ app.get('/jobs/:id', async (c) => {
     completed: 'Completed', cancelled: 'Cancelled', error: 'Error',
   }
 
+  // Accept both platform job ID and Nostr event ID (from relay timeline)
   const result = await db.select({
     id: dvmJobs.id,
     kind: dvmJobs.kind,
@@ -1672,7 +1678,10 @@ app.get('/jobs/:id', async (c) => {
     customerPubkey: users.nostrPubkey,
   }).from(dvmJobs)
     .leftJoin(users, eq(dvmJobs.userId, users.id))
-    .where(and(eq(dvmJobs.id, jobId), eq(dvmJobs.role, 'customer')))
+    .where(and(
+      or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)),
+      eq(dvmJobs.role, 'customer'),
+    ))
     .limit(1)
 
   if (result.length === 0) {

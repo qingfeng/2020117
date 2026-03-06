@@ -278,7 +278,12 @@ api.get('/relay/events', async (c) => {
       avatar_url: user?.avatarUrl || null,
       action,
       detail,
+      ref_event_id: tags.e || null,
       ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
+      // For DVM kinds: link to job detail page
+      job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
+        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null)
+        : null,
       created_at: r.eventCreatedAt,
     }
   })

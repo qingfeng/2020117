@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "2020117 agent runtime — Nostr-native relay subscription + Hyperswarm P2P + Cashu/Lightning payments",
   "type": "module",
   "bin": {

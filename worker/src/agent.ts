@@ -63,7 +63,7 @@ import {
   RelayPool,
 } from './nostr.js'
 import type { NostrEvent, SovereignKeys } from './nostr.js'
-import { parseNwcUri, nwcGetBalance } from './nwc.js'
+import { parseNwcUri, nwcGetBalance, nwcPayLightningAddress } from './nwc.js'
 import type { NwcParsed } from './nwc.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
@@ -263,6 +263,7 @@ async function setupPlatform(label: string) {
 
     // Subscribe to DVM requests via relay (Nostr-native job discovery)
     subscribeDvmRequests(label)
+    subscribeDvmResults(label)
 
     // Build pricing map from config
     const pricing: Record<string, number> = {}
@@ -361,6 +362,7 @@ async function setupSovereign(label: string) {
 
   // 8. Subscribe to DVM requests (Kind 5xxx) directly from relay
   subscribeDvmRequests(label)
+  subscribeDvmResults(label)
 
   // 9. Print startup summary
   const relays = (keys.relays || RELAYS).join(', ')
@@ -504,6 +506,56 @@ function subscribeDvmRequests(label: string) {
     },
   )
   console.log(`[${label}] Subscribed to DVM requests (Kind ${KIND}) via relay`)
+}
+
+// --- Customer: subscribe to DVM results and auto-pay ---
+
+let dvmResultSubscribed = false
+function subscribeDvmResults(label: string) {
+  if (!state.sovereignKeys || !state.relayPool) return
+  if (dvmResultSubscribed) return
+  dvmResultSubscribed = true
+
+  // Subscribe to Kind 6xxx results directed to us (#p = our pubkey)
+  const resultKind = KIND + 1000
+  state.relayPool.subscribe(
+    { kinds: [resultKind], '#p': [state.sovereignKeys.pubkey] },
+    (event: NostrEvent) => {
+      handleDvmResult(label, event).catch(e => {
+        console.error(`[${label}] DVM result handler error: ${e.message}`)
+      })
+    },
+  )
+  console.log(`[${label}] Subscribed to DVM results (Kind ${resultKind}) via relay`)
+}
+
+async function handleDvmResult(label: string, event: NostrEvent) {
+  if (!state.sovereignKeys || !state.relayPool) return
+  if (event.pubkey === state.sovereignKeys.pubkey) return
+  if (!markSeen(event.id)) return
+
+  // Extract job reference, amount, and provider's Lightning Address
+  const requestId = event.tags.find(t => t[0] === 'e')?.[1]
+  const amountMsats = Number(event.tags.find(t => t[0] === 'amount')?.[1] || '0')
+  const amountSats = Math.floor(amountMsats / 1000)
+  const lightningAddress = event.tags.find(t => t[0] === 'lightning_address')?.[1]
+
+  console.log(`[${label}] DVM result from ${event.pubkey.slice(0, 8)}: ${event.content.slice(0, 80)}...`)
+
+  // Auto-pay if we have NWC and provider has Lightning Address
+  if (amountSats > 0 && lightningAddress && state.nwcParsed) {
+    try {
+      const { preimage } = await nwcPayLightningAddress(state.nwcParsed, lightningAddress, amountSats)
+      console.log(`[${label}] Paid ${amountSats} sats → ${lightningAddress} (preimage: ${preimage.slice(0, 16)}...)`)
+    } catch (e) {
+      console.error(`[${label}] Payment failed: ${e instanceof Error ? e.message : 'Unknown error'}`)
+    }
+  } else if (amountSats > 0 && !lightningAddress) {
+    console.warn(`[${label}] Result requires ${amountSats} sats but provider has no Lightning Address`)
+  } else if (amountSats > 0 && !state.nwcParsed) {
+    console.warn(`[${label}] Result requires ${amountSats} sats but no NWC wallet configured`)
+  }
+
 }
 
 async function handleAiPrompt(label: string, event: NostrEvent) {

@@ -51,8 +51,7 @@ import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
 import {
-  hasApiKey, loadAgentName,
-  createJob, getJob, getProfile, reportSession,
+  hasApiKey, loadAgentName, getProfile, reportSession,
 } from './api.js'
 import { generateInvoice } from './clink.js'
 import { receiveCashuToken } from './cashu.js'
@@ -566,8 +565,21 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
     }, state.sovereignKeys.privkey)
     await state.relayPool.publish(feedbackEvent)
 
-    // Process
-    const result = await state.processor.generate({ input })
+    // Process (with optional pipeline: delegate sub-task first)
+    let result: string
+    if (SUB_KIND) {
+      console.log(`[${label}] Pipeline: delegating to kind ${SUB_KIND}...`)
+      try {
+        const subResult = await delegateNostr(label, SUB_KIND, input, SUB_BID, SUB_PROVIDER)
+        console.log(`[${label}] Sub-task returned ${subResult.length} chars`)
+        result = await state.processor.generate({ input: subResult })
+      } catch (e: any) {
+        console.error(`[${label}] Sub-task failed: ${e.message}, using original input`)
+        result = await state.processor.generate({ input })
+      }
+    } else {
+      result = await state.processor.generate({ input })
+    }
     console.log(`[${label}] DVM result: ${result.length} chars`)
 
     // Send result (Kind 6xxx = request kind + 1000)
@@ -697,41 +709,49 @@ function startSovereignHeartbeat(label: string) {
 // --- Sub-task delegation ---
 
 /**
- * Delegate a sub-task via platform API. Creates a job, then polls until
- * the result is available (max 120s).
+ * Delegate a sub-task via Nostr relay. Publishes Kind 5xxx request,
+ * then subscribes for Kind 6xxx result (max 120s timeout).
  */
-async function delegateAPI(kind: number, input: string, bidSats: number, provider?: string): Promise<string> {
-  const tag = `sub-api`
-
-  const created = await createJob({ kind, input, bid_sats: bidSats, provider })
-  if (!created) {
-    throw new Error('Failed to create sub-task via API')
+async function delegateNostr(label: string, kind: number, input: string, bidSats: number, provider?: string): Promise<string> {
+  if (!state.sovereignKeys || !state.relayPool) {
+    throw new Error('No Nostr keys or relay pool — cannot delegate sub-task')
   }
 
-  const jobId = created.job_id
-  console.log(`[${tag}] Created job ${jobId} (kind ${kind}, bid ${bidSats})`)
-
-  // Poll for result
-  const deadline = Date.now() + 120_000
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 5_000))
-
-    const job = await getJob(jobId)
-    if (!job) continue
-
-    if (job.status === 'completed' || job.status === 'result_available') {
-      if (job.result) {
-        console.log(`[${tag}] Job ${jobId}: got result (${job.result.length} chars)`)
-        return job.result
-      }
-    }
-
-    if (job.status === 'cancelled' || job.status === 'rejected') {
-      throw new Error(`Sub-task ${jobId} was ${job.status}`)
-    }
+  const tags: string[][] = [
+    ['i', input, 'text'],
+    ['bid', String(bidSats * 1000)],  // msats
+  ]
+  if (provider) {
+    tags.push(['p', provider])
   }
 
-  throw new Error(`Sub-task ${jobId} timed out after 120s`)
+  const requestEvent = signEvent({
+    kind,
+    tags,
+    content: '',
+  }, state.sovereignKeys.privkey)
+
+  await state.relayPool.publish(requestEvent)
+  console.log(`[${label}] Published sub-task (Kind ${kind}, id ${requestEvent.id.slice(0, 8)})`)
+
+  // Subscribe for result (Kind = request kind + 1000) referencing our request
+  const resultKind = kind + 1000
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      sub.close()
+      reject(new Error(`Sub-task ${requestEvent.id.slice(0, 8)} timed out after 120s`))
+    }, 120_000)
+
+    const sub = state.relayPool!.subscribe(
+      { kinds: [resultKind], '#e': [requestEvent.id] },
+      (event: NostrEvent) => {
+        clearTimeout(timeout)
+        sub.close()
+        console.log(`[${label}] Sub-task result from ${event.pubkey.slice(0, 8)}: ${event.content.length} chars`)
+        resolve(event.content)
+      },
+    )
+  })
 }
 
 // --- 4. P2P Swarm Listener ---

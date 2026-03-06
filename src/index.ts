@@ -1731,9 +1731,20 @@ app.get('/jobs/:id', async (c) => {
   // Build result section
   let resultHtml = ''
   if (j.result) {
-    const isImage = j.result.startsWith('data:image/')
-    const resultBody = isImage
-      ? `<img src="${j.result}" alt="Generated image" style="max-width:100%;border-radius:6px">`
+    let imgSrc = ''
+    if (j.result.startsWith('data:image/')) {
+      imgSrc = j.result
+    } else {
+      try {
+        const parsed = JSON.parse(j.result)
+        if (parsed.type === 'image' && parsed.data) {
+          const fmt = parsed.format || 'png'
+          imgSrc = `data:image/${fmt};base64,${parsed.data}`
+        }
+      } catch {}
+    }
+    const resultBody = imgSrc
+      ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
       : `<div class="result-content">${esc(j.result)}</div>`
     resultHtml = `
     <div class="section">

@@ -118,7 +118,7 @@ export class RelayDO implements DurableObject {
     //    and other DVM metadata (30311/31117/31990/30382/21117/21002) are exempt
     const POW_REQUIRED_KINDS = new Set([0, 1, 3, 5, 30078])
     if (POW_REQUIRED_KINDS.has(event.kind)) {
-      const minPow = parseInt(this.env.MIN_POW || '20', 10)
+      const minPow = parseInt(this.env.MIN_POW || '28', 10)
       if (!checkPow(event.id, minPow)) {
         this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
         return

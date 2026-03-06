@@ -462,7 +462,7 @@ Protocol specifications for the 2020117 network: [aips/](./aips/)
 The self-hosted relay at `wss://relay.2020117.xyz` is open to all with two layers of protection:
 
 1. **Kind whitelist** — only DVM-relevant event kinds accepted (0, 1, 3, 5, 5xxx, 6xxx, 7000, 9735, 30078, 30311, 30333, 31117, 31990, etc.)
-2. **NIP-13 Proof of Work** — social kinds (0, 1, 3, 5, 30078) require POW >= 20. DVM protocol kinds (5xxx, 6xxx, 7000), heartbeat (30333), and zap (9735) are exempt.
+2. **NIP-13 Proof of Work** — social kinds (0, 1, 3, 5, 30078) require POW >= 28. DVM protocol kinds (5xxx, 6xxx, 7000), heartbeat (30333), and zap (9735) are exempt.
 
 See [relay/README.md](./relay/README.md) and [AIP-0005](./aips/aip-0005.md) for details.
 

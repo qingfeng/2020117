@@ -710,7 +710,7 @@ references/*.md ───────────┘
 | `NOSTR_MASTER_KEY` | Secret | AES-256 主密钥（64 位 hex） |
 | `NOSTR_RELAYS` | Secret | 逗号分隔的 relay WebSocket URL |
 | `NOSTR_RELAY_URL` | Var | NIP-05 推荐 relay |
-| `NOSTR_MIN_POW` | Var | NIP-72 最低 PoW 难度（默认 20） |
+| `NOSTR_MIN_POW` | Var | NIP-72 最低 PoW 难度（默认 28） |
 | `SYSTEM_NOSTR_PUBKEY` | Var | 系统 Nostr 公钥 |
 
 ## Relay 防垃圾（AIP-0005）
@@ -722,19 +722,19 @@ references/*.md ───────────┘
   1. Kind 白名单（0/1/3/5/5xxx/6xxx/7000/9735/21002/21117/30078/30311/30333/31117/31990）→ 不在白名单则拒绝
   2. 签名验证 → 无效则拒绝
   3. 时间戳检查 → 未来 10 分钟以上则拒绝
-  4. 社交类 Kind（0/1/3/5/30078）？→ 需要 POW >= 20 → 不够则拒绝
+  4. 社交类 Kind（0/1/3/5/30078）？→ 需要 POW >= 28 → 不够则拒绝
   5. DVM 协议类（5xxx/6xxx/7000/30311/31117/31990 等）→ 无需 POW，直接放行
   6. Kind 9735（zap receipt）/ 30333（heartbeat）→ 无需 POW，直接放行
   7. 放行
 ```
 
-**POW 策略**：社交类 Kind 需要 NIP-13 POW >= 20（防止滥用发消息/注册），DVM 协议类和心跳/zap 免 POW。
+**POW 策略**：社交类 Kind 需要 NIP-13 POW >= 28（防止滥用发消息/注册），DVM 协议类和心跳/zap 免 POW。
 
 ### Relay Worker 环境变量
 
 | 变量 | 说明 |
 |------|------|
-| `MIN_POW` | 最低 POW 难度（默认 20） |
+| `MIN_POW` | 最低 POW 难度（默认 28） |
 
 ### 相关代码
 

@@ -51,7 +51,7 @@ import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
 import {
-  hasApiKey, loadAgentName, getProfile, reportSession,
+  loadAgentName,
 } from './api.js'
 import { generateInvoice } from './clink.js'
 import { receiveCashuToken } from './cashu.js'
@@ -179,12 +179,12 @@ async function main() {
     console.log(`[${label}] Skill: ${state.skill.name} v${state.skill.version} (${(state.skill.features as string[]).join(', ')})`)
   }
 
-  // 2. Auto-fetch Lightning Address from platform if not set via CLI/env
-  if (!LIGHTNING_ADDRESS && hasApiKey()) {
-    const profile = await getProfile()
-    if (profile?.lightning_address) {
-      LIGHTNING_ADDRESS = profile.lightning_address
-      console.log(`[${label}] Lightning Address loaded from platform: ${LIGHTNING_ADDRESS}`)
+  // 2. Auto-load Lightning Address from .2020117_keys if not set via CLI/env
+  if (!LIGHTNING_ADDRESS) {
+    const keys = loadSovereignKeys(loadAgentName() || 'agent')
+    if (keys?.lightning_address) {
+      LIGHTNING_ADDRESS = keys.lightning_address
+      console.log(`[${label}] Lightning Address loaded from keys: ${LIGHTNING_ADDRESS}`)
     }
   }
 
@@ -1224,10 +1224,7 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   state.p2pSessionsCompleted++
   state.p2pTotalEarnedSats += session.totalEarned
 
-  // Report session to platform activity feed (best-effort, no content exposed)
-  if (hasApiKey()) {
-    reportSession({ kind: KIND, durationS, totalSats: session.totalEarned })
-  }
+  // Session stats are included in the next Kind 30333 heartbeat automatically
 
   activeSessions.delete(session.sessionId)
 }

@@ -85,7 +85,6 @@ Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
 import { collectPayment } from '2020117-agent/clink'
-import { hasApiKey, registerService } from '2020117-agent/api'
 ```
 
 ## How It Works
@@ -100,13 +99,13 @@ import { hasApiKey, registerService } from '2020117-agent/api'
                     │   Kind 6xxx result)     │
                     │                         │
   Hyperswarm DHT ◄──┤  P2P Sessions           │──► Lightning Payments
-  (encrypted TCP)   │  (session → HTTP        │    (Cashu / Invoice)
+  (encrypted TCP)   │  (session → HTTP        │    (NWC / Invoice)
                     │   tunnel → result)      │
                     └─────────────────────────┘
 ```
 
 - **Relay channel** (primary): Subscribes to DVM requests (Kind 5xxx) via Nostr relay. Accepts by publishing Kind 7000, submits results via Kind 6xxx. Fully decentralized — no HTTP API dependency.
-- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Interactive sessions with per-minute billing (Cashu or Lightning invoice).
+- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Interactive sessions with per-minute billing (Lightning invoice via NWC).
 - Both channels share a single capacity counter — the agent never overloads.
 
 ## Development

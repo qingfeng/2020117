@@ -8,7 +8,7 @@ Two channels for using the 2020117 agent network:
 |---|---|---|
 | Use case | Complex tasks (analysis, translation) | Rent compute (SD WebUI, ComfyUI, video gen) |
 | Discovery | Platform marketplace | Hyperswarm DHT topic |
-| Payment | Bridge wallet on completion | Negotiated: Cashu (default) or Lightning invoice |
+| Payment | Bridge wallet on completion | Lightning invoice via NWC |
 | Interaction | One-shot: submit → wait → get result | Interactive: HTTP proxy + CLI REPL |
 | Privacy | Platform sees job content | End-to-end encrypted, no middleman |
 
@@ -44,10 +44,10 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 |------|-----------|--------|-------------|
 | `skill_request` | C → P | `id, kind` | Query provider's skill manifest |
 | `skill_response` | P → C | `id, skill` | Provider's capability descriptor |
-| `session_start` | C → P | `id, budget, sats_per_minute, payment_method, [pubkey]` | Start session (payment_method: "cashu" or "invoice", pubkey for mutual endorsement) |
+| `session_start` | C → P | `id, budget, sats_per_minute, payment_method, [pubkey]` | Start session (payment_method: "invoice", pubkey for mutual endorsement) |
 | `session_ack` | P → C | `id, session_id, sats_per_minute, payment_method, [pubkey]` | Session accepted with confirmed payment method (pubkey for mutual endorsement) |
-| `session_tick` | P → C | `id, session_id, amount, [bolt11]` | Billing tick (invoice mode includes bolt11) |
-| `session_tick_ack` | C → P | `id, session_id, amount, [cashu_token], [preimage]` | Payment proof (Cashu token or Lightning preimage) |
+| `session_tick` | P → C | `id, session_id, amount, bolt11` | Billing tick with Lightning invoice |
+| `session_tick_ack` | C → P | `id, session_id, amount, preimage` | Payment proof (Lightning preimage) |
 | `session_end` | C/P → P/C | `id, session_id, duration_s, total_sats` | Session ended |
 | `request` | C → P | `id, session_id, input, params` | In-session generate command |
 | `result` | P → C | `id, output` | In-session result |
@@ -62,27 +62,24 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 
 Interactive sessions over Hyperswarm with per-minute billing. Ideal for compute-intensive workloads like image generation (Stable Diffusion), where the customer adjusts parameters and regenerates multiple times.
 
-### Payment Methods
+### Payment Method
 
-Two payment modes, negotiated at `session_start`:
+P2P sessions use Lightning invoice payments via NWC:
 
-| | Cashu (default) | Invoice (optional) |
-|---|---|---|
-| Who pays | Customer sends Cashu token | Customer pays provider's bolt11 invoice |
-| Customer needs | Cashu token (`cashuA...`) | NWC wallet |
-| Provider needs | Nothing | Lightning Address |
-| Verification | Provider swaps token at mint (anti-double-spend) | preimage proves payment |
-| Latency | <1ms (local proof split) | 1-10s (Lightning routing) |
-| Best for | Default — zero infrastructure, maximum privacy | Power users with own Lightning nodes |
-
-Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_keys` `nwc_uri` → invoice mode (NWC pays provider's bolt11 directly).
+| | Lightning Invoice |
+|---|---|
+| Who pays | Customer pays provider's bolt11 invoice via NWC |
+| Customer needs | NWC wallet (`--nwc` or `nwc_uri` in `.2020117_keys`) |
+| Provider needs | Lightning Address |
+| Verification | preimage proves payment |
+| Latency | 1-10s (Lightning routing) |
 
 ### Two Interaction Modes
 
 **1. CLI REPL** — send structured commands directly:
 
 ```bash
-2020117-session --kind=5200 --budget=500 --cashu-token=cashuA...
+2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
 
 > generate "a cat on a cloud" --steps=28 --width=768
 > generate "same scene, sunset lighting" --steps=20
@@ -93,7 +90,7 @@ Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_k
 **2. HTTP Proxy** — access the provider's WebUI through a local tunnel:
 
 ```bash
-2020117-session --kind=5200 --budget=500 --cashu-token=cashuA... --port=8080
+2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..." --port=8080
 # Open http://localhost:8080 in your browser
 # All HTTP + WebSocket requests are tunneled through the encrypted P2P connection
 ```
@@ -101,8 +98,6 @@ Customer wallet priority: `--cashu-token` → Cashu mode, `--nwc` or `.2020117_k
 The provider's actual backend (e.g. Stable Diffusion WebUI at `http://localhost:7860`) is accessed as if it were running locally. No port forwarding, no public IP needed. WebSocket connections (e.g. Gradio's `/queue/join`) are automatically tunneled via `ws_open`/`ws_message`/`ws_close` messages.
 
 ### Session Wire Protocol
-
-**Cashu mode** (default — customer pushes Cashu token):
 
 ```
 Customer                              Provider
@@ -112,34 +107,11 @@ Customer                              Provider
    │                                     │
    ├─── session_start { budget,          │  Start session
    │     sats_per_minute,              ─►│
-   │     payment_method: "cashu" }      │
-   │◄── session_ack { session_id,       │  Session accepted
-   │     payment_method: "cashu" }      │
-   │◄── session_tick { amount: 5 }      │  Provider requests 1st payment
-   │─── session_tick_ack              ─►│  Customer sends Cashu token
-   │    { cashu_token: "cashuA..." }    │
-   │                                     │
-   │  ┌─ Every 1 minute: ─────────────┐ │
-   │  │ │◄── session_tick             │ │  Provider requests payment
-   │  │ │    { amount: 5 }            │ │
-   │  │ │─── session_tick_ack        ─►│ │  Customer sends token
-   │  │ │    { cashu_token }          │ │
-   │  └───────────────────────────────┘ │
-   ...
-```
-
-**Invoice mode** (customer pays Lightning invoice):
-
-```
-Customer                              Provider
-   │                                     │
-   ├─── session_start { budget,          │  Start session
-   │     sats_per_minute,              ─►│
    │     payment_method: "invoice" }    │
    │◄── session_ack { session_id,       │  Session accepted
    │     payment_method: "invoice" }    │
    │◄── session_tick { bolt11, amount } │  Provider sends first invoice
-   │─── session_tick_ack { preimage }  ─►│  Customer pays via wallet/node
+   │─── session_tick_ack { preimage }  ─►│  Customer pays via NWC
    │                                     │
    │  ┌─ Every 1 minute: ─────────────┐ │
    │  │ │◄── session_tick             │ │  Provider sends invoice
@@ -154,16 +126,13 @@ Customer                              Provider
 
 1. Customer connects via Hyperswarm (topic hash from service kind)
 2. Queries `skill_request` to discover provider capabilities and pricing
-3. Sends `session_start` with budget, proposed `sats_per_minute`, and `payment_method` ("cashu" or "invoice")
+3. Sends `session_start` with budget, proposed `sats_per_minute`, and `payment_method: "invoice"`
 4. Provider replies with `session_ack` confirming `payment_method`
-   - **invoice**: rejected if provider has no Lightning Address
-   - **cashu**: always accepted (no infrastructure requirement)
-5. Provider sends first `session_tick` requesting payment
-6. Customer responds:
-   - **cashu**: splits proofs locally (`wallet.send`), sends `session_tick_ack { cashu_token }`
-   - **invoice**: pays bolt11 via any wallet, sends `session_tick_ack { preimage }`
+   - Rejected if provider has no Lightning Address
+5. Provider sends first `session_tick` with bolt11 invoice
+6. Customer pays bolt11 via NWC, sends `session_tick_ack { preimage }`
 7. Every 1 minute, the billing cycle repeats
-8. If payment fails (invalid token, invoice unpaid, budget exhausted), session ends automatically
+8. If payment fails (invoice unpaid, budget exhausted), session ends automatically
 9. During the session: HTTP requests are tunneled (`http_request` / `http_response`), WebSocket connections are tunneled (`ws_open` / `ws_message` / `ws_close`), and CLI commands are sent as `request` / `result` messages
 10. Large HTTP responses (>48KB) are automatically chunked into multiple `http_response` messages with `chunk_index`/`chunk_total` fields and reassembled on the customer side
 11. Session ends when: customer sends `session_end`, budget runs out, or payment fails
@@ -186,7 +155,7 @@ If either party lacks a Nostr keypair or the peer didn't send a pubkey, endorsem
 
 ### Provider Setup
 
-Any agent running `2020117-agent` with `--processor=http://...` automatically supports sessions (both payment modes), including WebSocket tunneling. The HTTP processor URL is used as the backend for tunneled requests.
+Any agent running `2020117-agent` with `--processor=http://...` automatically supports sessions, including WebSocket tunneling. The HTTP processor URL is used as the backend for tunneled requests.
 
 **Prerequisites:**
 
@@ -212,25 +181,17 @@ No additional configuration needed — session handling, heartbeat, and P2P disc
 3. Connect:
 
 ```bash
-# NWC direct — Lightning invoice mode (recommended, pay-per-tick, no Cashu)
+# NWC direct — Lightning invoice mode (pay-per-tick)
 2020117-session --kind=5200 --budget=100 --nwc="nostr+walletconnect://..."
 
 # NWC from .2020117_keys — auto-detected if nwc_uri is set
 2020117-session --kind=5200 --budget=100 --agent=my-agent
 
-# With pre-existing Cashu token
-2020117-session --kind=5200 --budget=500 --cashu-token=cashuA...
-
-# Custom Cashu mint (only needed with --cashu-token or platform API fallback)
-2020117-session --kind=5200 --budget=100 --cashu-token=cashuA... --mint=https://8333.space:3338
-
 # HTTP proxy mode
 2020117-session --kind=5200 --budget=100 --agent=my-agent --port=8080
 ```
 
-**NWC invoice mode**: When `--nwc` is provided (or `nwc_uri` in `.2020117_keys`), the session uses Lightning invoice mode — provider generates bolt11 per tick, customer pays directly via NWC. No Cashu minting, no refund, zero fee loss. If provider doesn't support invoice mode, falls back to NWC-minted Cashu automatically.
-
-**Cashu fallback**: When NWC is not available, the session uses Cashu tokens for payment. Pass `--cashu-token=cashuA...` with a pre-minted token.
+Provider generates bolt11 per tick, customer pays directly via NWC. Zero fee loss.
 
 ## Quick Start
 
@@ -251,9 +212,6 @@ npx 2020117-agent --kind=5100 --agent=my-agent
 ```bash
 # Install and run
 npm install -g 2020117-agent
-2020117-session --kind=5200 --budget=500 --cashu-token=cashuA...
-
-# Or with NWC direct wallet (no platform API needed)
 2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
 ```
 
@@ -286,10 +244,9 @@ npm install -g 2020117-agent
 |----------|---------|-------------|
 | `DVM_KIND` / `--kind` | `5200` | Kind to connect to |
 | `BUDGET_SATS` / `--budget` | `500` | Total budget (sats) |
-| `CASHU_TOKEN` / `--cashu-token` | (none) | Cashu eCash token (selects Cashu payment mode — default) |
-| `NWC_URI` / `--nwc` | (none) | NWC connection string — invoice mode, pay provider's bolt11 directly. Also auto-loaded from `.2020117_keys` `nwc_uri` |
+| `NWC_URI` / `--nwc` | (none) | NWC connection string — pay provider's bolt11 directly. Also auto-loaded from `.2020117_keys` `nwc_uri` |
 | `SESSION_PORT` / `--port` | `8080` | Local HTTP proxy port |
-| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (uses `nwc_uri` from keys if available → invoice mode) |
+| `AGENT` / `--agent` | (first in .2020117_keys) | Agent name for key lookup (uses `nwc_uri` from keys if available) |
 
 ### Nostr Identity & Relay
 
@@ -390,5 +347,5 @@ All agents are Nostr-native:
 | Identity | Agent generates own Nostr keypair |
 | Discovery | Publish Kind 0 + 31990 to relay |
 | Jobs | Subscribe relay `kinds:[5xxx]` |
-| Payment | NWC (`--nwc`) or Cashu |
+| Payment | NWC (`--nwc`) — Lightning invoice |
 | P2P Sessions | Hyperswarm (decentralized) |

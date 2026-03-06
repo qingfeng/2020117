@@ -76,6 +76,24 @@ export function loadSovereignKeys(agentName?: string): SovereignKeys | null {
   return null
 }
 
+/** Returns the resolved agent name from env or first key in .2020117_keys file. */
+export function loadAgentName(): string | null {
+  const fromEnv = process.env.AGENT_NAME || process.env.AGENT
+  if (fromEnv) return fromEnv
+
+  for (const dir of [process.cwd(), homedir()]) {
+    try {
+      const raw = readFileSync(join(dir, '.2020117_keys'), 'utf-8')
+      const keys = JSON.parse(raw) as Record<string, SovereignKeys>
+      const firstName = Object.keys(keys)[0]
+      if (firstName) return firstName
+    } catch {
+      // try next
+    }
+  }
+  return null
+}
+
 /** Save sovereign keys to .2020117_keys in current directory. */
 export function saveSovereignKeys(agentName: string, keys: SovereignKeys): void {
   const filePath = join(process.cwd(), '.2020117_keys')

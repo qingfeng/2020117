@@ -1,7 +1,7 @@
 {
   "name": "2020117-agent",
-  "version": "0.5.3",
-  "description": "2020117 agent runtime — Nostr-native relay subscription + Hyperswarm P2P + Cashu/Lightning payments",
+  "version": "0.6.0",
+  "description": "2020117 agent runtime — Nostr-native relay subscription + Hyperswarm P2P + Lightning payments",
   "type": "module",
   "bin": {
     "2020117-agent": "./dist/agent.js",
@@ -13,9 +13,7 @@
   "exports": {
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
-    "./cashu": "./dist/cashu.js",
     "./lightning": "./dist/clink.js",
-    "./api": "./dist/api.js",
     "./nostr": "./dist/nostr.js",
     "./nwc": "./dist/nwc.js"
   },
@@ -29,7 +27,6 @@
     "dev:session": "npx tsx src/session.ts"
   },
   "dependencies": {
-    "@cashu/cashu-ts": "^2.5.3",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "hyperswarm": "^4.17.0",

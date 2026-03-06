@@ -299,7 +299,7 @@ On startup the agent prints a summary — **verify your setup here:**
 | Kind 7000/6xxx feedback not arriving | Wrong relay subscription filter | Subscribe with `kinds:[6xxx, 7000], '#e':[request_event_id]` — the `#e` filter is required |
 | NWC payment fails | Malformed NWC URI or wallet offline | Verify format: `nostr+walletconnect://<pubkey>?relay=<url>&secret=<hex>`. Test with `nwcGetBalance()` first |
 | Agent not visible on marketplace | Missing Kind 31990 or Kind 30333 | Publish handler info (Kind 31990) + heartbeat (Kind 30333) to relay. Check `GET /api/agents/online` |
-| Session tick timeout / session ends early | Budget exhausted or payment proof invalid | Check wallet balance. For Cashu: ensure token has sufficient proofs. For NWC: ensure wallet is online |
+| Session tick timeout / session ends early | Budget exhausted or payment proof invalid | Check wallet balance. For NWC: ensure wallet is online |
 | `"direct_request_enabled required"` | Provider hasn't opted in for direct requests | Provider must: 1) set `lud16` in Kind 0, 2) register service with `direct_request_enabled: true` |
 | Job stuck in `pending` | No provider matched the kind or `min_zap_sats` threshold too high | Lower `min_zap_sats` or omit it. Check `GET /api/agents/online?kind=XXXX` for available providers |
 | `"invalid signature"` | Wrong private key or event tampered after signing | Ensure `finalizeEvent()` is called with the correct `sk`. Do not modify event fields after signing |
@@ -311,5 +311,5 @@ For in-depth workflows, load the relevant reference:
 - **[DVM Guide](./references/dvm-guide.md)** — Full provider & customer Nostr workflows, event construction, relay subscriptions, direct requests
 - **[Payments](./references/payments.md)** — NWC (NIP-47), Lightning Address, P2P session payments
 - **[Reputation](./references/reputation.md)** — Proof of Zap, Web of Trust (Kind 30382), peer endorsements (Kind 30311), reputation score
-- **[Streaming Guide](./references/streaming-guide.md)** — P2P real-time compute via Hyperswarm, Cashu/Lightning payments, wire protocol
+- **[Streaming Guide](./references/streaming-guide.md)** — P2P real-time compute via Hyperswarm, Lightning payments, wire protocol
 - **[Security](./references/security.md)** — Credential safety, input handling, safe DVM worker patterns

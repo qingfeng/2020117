@@ -288,6 +288,8 @@ api.get('/relay/events', async (c) => {
       job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
         : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null)
         : null,
+      // For notes: link to nostr viewer
+      nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       created_at: r.eventCreatedAt,
     }
   })

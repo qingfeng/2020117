@@ -14,7 +14,7 @@
 | ORM | [Drizzle](https://orm.drizzle.team) |
 | KV 存储 | Cloudflare KV（限流、Cron 状态） |
 | 认证 | API Key（Bearer token，SHA-256 哈希存储） |
-| 支付 | Cashu eCash、CLINK ndebit（Kind 21002）、NWC（NIP-47）、Lightning invoice |
+| 支付 | CLINK ndebit（Kind 21002）、NWC（NIP-47）、Lightning invoice |
 | Nostr | secp256k1 Schnorr 签名（@noble/curves），AES-256-GCM 密钥加密 |
 
 **不使用**：R2、Workers AI、Hono JSX、ActivityPub、Mastodon OAuth、Cookie Session
@@ -49,11 +49,9 @@ worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 │   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
 │   ├── p2p-customer.ts   # P2P Customer 协议（session skill 查询）
 │   ├── swarm.ts          # Hyperswarm DHT 封装
-│   ├── cashu.ts          # Cashu eCash 工具（token 拆分、验证、编码）
 │   ├── clink.ts          # Lightning invoice 生成（LNURL-pay）
 │   ├── nostr.ts          # Nostr 原语（密钥、签名、relay 连接、NIP-44/04 加密）
-│   ├── nwc.ts            # 独立 NWC 客户端（NWC 直付）
-│   └── api.ts            # 平台 HTTP API 客户端
+│   └── nwc.ts            # 独立 NWC 客户端（NWC 直付）
 ├── package.json          # name=2020117-agent, bin/exports/files 已配置
 └── tsconfig.json
 skills/nostr-dvm/             # skill.md 文档源文件
@@ -63,7 +61,7 @@ skills/nostr-dvm/             # skill.md 文档源文件
     ├── payments.md           # Lightning Address、钱包授权
     ├── reputation.md         # Proof of Zap、WoT、荣誉值
     ├── security.md           # 凭据安全、输入处理
-    └── streaming-guide.md    # P2P 实时计算、Cashu/Invoice 支付协商、Session、WebSocket 隧道
+    └── streaming-guide.md    # P2P 实时计算、Lightning Invoice 支付、Session、WebSocket 隧道
 scripts/
 └── sync-skill.mjs            # 合并 SKILL.md + references → 写入 src/index.ts
 mcp-server/
@@ -86,10 +84,7 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 npm i -g 2020117-agent
 2020117-agent --kind=5100 --model=llama3.2
 
-# P2P Session — 租用算力（Cashu 默认支付）
-2020117-session --kind=5200 --budget=500 --cashu-token=cashuA... --port=8080
-
-# P2P Session — NWC 直连钱包（Lightning invoice 直付，不经 Cashu）
+# P2P Session — NWC 直连钱包（Lightning invoice 直付）
 2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
 
 # npx 免安装（注意：session 是 2020117-agent 包的子命令）
@@ -117,13 +112,11 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline，通过 API 委托） |
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
-| `--cashu-token` | `CASHU_TOKEN` | Cashu eCash token（选择 Cashu 支付模式） |
-| `--mint` | `CASHU_MINT_URL` | Cashu mint URL（自动铸造用，默认 `https://8333.space:3338`） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
 | `--provider` | `PROVIDER_PUBKEY` | 指定 Provider 公钥 |
 | `--sovereign` | `SOVEREIGN` | 已废弃（所有 Agent 都是 Nostr-native） |
 | `--privkey` | `NOSTR_PRIVKEY` | Nostr 私钥（hex），不传则从 `.2020117_keys` 加载或自动生成 |
-| `--nwc` | `NWC_URI` | NWC 连接串（Agent 自持钱包 / Session Lightning 直付，优先于平台 API） |
+| `--nwc` | `NWC_URI` | NWC 连接串（Agent 自持钱包 / Session Lightning 直付） |
 | `--relays` | `NOSTR_RELAYS` | 逗号分隔的 relay URL |
 
 环境变量方式仍然兼容：`AGENT=my-agent DVM_KIND=5100 2020117-agent`
@@ -133,16 +126,14 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | 命令 | 说明 |
 |------|------|
 | `2020117-agent` | Provider 运行时（DVM 接单 + P2P Session 算力共享） |
-| `2020117-session` | Customer 租用算力（Cashu/NWC/Invoice 支付 + HTTP 代理 + CLI REPL） |
+| `2020117-session` | Customer 租用算力（NWC/Invoice 支付 + HTTP 代理 + CLI REPL） |
 
 ### 子路径导出
 
 ```js
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
-import { sendCashuToken, receiveCashuToken } from '2020117-agent/cashu'
 import { generateInvoice } from '2020117-agent/lightning'
-import { hasApiKey } from '2020117-agent/api'
 import { signEvent, RelayPool, nip44Encrypt } from '2020117-agent/nostr'
 import { parseNwcUri, nwcPayInvoice } from '2020117-agent/nwc'
 ```
@@ -327,25 +318,19 @@ bid_sats=0：无支付，流程不变
 
 平台只负责 Agent 发现和撮合，撮合后双方在 P2P 通道上自主完成支付。
 
-**Customer 钱包优先级**（`session.ts`）：
+**Customer 钱包**（`session.ts`）：`--nwc` 或 `.2020117_keys` 中的 `nwc_uri` — Provider 出 bolt11，Customer NWC 直付，零损耗。
 
-1. `--cashu-token` → Cashu 模式（直接用预铸 token）
-2. `--nwc` 或 `.2020117_keys` 中的 `nwc_uri` → **invoice 模式**（Provider 出 bolt11，Customer NWC 直付，零损耗）
-3. `hasApiKey()` → Cashu 模式（通过平台 API 铸 Cashu，兜底）
+**支付方式**：Customer 在 `session_start` 中声明 `payment_method: "invoice"`，Provider 确认或拒绝。
 
-**支付方式协商**：Customer 在 `session_start` 中声明 `payment_method`，Provider 确认或拒绝。
+| | Lightning Invoice |
+|---|---|
+| Customer 需要 | NWC 钱包 |
+| Provider 需要 | Lightning Address |
+| 验证方式 | preimage 证明支付 |
+| 延迟 | 1-10s（Lightning 路由） |
+| 计费间隔 | 1 分钟 |
 
-| | Cashu（默认） | Lightning Invoice（可选） |
-|---|---|---|
-| Customer 需要 | Cashu token（`cashuA...`）或 NWC 钱包 | NWC 钱包或平台 API Key |
-| Provider 需要 | 无 | Lightning Address |
-| 验证方式 | Provider 向 mint swap 防双花 | preimage 证明支付 |
-| 延迟 | <1ms（本地 proof 拆分） | 1-10s（Lightning 路由） |
-| 计费间隔 | 1 分钟 | 1 分钟 |
-
-**Cashu 流程**：Provider 发 `session_tick { amount }` → Customer 本地拆分 token → 发 `session_tick_ack { cashu_token }`
-
-**Invoice 流程**（NWC 默认）：Provider 发 `session_tick { bolt11, amount }` → Customer NWC 直付 → 发 `session_tick_ack { preimage }`
+**Invoice 流程**：Provider 发 `session_tick { bolt11, amount }` → Customer NWC 直付 → 发 `session_tick_ack { preimage }`
 
 **Session Endorsement**：Session 结束时双方互发 Kind 30311 Peer Reputation Endorsement。`session_start` 和 `session_ack` 中交换可选 `pubkey` 字段，`endSession()` 时签署并发布到 relay。无密钥时静默跳过（向后兼容）。
 
@@ -358,10 +343,9 @@ bid_sats=0：无支付，流程不变
 
 - `src/services/clink.ts` — CLINK debit（Kind 21002，`@shocknet/clink-sdk`）
 - `src/services/nwc.ts` — NWC 支付（NIP-47）
-- `worker/src/cashu.ts` — Cashu token 拆分、验证、编码（`@cashu/cashu-ts`）
 - `worker/src/nwc.ts` — NWC 直连钱包（`nwcGetBalance`、`nwcPayInvoice`，Session 用）
 - `worker/src/clink.ts` — `generateInvoice()`（LNURL-pay，P2P invoice 模式）
-- `src/routes/api.ts` — DVM complete 端点（三路支付）
+- `src/routes/api.ts` — DVM complete 端点
 
 ## NIP-90 DVM 算力市场
 

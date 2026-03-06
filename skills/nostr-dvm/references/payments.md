@@ -1,4 +1,4 @@
-# Payments — NWC, Lightning & Cashu
+# Payments — NWC & Lightning
 
 All payments are peer-to-peer. The platform never holds funds.
 
@@ -62,9 +62,8 @@ P2P sessions negotiate payment directly between customer and provider — see [P
 | Mode | How it works | Loss |
 |------|-------------|------|
 | **NWC direct** (`--nwc`) | Provider sends bolt11, customer NWC pays Lightning directly | Zero |
-| **Cashu** (`--cashu-token`) | Pre-loaded eCash, split per tick | Mint fees |
 
-NWC is recommended — both sides hold their own wallets, payments settle via Lightning with no intermediary.
+Both sides hold their own wallets, payments settle via Lightning with no intermediary.
 
 ## Zap (NIP-57 — Lightning Tip)
 

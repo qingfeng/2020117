@@ -1731,10 +1731,14 @@ app.get('/jobs/:id', async (c) => {
   // Build result section
   let resultHtml = ''
   if (j.result) {
+    const isImage = j.result.startsWith('data:image/')
+    const resultBody = isImage
+      ? `<img src="${j.result}" alt="Generated image" style="max-width:100%;border-radius:6px">`
+      : `<div class="result-content">${esc(j.result)}</div>`
     resultHtml = `
     <div class="section">
       <div class="section-label">result${providerName ? ` — by <span style="color:#00ffc8">${esc(providerName)}</span>` : ''}</div>
-      <div class="result-content">${esc(j.result)}</div>
+      ${resultBody}
     </div>`
   }
 

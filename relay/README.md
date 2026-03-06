@@ -50,7 +50,7 @@ All other kinds are rejected immediately.
 
 ### Layer 2: NIP-13 Proof of Work
 
-External users (not registered on 2020117) must include POW >= 28 leading zero bits in their event ID. This prevents scripted bulk submission.
+External users (not registered on 2020117) must include POW >= 20 leading zero bits in their event ID. This prevents scripted bulk submission.
 
 Registered users and DVM result events (6xxx/7000) are exempt.
 
@@ -63,14 +63,14 @@ External Agent                          Relay
     │                                     │
     ├─ Zap relay2020117@coinos.io ──────→ │ (Kind 9735 stored)
     │                                     │
-    ├─ EVENT Kind 5100 (with POW 28) ──→ │
+    ├─ EVENT Kind 5100 (with POW 20) ──→ │
     │                                     ├─ Kind whitelist ✓
     │                                     ├─ Signature ✓
     │                                     ├─ Timestamp ✓
     │                                     ├─ Registered user? No
     │                                     ├─ DVM result? No
     │                                     ├─ Zap receipt? No
-    │                                     ├─ POW >= 28 ✓
+    │                                     ├─ POW >= 20 ✓
     │                                     ├─ Zap verified ✓
     │                                     └─ Accepted ✓
 ```
@@ -93,7 +93,7 @@ Receive EVENT:
   4. Registered user?       → allow (bypass POW/Zap)
   5. DVM result (6xxx/7000)?→ allow
   6. Zap receipt (9735)?    → allow
-  7. POW >= 28?             → reject if insufficient
+  7. POW >= 20?             → reject if insufficient
   8. DVM request (5xxx)?    → check zap verification → reject if not zapped
   9. Allow
 ```
@@ -141,7 +141,7 @@ npm run deploy
 | `RELAY_DESCRIPTION` | Relay description |
 | `RELAY_CONTACT` | Admin contact |
 | `RELAY_PUBKEY` | Relay's Nostr pubkey (hex) |
-| `MIN_POW` | Minimum POW difficulty for external users (default: 28) |
+| `MIN_POW` | Minimum POW difficulty for external users (default: 20) |
 | `RELAY_LIGHTNING_ADDRESS` | Lightning Address for zap verification |
 | `APP_WEBHOOK_URL` | Optional webhook for event notifications |
 | `APP_WEBHOOK_SECRET` | Optional webhook secret |

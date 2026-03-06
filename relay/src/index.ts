@@ -26,7 +26,7 @@ export default {
           max_content_length: 102400,
           auth_required: false,
           payment_required: true,
-          min_pow_difficulty: parseInt(env.MIN_POW || '28', 10),
+          min_pow_difficulty: parseInt(env.MIN_POW || '20', 10),
           restricted_writes: true,
         },
         retention: [
@@ -186,7 +186,7 @@ function getRelayI18n(lang: string | undefined): Record<string, string> {
 function landingPage(env: Env, lang?: string): string {
   const t = getRelayI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
-  const minPow = env.MIN_POW || '28'
+  const minPow = env.MIN_POW || '20'
   const lnAddr = env.RELAY_LIGHTNING_ADDRESS || 'relay2020117@coinos.io'
 
   return `<!DOCTYPE html>

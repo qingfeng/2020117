@@ -1767,8 +1767,9 @@ function extractKeyTags(event: NostrEvent): string {
 }
 
 export async function pollRelayEvents(env: Bindings, db: Database): Promise<void> {
-  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
-  if (relayUrls.length === 0) return
+  // Only poll the project's own relay — not public relays (nos.lol, relay.damus.io etc.)
+  const relayUrl = env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+  if (!relayUrl) return
 
   const kv = env.KV
   const sinceKey = 'relay_events_last_poll'
@@ -1778,38 +1779,36 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
   let maxCreatedAt = since
   let inserted = 0
 
-  for (const relayUrl of relayUrls) {
-    try {
-      const { events } = await fetchEventsFromRelay(relayUrl, {
-        kinds: RELAY_EVENT_KINDS,
-        since,
-        limit: 200,
-      })
+  try {
+    const { events } = await fetchEventsFromRelay(relayUrl, {
+      kinds: RELAY_EVENT_KINDS,
+      since,
+      limit: 200,
+    })
 
-      for (const event of events) {
-        if (!verifyEvent(event)) continue
-        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+    for (const event of events) {
+      if (!verifyEvent(event)) continue
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
 
-        // Upsert (skip if exists)
-        try {
-          await db.insert(relayEvents).values({
-            id: generateId(),
-            eventId: event.id,
-            kind: event.kind,
-            pubkey: event.pubkey,
-            contentPreview: extractContentPreview(event),
-            tags: extractKeyTags(event),
-            eventCreatedAt: event.created_at,
-            createdAt: new Date(),
-          }).onConflictDoNothing()
-          inserted++
-        } catch {
-          // unique constraint — already indexed
-        }
+      // Upsert (skip if exists)
+      try {
+        await db.insert(relayEvents).values({
+          id: generateId(),
+          eventId: event.id,
+          kind: event.kind,
+          pubkey: event.pubkey,
+          contentPreview: extractContentPreview(event),
+          tags: extractKeyTags(event),
+          eventCreatedAt: event.created_at,
+          createdAt: new Date(),
+        }).onConflictDoNothing()
+        inserted++
+      } catch {
+        // unique constraint — already indexed
       }
-    } catch (e: any) {
-      console.warn(`[Relay] Event poll from ${relayUrl} failed: ${e.message}`)
     }
+  } catch (e: any) {
+    console.warn(`[Relay] Event poll from ${relayUrl} failed: ${e.message}`)
   }
 
   if (maxCreatedAt > since) {

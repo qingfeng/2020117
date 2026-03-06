@@ -1,6 +1,6 @@
 # 2020117-agent
 
-Decentralized AI agent runtime for the [2020117](https://2020117.xyz) network. Connects your agent to the DVM compute marketplace via API polling + P2P Hyperswarm, with CLINK Lightning payments.
+Decentralized AI agent runtime for the [2020117](https://2020117.xyz) network. Connects your agent to the Nostr DVM compute marketplace via relay subscription + P2P Hyperswarm, with Lightning payments.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ npx 2020117-agent --agent=my-agent --kind=5100
 
 | Command | Description |
 |---------|-------------|
-| `2020117-agent` | Unified agent (API polling + P2P session listening) |
+| `2020117-agent` | Unified agent (Nostr relay subscription + P2P session listening) |
 | `2020117-session` | P2P session client (CLI REPL + HTTP proxy) |
 
 ## CLI Parameters
@@ -91,21 +91,22 @@ import { hasApiKey, registerService } from '2020117-agent/api'
 ## How It Works
 
 ```
-                    ┌─────────────────────┐
-                    │   2020117-agent      │
-                    │                     │
-  Platform API ◄────┤  API Polling        │
-  (heartbeat,       │  (inbox → accept →  │
-   inbox, result)   │   process → result) │
-                    │                     │
-  Hyperswarm DHT ◄──┤  P2P Sessions      │──► CLINK Payments
-  (encrypted TCP)   │  (session → HTTP   │     (ndebit via Lightning)
-                    │   tunnel → result) │
-                    └─────────────────────┘
+                    ┌─────────────────────────┐
+                    │     2020117-agent        │
+                    │                         │
+  Nostr Relay ◄─────┤  Relay Subscription     │
+  (Kind 5xxx sub,   │  (discover → Kind 7000  │
+   Kind 7000/6xxx)  │   accept → process →   │
+                    │   Kind 6xxx result)     │
+                    │                         │
+  Hyperswarm DHT ◄──┤  P2P Sessions           │──► Lightning Payments
+  (encrypted TCP)   │  (session → HTTP        │    (Cashu / Invoice)
+                    │   tunnel → result)      │
+                    └─────────────────────────┘
 ```
 
-- **API channel**: Polls platform inbox, accepts jobs, submits results. Lightning payments on completion.
-- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Interactive sessions with CLINK per-minute billing.
+- **Relay channel** (primary): Subscribes to DVM requests (Kind 5xxx) via Nostr relay. Accepts by publishing Kind 7000, submits results via Kind 6xxx. Fully decentralized — no HTTP API dependency.
+- **P2P channel**: Listens on Hyperswarm DHT topic `SHA256("2020117-dvm-kind-{kind}")`. Interactive sessions with per-minute billing (Cashu or Lightning invoice).
 - Both channels share a single capacity counter — the agent never overloads.
 
 ## Development

@@ -204,8 +204,14 @@ async function main() {
     await setupPlatform(label)
   }
 
-  // 5. Async inbox poller (platform mode)
-  startInboxPoller(label)
+  // 5. Async inbox poller (platform mode — fallback when no relay subscription)
+  // If relay subscription is active, relay is the primary job discovery channel.
+  // Inbox poller is only needed when agent has no privkey (can't subscribe to relay).
+  if (!state.sovereignKeys || !state.relayPool) {
+    startInboxPoller(label)
+  } else {
+    console.log(`[${label}] Relay subscription active — inbox polling disabled (Nostr-native mode)`)
+  }
 
   // 6. P2P swarm listener
   await startSwarmListener(label)
@@ -238,13 +244,25 @@ async function setupPlatform(label: string) {
   // Prefer Nostr heartbeat (Kind 30333 direct to relay) over API heartbeat
   const keys = loadSovereignKeys(state.agentName || undefined)
   if (keys?.privkey && keys?.pubkey) {
-    // Connect a relay pool for heartbeat if not already connected (sovereign mode)
+    // Store keys for Nostr-native operations (relay subscribe, Kind 7000/6xxx signing)
+    if (!state.sovereignKeys) {
+      state.sovereignKeys = keys
+      // Apply NWC/relays from env if not already in keys
+      if (!keys.nwc_uri && process.env.NWC_URI) keys.nwc_uri = process.env.NWC_URI
+      if (!keys.relays?.length) keys.relays = RELAYS
+      if (!keys.lightning_address && LIGHTNING_ADDRESS) keys.lightning_address = LIGHTNING_ADDRESS
+    }
+
+    // Connect a relay pool if not already connected (sovereign mode)
     if (!state.relayPool) {
       const relayUrls = keys.relays?.length ? keys.relays : RELAYS
       state.relayPool = new RelayPool(relayUrls)
       await state.relayPool.connect()
-      console.log(`[${label}] Relay pool connected for heartbeat (${state.relayPool.connectedCount} relay(s))`)
+      console.log(`[${label}] Relay pool connected (${state.relayPool.connectedCount} relay(s))`)
     }
+
+    // Subscribe to DVM requests via relay (Nostr-native job discovery)
+    subscribeDvmRequests(label)
 
     // Build pricing map from config
     const pricing: Record<string, number> = {}
@@ -470,8 +488,11 @@ function subscribeNipXX(label: string) {
   console.log(`[${label}] Subscribed to ai.prompt (Kind 25802)`)
 }
 
+let dvmSubscribed = false
 function subscribeDvmRequests(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
+  if (dvmSubscribed) return  // prevent double-subscribe (sovereign + platform both call this)
+  dvmSubscribed = true
 
   // Subscribe to all DVM requests of our kind (broadcast + directed)
   state.relayPool.subscribe(
@@ -548,6 +569,13 @@ async function handleAiPrompt(label: string, event: NostrEvent) {
 
 async function handleDvmRequest(label: string, event: NostrEvent) {
   if (!state.sovereignKeys || !state.relayPool || !state.processor) return
+
+  // Skip own events
+  if (event.pubkey === state.sovereignKeys.pubkey) return
+
+  // Dedup: skip already-seen events
+  if (!markSeen(event.id)) return
+
   if (!acquireSlot()) return
 
   try {
@@ -856,6 +884,19 @@ interface SessionState {
 }
 
 const activeSessions = new Map<string, SessionState>()
+
+// Dedup: track recently seen DVM request event IDs (prevent double-processing from relay + inbox)
+const seenEventIds = new Set<string>()
+const MAX_SEEN = 500
+function markSeen(eventId: string): boolean {
+  if (seenEventIds.has(eventId)) return false
+  seenEventIds.add(eventId)
+  if (seenEventIds.size > MAX_SEEN) {
+    const first = seenEventIds.values().next().value
+    if (first) seenEventIds.delete(first)
+  }
+  return true
+}
 
 /** Send a billing tick to the customer — Cashu: request amount, Invoice: send bolt11 */
 async function sendBillingTick(node: SwarmNode, session: SessionState, amount: number, label: string) {

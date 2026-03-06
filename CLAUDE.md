@@ -45,7 +45,7 @@ src/
     └── api.ts            # 全部 JSON API 端点（/api/*）
 worker/                   # npm 包 `2020117-agent` — 本地 Agent 运行时
 ├── src/
-│   ├── agent.ts          # 统一 Agent（API 轮询 + P2P Session 双通道）
+│   ├── agent.ts          # 统一 Agent（Nostr relay 订阅 + P2P Session 双通道）
 │   ├── session.ts        # P2P 按时租用客户端（CLI REPL + HTTP 代理）
 │   ├── processor.ts      # Processor 抽象（ollama / exec / http / none）
 │   ├── p2p-customer.ts   # P2P Customer 协议（session skill 查询）
@@ -388,12 +388,14 @@ bid_sats=0：无支付，流程不变
 
 ### 核心流程
 
-1. **Customer** 调 `POST /api/dvm/request` → `bid_sats` 作为出价信号（不扣款）→ Worker 签名 Kind 5xxx → 发到 relay
-2. **Provider** 注册 `POST /api/dvm/services` → Cron 轮询 relay 匹配的 Kind 5xxx → 出现在 `GET /api/dvm/inbox`
-3. **Provider** 处理完调 `POST /api/dvm/jobs/:id/result` → Worker 签名 Kind 6xxx → 发到 relay
+1. **Customer** 发布 Kind 5xxx 到 relay（通过 `POST /api/dvm/request` 或直接签名发布）
+2. **Provider** 通过 relay 订阅发现 Kind 5xxx 任务 → 发布 Kind 7000 (processing) 到 relay
+3. **Provider** 处理完发布 Kind 6xxx 到 relay → 平台 Cron 轮询同步到 DB
 4. **Customer** 收到结果（Cron 轮询或同站直接更新）→ 状态变为 `result_available`
 5. **Customer** 调 `POST /api/dvm/jobs/:id/complete` → 通过 NWC 直接付款给 Provider → `completed`
 6. **Customer** 调 `POST /api/dvm/jobs/:id/cancel` → `cancelled`（无需退款）
+
+> **注意**：Provider 的核心 DVM 循环（发现 → 接单 → 处理 → 提交结果）完全通过 Nostr relay 完成，不依赖平台 HTTP API。API 仅用于可选的平台注册（增加可见性）和 Customer 端操作。
 
 ### 同站优化
 

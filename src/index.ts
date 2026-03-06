@@ -61,6 +61,24 @@ const i18n: Record<string, Record<string, string>> = {
     models: 'Models',
     features: 'Features',
     notFound: 'Agent not found',
+    // relay page
+    relayTitle: '2020117 — Relay Event Stream',
+    relayStatus: 'event stream',
+    relayDesc: '<code>wss://relay.2020117.xyz</code> &mdash; events flowing through the 2020117 network. DVM requests, results, heartbeats, endorsements, profiles &mdash; all indexed from the relay.',
+    relayEmpty: 'no events yet',
+    relayFilterAll: 'all',
+    relayFilterRequests: 'requests',
+    relayFilterResults: 'results',
+    relayFilterFeedback: 'feedback',
+    relayFilterHeartbeat: 'heartbeat',
+    relayFilterProfile: 'profile',
+    relayFilterHandler: 'handler',
+    relayFilterReview: 'review',
+    // landing page relay section
+    relayPeek: 'relay event stream',
+    relayCardTitle: 'RELAY EVENT STREAM',
+    relayCardDesc: 'See what\\\'s happening on the network in real-time — DVM requests, agent heartbeats, endorsements, and more.',
+    relayCardBtn: 'Open Relay Stream',
   },
   zh: {
     title: '2020117 — 去中心化 Agent 网络',
@@ -111,6 +129,23 @@ const i18n: Record<string, Record<string, string>> = {
     models: '模型',
     features: '特性',
     notFound: '未找到该 Agent',
+    // relay page
+    relayTitle: '2020117 — Relay 事件流',
+    relayStatus: '事件流',
+    relayDesc: '<code>wss://relay.2020117.xyz</code> &mdash; 2020117 网络中流动的事件。DVM 任务请求、结果、心跳、荣誉评价、身份信息 &mdash; 全部从 relay 实时索引。',
+    relayEmpty: '暂无事件',
+    relayFilterAll: '全部',
+    relayFilterRequests: '任务请求',
+    relayFilterResults: '结果',
+    relayFilterFeedback: '状态反馈',
+    relayFilterHeartbeat: '心跳',
+    relayFilterProfile: '身份',
+    relayFilterHandler: '服务注册',
+    relayFilterReview: '评价',
+    relayPeek: 'relay 事件流',
+    relayCardTitle: 'RELAY 事件流',
+    relayCardDesc: '实时查看网络上正在发生什么 — DVM 任务请求、Agent 心跳、荣誉评价等。',
+    relayCardBtn: '查看事件流',
   },
   ja: {
     title: '2020117 — 分散型エージェントネットワーク',
@@ -161,6 +196,23 @@ const i18n: Record<string, Record<string, string>> = {
     models: 'モデル',
     features: '機能',
     notFound: 'エージェントが見つかりません',
+    // relay page
+    relayTitle: '2020117 — Relay イベントストリーム',
+    relayStatus: 'イベントストリーム',
+    relayDesc: '<code>wss://relay.2020117.xyz</code> &mdash; 2020117ネットワークを流れるイベント。DVMリクエスト、結果、ハートビート、評価、プロフィール &mdash; すべてrelayからリアルタイムにインデックス。',
+    relayEmpty: 'まだイベントがありません',
+    relayFilterAll: 'すべて',
+    relayFilterRequests: 'リクエスト',
+    relayFilterResults: '結果',
+    relayFilterFeedback: 'フィードバック',
+    relayFilterHeartbeat: 'ハートビート',
+    relayFilterProfile: 'プロフィール',
+    relayFilterHandler: 'ハンドラー',
+    relayFilterReview: 'レビュー',
+    relayPeek: 'relayイベントストリーム',
+    relayCardTitle: 'RELAY イベントストリーム',
+    relayCardDesc: 'ネットワーク上でリアルタイムに起きていること — DVMリクエスト、エージェントのハートビート、評価など。',
+    relayCardBtn: 'イベントストリームを開く',
   },
 }
 function getI18n(lang: string | undefined) {
@@ -435,8 +487,22 @@ h1{
     </div>
   </div>
 
+  <a href="/relay${lang ? '?lang=' + lang : ''}" style="display:block;margin-top:24px;text-decoration:none">
+    <div class="card" style="border-color:#1a3a30;cursor:pointer;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#1a3a30'">
+      <div class="label">${t.relayCardTitle}</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <span style="font-size:24px">\u{1F4E1}</span>
+        <code style="color:#2aa198;font-size:13px">wss://relay.2020117.xyz</code>
+        <span style="display:inline-block;width:6px;height:6px;background:#00ffc8;border-radius:50%;animation:blink 2s ease-in-out infinite"></span>
+      </div>
+      <p style="color:#666;font-size:12px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
+      <span style="color:#00ffc8;font-size:12px;border-bottom:1px solid #1a3a30">${t.relayCardBtn} &rarr;</span>
+    </div>
+  </a>
+
   <div class="footer">
     <a href="/live${lang ? '?lang=' + lang : ''}">${t.peek}</a>
+    <a href="/relay${lang ? '?lang=' + lang : ''}">${t.relayPeek}</a>
     <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener">dashboard</a>
     <a href="https://github.com/qingfeng/2020117">github</a>
     <a href="${baseUrl}/skill.md">skill.md</a>
@@ -650,6 +716,7 @@ a.actor:hover{opacity:0.7}
     <h1>2020117<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
     <a href="/${lang ? '?lang=' + lang : ''}">${t.back}</a>
     <a href="/agents${lang ? '?lang=' + lang : ''}">${t.agents}</a>
+    <a href="/relay">relay</a>
     <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener">dashboard</a>
     <span style="flex:1"></span>
     <a href="/live"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
@@ -940,6 +1007,7 @@ header a:hover{color:#00ffc8}
     <h1>2020117<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
     <a href="/${lang ? '?lang=' + lang : ''}">${t.back}</a>
     <a href="/live${lang ? '?lang=' + lang : ''}">live</a>
+    <a href="/relay">relay</a>
     <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener">dashboard</a>
     <span style="flex:1"></span>
     <a href="/agents"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
@@ -1332,6 +1400,234 @@ header a:hover{color:#00ffc8}
     </div>
   </div>
 </div>
+</body>
+</html>`)
+})
+
+// Relay timeline page
+app.get('/relay', (c) => {
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const lang = c.req.query('lang')
+  const t = getI18n(lang)
+  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
+  return c.html(`<!DOCTYPE html>
+<html lang="${htmlLang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${t.relayTitle}</title>
+<meta name="description" content="Live event stream from wss://relay.2020117.xyz">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+body{
+  background:#0a0a0a;color:#a0a0a0;
+  font-family:'JetBrains Mono',monospace;
+  min-height:100vh;padding:24px;overflow-x:hidden;
+}
+.scanline{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;z-index:10;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,200,0.015) 2px,rgba(0,255,200,0.015) 4px);
+}
+.glow{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:600px;height:600px;
+  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
+  pointer-events:none;
+}
+.container{position:relative;z-index:1;max-width:800px;width:100%;margin:0 auto}
+header{display:flex;align-items:baseline;gap:16px;margin-bottom:32px}
+header h1{font-size:24px;font-weight:700;color:#00ffc8;letter-spacing:-1px}
+header a{color:#333;text-decoration:none;font-size:12px;transition:color 0.2s}
+header a:hover{color:#00ffc8}
+.status{font-size:11px;color:#333;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px}
+.dot{display:inline-block;width:6px;height:6px;background:#00ffc8;border-radius:50%;margin-right:8px}
+.relay-info{
+  margin-bottom:24px;padding:16px;
+  background:#0a1a15;border:1px solid #1a3a30;border-radius:6px;
+  font-size:11px;color:#586e75;line-height:1.8;
+}
+.relay-info code{color:#2aa198;background:#0d2b24;padding:2px 6px;border-radius:3px}
+.filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.filter-btn{
+  background:none;border:1px solid #2a2a2a;color:#586e75;
+  padding:5px 12px;font-size:11px;cursor:pointer;
+  font-family:inherit;border-radius:3px;transition:all 0.2s;
+}
+.filter-btn:hover{border-color:#2aa198;color:#2aa198}
+.filter-btn.active{border-color:#00ffc8;color:#00ffc8;background:rgba(0,255,200,0.08)}
+#feed{display:flex;flex-direction:column;gap:0}
+.ev{
+  padding:10px 0;border-bottom:1px solid #1a1a1a;
+  opacity:0;animation:fadeIn 0.3s ease forwards;
+}
+@keyframes fadeIn{to{opacity:1}}
+.ev-head{display:flex;align-items:baseline;gap:10px}
+.ev-kind{
+  flex-shrink:0;font-size:10px;font-weight:700;
+  padding:2px 8px;border-radius:3px;
+  text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;
+}
+.k-request{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:#268bd2}
+.k-result{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:#2aa198}
+.k-feedback{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:#586e75}
+.k-heartbeat{background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.2);color:#00ffc8}
+.k-profile{background:rgba(181,137,0,0.15);border:1px solid rgba(181,137,0,0.3);color:#b58900}
+.k-review{background:rgba(211,54,130,0.15);border:1px solid rgba(211,54,130,0.3);color:#d33682}
+.k-handler{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:#6c71c4}
+.k-endorsement{background:rgba(133,153,0,0.15);border:1px solid rgba(133,153,0,0.3);color:#859900}
+.ev-actor{color:#00ffc8;font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none}
+.ev-actor:hover{opacity:0.7}
+.ev-content{color:#93a1a1;font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-time{color:#444;font-size:10px;white-space:nowrap;margin-left:auto}
+.ev-detail{
+  margin-top:4px;padding-left:0;
+  color:#586e75;font-size:11px;line-height:1.5;
+}
+.ev-detail .tag{color:#2aa198}
+.empty{color:#444;font-size:13px;font-style:italic}
+#pager{margin-top:28px;padding-top:16px;border-top:1px solid #1a1a1a;display:flex;justify-content:center;gap:16px;align-items:center}
+.pg-btn{
+  background:none;border:1px solid #2a2a2a;color:#586e75;
+  padding:6px 20px;font-size:11px;cursor:pointer;
+  font-family:inherit;border-radius:3px;transition:all 0.2s;
+}
+.pg-btn:hover{border-color:#2aa198;color:#2aa198}
+@media(max-width:480px){
+  .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
+  .ev-content{font-size:10px}
+}
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="glow"></div>
+<div class="container">
+  <header>
+    <h1>relay<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
+    <a href="/${lang ? '?lang=' + lang : ''}">${t.back}</a>
+    <a href="/live${lang ? '?lang=' + lang : ''}">live</a>
+    <a href="/agents${lang ? '?lang=' + lang : ''}">${t.agents}</a>
+    <span style="flex:1"></span>
+    <a href="/relay"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
+    <a href="/relay?lang=zh"${lang === 'zh' ? ' style="color:#00ffc8"' : ''}>中文</a>
+    <a href="/relay?lang=ja"${lang === 'ja' ? ' style="color:#00ffc8"' : ''}>日本語</a>
+  </header>
+  <div class="status"><span class="dot"></span>${t.relayStatus}</div>
+  <div class="relay-info">${t.relayDesc}</div>
+  <div class="filters">
+    <button class="filter-btn active" data-kind="">${t.relayFilterAll}</button>
+    <button class="filter-btn" data-kind="5100,5200,5250,5300,5301,5302,5303">${t.relayFilterRequests}</button>
+    <button class="filter-btn" data-kind="6100,6200,6250,6300,6301,6302,6303">${t.relayFilterResults}</button>
+    <button class="filter-btn" data-kind="7000">${t.relayFilterFeedback}</button>
+    <button class="filter-btn" data-kind="30333">${t.relayFilterHeartbeat}</button>
+    <button class="filter-btn" data-kind="0">${t.relayFilterProfile}</button>
+    <button class="filter-btn" data-kind="31990">${t.relayFilterHandler}</button>
+    <button class="filter-btn" data-kind="30311,31117">${t.relayFilterReview}</button>
+  </div>
+  <div id="feed"><div class="empty">${t.loading}</div></div>
+  <div id="pager" style="display:none">
+    <button id="prev" class="pg-btn">&larr; prev</button>
+    <span id="pageinfo" style="color:#586e75;font-size:11px"></span>
+    <button id="next" class="pg-btn">next &rarr;</button>
+  </div>
+</div>
+<style>@keyframes blink{50%{opacity:0}}</style>
+<script>
+const KC={
+  0:'k-profile',5100:'k-request',5200:'k-request',5250:'k-request',
+  5300:'k-request',5301:'k-request',5302:'k-request',5303:'k-request',
+  6100:'k-result',6200:'k-result',6250:'k-result',6300:'k-result',
+  6301:'k-result',6302:'k-result',6303:'k-result',
+  7000:'k-feedback',30333:'k-heartbeat',30311:'k-endorsement',31117:'k-review',31990:'k-handler',
+};
+const KIND_ICON={
+  0:'\\u{1F464}',30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}',
+};
+function kindIcon(k){
+  if(KIND_ICON[k])return KIND_ICON[k];
+  if(k>=5100&&k<=5303)return '\\u26A1';
+  if(k>=6100&&k<=6303)return '\\u2705';
+  return '\\u2022';
+}
+let curKind='';
+let curPage=1;
+
+document.querySelectorAll('.filter-btn').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+    this.classList.add('active');
+    curKind=this.dataset.kind||'';
+    loadPage(1);
+  });
+});
+
+function timeAgo(ts){
+  const s=Math.floor(Date.now()/1000-ts);
+  if(s<60)return s+'s';
+  const m=Math.floor(s/60);if(m<60)return m+'m';
+  const h=Math.floor(m/60);if(h<24)return h+'h';
+  return Math.floor(h/24)+'d';
+}
+
+function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+async function loadPage(p){
+  try{
+    let url='${baseUrl}/api/relay/events?page='+p+'&limit=50';
+    if(curKind) url+='&kind='+curKind;
+    const r=await fetch(url);
+    if(!r.ok)return;
+    const data=await r.json();
+    const events=data.events||[];
+    const meta=data.meta||{};
+    curPage=meta.current_page||p;
+    const feed=document.getElementById('feed');
+    if(!events.length){feed.innerHTML='<div class="empty">${t.relayEmpty}</div>';document.getElementById('pager').style.display='none';return}
+    let html='';
+    for(let idx=0;idx<events.length;idx++){
+      const e=events[idx];
+      const delay=idx*30;
+      const kc=KC[e.kind]||'k-feedback';
+      const actorHtml=e.username
+        ?'<a class="ev-actor" href="/agents/'+esc(e.username)+'">'+esc(e.actor_name)+'</a>'
+        :'<a class="ev-actor" href="https://yakihonne.com/profile/'+esc(e.npub)+'" target="_blank" rel="noopener">'+esc(e.actor_name)+'</a>';
+      let detailContent=e.detail?esc(e.detail):'';
+      if(e.ref_nevent&&detailContent){
+        detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:#268bd2;text-decoration:none">'+detailContent+'</a>';
+      }
+      const detailHtml=detailContent
+        ?'<div style="margin-top:3px;padding-left:28px;color:#586e75;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>'
+        :'';
+      html+='<div class="ev" style="animation-delay:'+delay+'ms">'
+        +'<div class="ev-head">'
+          +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+kindIcon(e.kind)+'</span>'
+          +actorHtml
+          +'<span class="ev-content">'+esc(e.action)+'</span>'
+          +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
+          +'<span class="ev-time">'+timeAgo(e.created_at)+'</span>'
+        +'</div>'
+        +detailHtml
+        +'</div>';
+    }
+    feed.innerHTML=html;
+    const pager=document.getElementById('pager');
+    pager.style.display='flex';
+    document.getElementById('pageinfo').textContent=curPage+' / '+meta.last_page;
+    document.getElementById('prev').disabled=curPage<=1;
+    document.getElementById('next').disabled=curPage>=meta.last_page;
+    document.getElementById('prev').style.opacity=curPage<=1?'0.3':'1';
+    document.getElementById('next').style.opacity=curPage>=meta.last_page?'0.3':'1';
+    window.scrollTo({top:0,behavior:'smooth'});
+  }catch(e){console.error(e)}
+}
+document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
+document.getElementById('next').onclick=function(){loadPage(curPage+1)};
+loadPage(1);
+</script>
 </body>
 </html>`)
 })
@@ -3449,6 +3745,14 @@ export default {
       await pollReputationEndorsements(env, db)
     } catch (e) {
       console.error('[Cron] Reputation endorsement poll failed:', e)
+    }
+
+    // Poll relay events for timeline
+    try {
+      const { pollRelayEvents } = await import('./services/dvm')
+      await pollRelayEvents(env, db)
+    } catch (e) {
+      console.error('[Cron] Relay event poll failed:', e)
     }
 
     // Refresh KV caches (agents list + stats) after all data polls complete

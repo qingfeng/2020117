@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements } from '../db/schema'
+import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements, relayEvents } from '../db/schema'
 import { type NostrEvent, buildSignedEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -1708,4 +1708,119 @@ export async function advanceWorkflow(db: Database, env: Bindings, completedJobI
   }
 
   console.log(`[Workflow] ${wf.id} advanced to step ${nextStepIndex} → job ${jobId}`)
+}
+
+// --- Relay Event Stream ---
+
+const RELAY_EVENT_KINDS = [0, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
+
+const KIND_LABELS: Record<number, string> = {
+  0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
+  5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+  6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
+  6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
+  7000: 'job feedback', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
+}
+
+function extractContentPreview(event: NostrEvent): string | null {
+  if (!event.content) return null
+  // For Kind 0, parse JSON and extract name
+  if (event.kind === 0) {
+    try {
+      const p = JSON.parse(event.content)
+      return p.name ? `${p.name}${p.about ? ' — ' + p.about.slice(0, 100) : ''}` : event.content.slice(0, 200)
+    } catch { return event.content.slice(0, 200) }
+  }
+  // For Kind 30311, parse endorsement
+  if (event.kind === 30311) {
+    try {
+      const p = JSON.parse(event.content)
+      return `rating: ${p.rating || '?'}${p.comment ? ' — ' + p.comment.slice(0, 100) : ''}`
+    } catch { return event.content.slice(0, 200) }
+  }
+  // For Kind 31990 (handler info), parse name/about
+  if (event.kind === 31990) {
+    try {
+      const p = JSON.parse(event.content)
+      const name = p.name || p.display_name || ''
+      const about = p.about || ''
+      if (name) return `${name}${about ? ' — ' + about.slice(0, 100) : ''}`
+    } catch { /* not JSON */ }
+    // Fallback: check d tag for handler name
+    const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+    return dTag ? `handler: ${dTag.slice(0, 60)}` : null
+  }
+  // For Kind 7000 (feedback), no useful content
+  if (event.kind === 7000) return null
+  // For Kind 30333 (heartbeat), no useful content
+  if (event.kind === 30333) return null
+  return event.content.slice(0, 200)
+}
+
+function extractKeyTags(event: NostrEvent): string {
+  const result: Record<string, string> = {}
+  for (const tag of event.tags) {
+    if (tag[0] === 'i') result.input = (tag[1] || '').slice(0, 100)
+    if (tag[0] === 'p') result.p = tag[1] || ''
+    if (tag[0] === 'e') result.e = tag[1] || ''
+    if (tag[0] === 'status') result.status = tag[1] || ''
+    if (tag[0] === 'd') result.d = tag[1] || ''
+    if (tag[0] === 'amount') result.amount = tag[1] || ''
+    if (tag[0] === 'rating') result.rating = tag[1] || ''
+  }
+  return JSON.stringify(result)
+}
+
+export async function pollRelayEvents(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  const kv = env.KV
+  const sinceKey = 'relay_events_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 3600  // 1 hour lookback on first run
+
+  let maxCreatedAt = since
+  let inserted = 0
+
+  for (const relayUrl of relayUrls) {
+    try {
+      const { events } = await fetchEventsFromRelay(relayUrl, {
+        kinds: RELAY_EVENT_KINDS,
+        since,
+        limit: 200,
+      })
+
+      for (const event of events) {
+        if (!verifyEvent(event)) continue
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+
+        // Upsert (skip if exists)
+        try {
+          await db.insert(relayEvents).values({
+            id: generateId(),
+            eventId: event.id,
+            kind: event.kind,
+            pubkey: event.pubkey,
+            contentPreview: extractContentPreview(event),
+            tags: extractKeyTags(event),
+            eventCreatedAt: event.created_at,
+            createdAt: new Date(),
+          }).onConflictDoNothing()
+          inserted++
+        } catch {
+          // unique constraint — already indexed
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[Relay] Event poll from ${relayUrl} failed: ${e.message}`)
+    }
+  }
+
+  if (maxCreatedAt > since) {
+    await kv.put(sinceKey, String(maxCreatedAt))
+  }
+  if (inserted > 0) {
+    console.log(`[Relay] Indexed ${inserted} events (since ${since})`)
+  }
 }

@@ -381,6 +381,18 @@ export const dvmSwarmSubmissions = sqliteTable('dvm_swarm_submission', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
+// Relay 事件流表 (所有 Kind 的轻量索引)
+export const relayEvents = sqliteTable('relay_event', {
+  id: text('id').primaryKey(),
+  eventId: text('event_id').notNull().unique(),
+  kind: integer('kind').notNull(),
+  pubkey: text('pubkey').notNull(),
+  contentPreview: text('content_preview'),       // 前 200 字符
+  tags: text('tags'),                            // JSON: 关键 tag 摘要
+  eventCreatedAt: integer('event_created_at').notNull(),  // unix timestamp
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
 // 类型导出
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
@@ -410,3 +422,4 @@ export type DvmWorkflowStep = typeof dvmWorkflowSteps.$inferSelect
 export type DvmSwarm = typeof dvmSwarms.$inferSelect
 export type DvmSwarmSubmission = typeof dvmSwarmSubmissions.$inferSelect
 export type DvmEndorsement = typeof dvmEndorsements.$inferSelect
+export type RelayEvent = typeof relayEvents.$inferSelect

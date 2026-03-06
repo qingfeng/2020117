@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions } from '../db/schema'
+import { users, authProviders, groups, groupMembers, topics, comments, topicLikes, topicReposts, commentLikes, commentReposts, userFollows, nostrFollows, dvmJobs, dvmServices, dvmTrust, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions, relayEvents } from '../db/schema'
 import { generateId, generateApiKey, ensureUniqueUsername, stripHtml } from '../lib/utils'
 import { requireApiAuth } from '../middleware/auth'
 import { createNotification } from '../lib/notifications'
@@ -142,6 +142,149 @@ api.get('/stats', async (c) => {
   }
 
   return c.json(JSON.parse(cached))
+})
+
+// GET /api/relay/events — Relay 事件流（公开）
+api.get('/relay/events', async (c) => {
+  const db = c.get('db')
+  const page = Math.max(1, Number(c.req.query('page')) || 1)
+  const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 50))
+  const kindParam = c.req.query('kind')
+  const offset = (page - 1) * limit
+
+  // Support single kind (?kind=5100) or comma-separated (?kind=5100,5200)
+  let conditions
+  if (kindParam) {
+    const kinds = kindParam.split(',').map(Number).filter(n => !isNaN(n))
+    if (kinds.length === 1) {
+      conditions = eq(relayEvents.kind, kinds[0])
+    } else if (kinds.length > 1) {
+      conditions = inArray(relayEvents.kind, kinds)
+    }
+  }
+
+  const [rows, countResult] = await Promise.all([
+    db.select({
+      eventId: relayEvents.eventId,
+      kind: relayEvents.kind,
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      tags: relayEvents.tags,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    })
+      .from(relayEvents)
+      .where(conditions)
+      .orderBy(desc(relayEvents.eventCreatedAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` })
+      .from(relayEvents)
+      .where(conditions),
+  ])
+
+  const total = countResult[0]?.count || 0
+
+  // Resolve pubkeys to display names
+  const pubkeys = [...new Set(rows.map(r => r.pubkey))]
+  const pubkeyNames = new Map<string, { displayName: string | null; username: string | null; avatarUrl: string | null }>()
+  if (pubkeys.length > 0) {
+    const BATCH = 80
+    for (let i = 0; i < pubkeys.length; i += BATCH) {
+      const batch = pubkeys.slice(i, i + BATCH)
+      const userRows = await db.select({
+        nostrPubkey: users.nostrPubkey,
+        displayName: users.displayName,
+        username: users.username,
+        avatarUrl: users.avatarUrl,
+      }).from(users).where(inArray(users.nostrPubkey, batch))
+      for (const u of userRows) {
+        if (u.nostrPubkey) pubkeyNames.set(u.nostrPubkey, { displayName: u.displayName, username: u.username, avatarUrl: u.avatarUrl })
+      }
+    }
+  }
+
+  const KIND_LABELS: Record<number, string> = {
+    0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+    6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
+    6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
+    7000: 'job feedback', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
+  }
+
+  const events = rows.map(r => {
+    const user = pubkeyNames.get(r.pubkey)
+    const tags = r.tags ? JSON.parse(r.tags) : {}
+    const preview = r.contentPreview || ''
+
+    // For Kind 0 (profile), extract name from content_preview ("name — about")
+    let profileName: string | null = null
+    let profileAbout: string | null = null
+    if (r.kind === 0 && preview) {
+      const dashIdx = preview.indexOf(' — ')
+      if (dashIdx > 0) {
+        profileName = preview.slice(0, dashIdx)
+        profileAbout = preview.slice(dashIdx + 3)
+      } else {
+        profileName = preview
+      }
+    }
+
+    // For Kind 31990 (handler info), parse meaningful fields from content
+    let handlerName: string | null = null
+    if (r.kind === 31990 && preview) {
+      try {
+        const h = JSON.parse(preview)
+        handlerName = h.name || h.display_name || null
+      } catch { /* not JSON, ignore */ }
+    }
+
+    // Build human-readable action
+    let action = ''
+    const kindNum = r.kind
+    if (kindNum === 0) action = 'updated profile'
+    else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
+    else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
+    else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : `feedback: ${tags.status || 'update'}`
+    else if (kindNum === 30333) action = 'heartbeat'
+    else if (kindNum === 30311) action = 'endorsed agent'
+    else if (kindNum === 31117) action = `reviewed job (${tags.rating ? tags.rating + '/5' : ''})`
+    else if (kindNum === 31990) action = 'registered service'
+    else action = KIND_LABELS[kindNum] || `kind ${kindNum}`
+
+    // Determine best display name: DB user > profile name > pubkey short
+    const npub = pubkeyToNpub(r.pubkey)
+    const actorName = user?.displayName || user?.username || profileName || handlerName || npub.slice(0, 16) + '...'
+
+    // Build detail text (the interesting part of the event)
+    let detail = ''
+    if (kindNum === 0 && profileAbout) detail = profileAbout
+    else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
+    else if (kindNum >= 6100 && kindNum <= 6303) detail = tags.e ? `→ job ${eventIdToNevent(tags.e).slice(0, 24)}...` : (preview ? preview.slice(0, 150) : '')
+    else if (kindNum === 30333) detail = ''  // heartbeat has no interesting content
+    else if (kindNum === 30311 && preview) detail = preview
+    else if (kindNum === 31990 && handlerName) detail = handlerName
+    else if (kindNum === 7000) detail = ''
+
+    return {
+      event_id: r.eventId,
+      kind: r.kind,
+      kind_label: KIND_LABELS[r.kind] || `kind ${r.kind}`,
+      pubkey: r.pubkey,
+      npub,
+      actor_name: actorName,
+      username: user?.username || null,
+      avatar_url: user?.avatarUrl || null,
+      action,
+      detail,
+      ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
+      created_at: r.eventCreatedAt,
+    }
+  })
+
+  return c.json({
+    events,
+    meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) },
+  })
 })
 
 // ─── 公开端点：用户主页 ───

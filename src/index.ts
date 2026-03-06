@@ -1606,8 +1606,8 @@ async function loadPage(p){
         :'';
       const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
       const clickStyle=jobLink?'cursor:pointer;':'';
-      const clickAttr=jobLink?' onclick="if(!event.defaultPrevented&&event.target.tagName!==\'A\')location.href=\''+jobLink+'\'"':'';
-      html+='<div class="ev" style="'+clickStyle+'animation-delay:'+delay+'ms"'+clickAttr+'>'
+      const dataAttr=jobLink?' data-href="'+jobLink+'"':'';
+      html+='<div class="ev" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
         +'<div class="ev-head">'
           +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+kindIcon(e.kind)+'</span>'
           +actorHtml
@@ -1631,6 +1631,7 @@ async function loadPage(p){
 }
 document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
 document.getElementById('next').onclick=function(){loadPage(curPage+1)};
+document.getElementById('feed').addEventListener('click',function(ev){var t=ev.target;while(t&&t!==this){if(t.dataset&&t.dataset.href){if(ev.target.tagName==='A')return;location.href=t.dataset.href;return}t=t.parentElement}});
 loadPage(1);
 </script>
 </body>

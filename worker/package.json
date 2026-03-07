@@ -10,6 +10,11 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qingfeng/2020117",
+    "directory": "worker"
+  },
   "exports": {
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",

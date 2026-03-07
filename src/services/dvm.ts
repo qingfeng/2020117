@@ -297,6 +297,21 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
           const wasUpdated = job.status === 'result_available' ? ' (updated)' : ''
           console.log(`[DVM] Job ${job.id} → result_available${wasUpdated} (provider: ${event.pubkey.slice(0, 8)}...${bolt11 ? ', has bolt11' : ''}${laTag ? ', has lightning_address' : ''})`)
 
+          // Mark provider job as completed (if local provider has a matching record)
+          const providerJob = await db.select({ id: dvmJobs.id, status: dvmJobs.status })
+            .from(dvmJobs)
+            .where(and(
+              eq(dvmJobs.requestEventId, refEventId),
+              eq(dvmJobs.role, 'provider'),
+            ))
+            .limit(1)
+          if (providerJob.length > 0 && providerJob[0].status !== 'completed') {
+            await db.update(dvmJobs)
+              .set({ status: 'completed', result: event.content, resultEventId: event.id, updatedAt: new Date() })
+              .where(eq(dvmJobs.id, providerJob[0].id))
+            console.log(`[DVM] Provider job ${providerJob[0].id} → completed`)
+          }
+
           // Backfill external_dvm lightning_address if present and not yet stored
           if (laTag) {
             const extDvm = await db.select({ id: externalDvms.id, lightningAddress: externalDvms.lightningAddress })
@@ -804,12 +819,12 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
   const sinceStr = await kv.get(sinceKey)
   const since = sinceStr ? parseInt(sinceStr) : undefined
 
-  // Get local pubkeys to exclude
+  // Get local pubkeys — handle separately (upsert dvm_services instead of external_dvm)
   const localUsers = await db
-    .select({ nostrPubkey: users.nostrPubkey })
+    .select({ id: users.id, nostrPubkey: users.nostrPubkey })
     .from(users)
     .where(isNotNull(users.nostrPubkey))
-  const localPubkeys = new Set(localUsers.map(u => u.nostrPubkey!))
+  const localPubkeyToUserId = new Map(localUsers.map(u => [u.nostrPubkey!, u.id]))
 
   // Fetch Kind 31990 from all relays, dedup by event id
   const allEvents: Map<string, any> = new Map()
@@ -835,12 +850,6 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
   for (const event of events) {
     if (!verifyEvent(event)) continue
 
-    // Skip local pubkeys
-    if (localPubkeys.has(event.pubkey)) {
-      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
-      continue
-    }
-
     // Extract d tag and k tag
     const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
     const kTag = event.tags.find((t: string[]) => t[0] === 'k')?.[1]
@@ -863,6 +872,7 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
     let pricingMax: number | null = null
     let reputation: string | null = null
     let lightningAddress: string | null = null
+    let skill: string | null = null
 
     try {
       const content = JSON.parse(event.content)
@@ -870,8 +880,14 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
       picture = content.picture || content.image || null
       about = content.about || null
       if (content.pricing) {
-        pricingMin = content.pricing.min || null
-        pricingMax = content.pricing.max || null
+        // pricing can be { "5200": 10 } or { min: X, max: Y }
+        if (typeof content.pricing === 'object') {
+          const vals = Object.values(content.pricing).filter((v): v is number => typeof v === 'number')
+          if (content.pricing.min != null) pricingMin = content.pricing.min
+          else if (vals.length > 0) pricingMin = Math.min(...vals) * 1000 // sats to msats
+          if (content.pricing.max != null) pricingMax = content.pricing.max
+          else if (vals.length > 0) pricingMax = Math.max(...vals) * 1000
+        }
       }
       if (content.reputation) {
         reputation = JSON.stringify(content.reputation)
@@ -881,18 +897,67 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
       } else if (content.lud16) {
         lightningAddress = content.lud16
       }
+      if (content.skill) {
+        skill = typeof content.skill === 'string' ? content.skill : JSON.stringify(content.skill)
+      }
     } catch {
       // Content may not be JSON, use tags fallback
     }
 
-    // Upsert by (pubkey, d_tag): only update if new event is newer
+    const now = new Date()
+
+    // Local user → upsert dvm_services (auto-register service from relay)
+    const localUserId = localPubkeyToUserId.get(event.pubkey)
+    if (localUserId) {
+      const existingSvc = await db
+        .select({ id: dvmServices.id, eventId: dvmServices.eventId })
+        .from(dvmServices)
+        .where(eq(dvmServices.userId, localUserId))
+        .limit(1)
+
+      if (existingSvc.length > 0) {
+        // Update existing service with latest kinds/pricing from Kind 31990
+        await db.update(dvmServices)
+          .set({
+            kinds: JSON.stringify([kind]),
+            pricingMin,
+            pricingMax,
+            eventId: event.id,
+            active: 1,
+            ...(skill ? { skill } : {}),
+            updatedAt: now,
+          })
+          .where(eq(dvmServices.id, existingSvc[0].id))
+        console.log(`[DVM] Updated local dvm_service for user ${localUserId} (kind ${kind})`)
+      } else {
+        // Create new service record
+        await db.insert(dvmServices).values({
+          id: generateId(),
+          userId: localUserId,
+          kinds: JSON.stringify([kind]),
+          description: about,
+          pricingMin,
+          pricingMax,
+          eventId: event.id,
+          active: 1,
+          directRequestEnabled: lightningAddress ? 1 : 0,
+          ...(skill ? { skill } : {}),
+          createdAt: now,
+          updatedAt: now,
+        })
+        console.log(`[DVM] Created local dvm_service for user ${localUserId} (kind ${kind})`)
+      }
+      upsertCount++
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+      continue
+    }
+
+    // External user → upsert external_dvm
     const existing = await db
       .select({ id: externalDvms.id, eventCreatedAt: externalDvms.eventCreatedAt })
       .from(externalDvms)
       .where(and(eq(externalDvms.pubkey, event.pubkey), eq(externalDvms.dTag, dTag)))
       .limit(1)
-
-    const now = new Date()
 
     if (existing.length > 0) {
       if (event.created_at > existing[0].eventCreatedAt) {

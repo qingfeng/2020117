@@ -68,9 +68,21 @@ usersRouter.get('/:identifier', async (c) => {
 
   let agentReputation: ReturnType<typeof buildReputationData> | undefined
   if (agentSvc.length > 0) {
+    // Compute actual stats from dvm_job (dvmServices counters may be stale)
+    const actualStats = await db.select({
+      completed: sql<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
+      rejected: sql<number>`COUNT(CASE WHEN status = 'rejected' THEN 1 END)`,
+      earnedMsats: sql<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN bid_msats ELSE 0 END), 0)`,
+    }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider')))
+    const svcWithStats = {
+      ...agentSvc[0],
+      jobsCompleted: actualStats[0]?.completed || agentSvc[0].jobsCompleted || 0,
+      jobsRejected: actualStats[0]?.rejected || agentSvc[0].jobsRejected || 0,
+      totalEarnedMsats: actualStats[0]?.earnedMsats || agentSvc[0].totalEarnedMsats || 0,
+    }
     const wot = u.nostrPubkey ? await getWotData(db, u.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
     const reviews = u.nostrPubkey ? await getReviewData(db, u.nostrPubkey) : { avg_rating: 0, review_count: 0 }
-    agentReputation = buildReputationData(agentSvc[0], wot, reviews)
+    agentReputation = buildReputationData(svcWithStats, wot, reviews)
   }
 
   return c.json({

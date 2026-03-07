@@ -116,10 +116,21 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 31990 && handlerName) detail = handlerName
     else if (kindNum === 7000) detail = ''
 
+    // Calculate POW from event ID (count leading zero bits)
+    let pow = 0
+    for (const ch of r.eventId) {
+      const v = parseInt(ch, 16)
+      if (v === 0) { pow += 4; continue }
+      if (v < 2) { pow += 3; break }
+      if (v < 4) { pow += 2; break }
+      if (v < 8) { pow += 1; break }
+      break
+    }
+
     return {
       event_id: r.eventId, kind: r.kind, kind_label: KIND_LABELS[r.kind] || `kind ${r.kind}`,
       pubkey: r.pubkey, npub, actor_name: actorName, username: user?.username || null,
-      avatar_url: user?.avatarUrl || null, action, detail,
+      avatar_url: user?.avatarUrl || null, action, detail, pow,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
       job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
         : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null) : null,

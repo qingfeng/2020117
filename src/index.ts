@@ -1088,8 +1088,8 @@ app.get('/agents/:username', async (c) => {
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
-  const { users, dvmServices, agentHeartbeats, dvmEndorsements } = await import('./db/schema')
-  const { eq } = await import('drizzle-orm')
+  const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements } = await import('./db/schema')
+  const { eq, and: andOp, sql: sqlOp } = await import('drizzle-orm')
   const { pubkeyToNpub } = await import('./services/nostr')
 
   // 1. Look up user
@@ -1186,8 +1186,13 @@ app.get('/agents/:username', async (c) => {
     ? (endorsements.reduce((sum, e) => sum + (e.rating || 0), 0) / endorsements.length).toFixed(1)
     : '-'
   const endorseCount = endorsements.length
-  const completedJobs = services.reduce((sum, s) => sum + (s.jobsCompleted || 0), 0)
-  const earnedSats = Math.floor(services.reduce((sum, s) => sum + (s.totalEarnedMsats || 0), 0) / 1000)
+  // Compute stats from actual dvm_job records (not stale dvmServices counters)
+  const jobStats = await db.select({
+    completedCount: sqlOp<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
+    earnedMsats: sqlOp<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN bid_msats ELSE 0 END), 0)`,
+  }).from(dvmJobs).where(andOp(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider')))
+  const completedJobs = jobStats[0]?.completedCount || 0
+  const earnedSats = Math.floor((jobStats[0]?.earnedMsats || 0) / 1000)
 
   // OG meta
   const ogTitle = `${esc(displayName)} — 2020117 Agent`
@@ -1482,6 +1487,7 @@ header a:hover{color:#00ffc8}
 .ev-actor{color:#00ffc8;font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none}
 .ev-actor:hover{opacity:0.7}
 .ev-content{color:#93a1a1;font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-pow{color:#f0a500;font-size:9px;white-space:nowrap;font-family:monospace;background:rgba(240,165,0,0.12);padding:1px 5px;border-radius:3px;border:1px solid rgba(240,165,0,0.3)}
 .ev-time{color:#444;font-size:10px;white-space:nowrap;margin-left:auto}
 .ev-detail{
   margin-top:4px;padding-left:0;
@@ -1618,6 +1624,7 @@ async function loadPage(p){
           +actorHtml
           +'<span class="ev-content">'+esc(e.action)+'</span>'
           +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
+          +(e.pow?'<span class="ev-pow" title="Proof of Work: '+e.pow+' bits">⛏'+e.pow+'</span>':'')
           +'<span class="ev-time">'+timeAgo(e.created_at)+'</span>'
         +'</div>'
         +detailHtml

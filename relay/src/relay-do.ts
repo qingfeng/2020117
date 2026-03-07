@@ -113,14 +113,22 @@ export class RelayDO implements DurableObject {
       return
     }
 
-    // 4. POW required for social kinds (anti-spam for profile/note/contacts/deletion)
-    //    DVM protocol kinds (5xxx/6xxx/7000), heartbeat (30333), zap (9735),
-    //    and other DVM metadata (30311/31117/31990/30382/21117/21002) are exempt
-    const POW_REQUIRED_KINDS = new Set([0, 1, 3, 5, 30078])
-    if (POW_REQUIRED_KINDS.has(event.kind)) {
-      const minPow = parseInt(this.env.MIN_POW || '20', 10)
+    // 4. POW check:
+    //    - Social kinds (0/1/3/5/30078): full POW (MIN_POW, default 20)
+    //    - DVM requests (5xxx): reduced POW (10) to prevent spam while keeping agent access easy
+    //    - DVM results/feedback (6xxx/7000), heartbeat (30333), zap (9735),
+    //      and other DVM metadata (30311/31117/31990/30382/21117/21002) are exempt
+    const SOCIAL_KINDS = new Set([0, 1, 3, 5, 30078])
+    const minPow = parseInt(this.env.MIN_POW || '20', 10)
+    if (SOCIAL_KINDS.has(event.kind)) {
       if (!checkPow(event.id, minPow)) {
         this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
+        return
+      }
+    } else if (event.kind >= 5000 && event.kind <= 5999) {
+      const dvmPow = Math.min(10, minPow)
+      if (!checkPow(event.id, dvmPow)) {
+        this.sendOk(ws, event.id, false, `pow: required difficulty ${dvmPow} for DVM requests`)
         return
       }
     }

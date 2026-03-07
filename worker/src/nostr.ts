@@ -118,6 +118,42 @@ export function signEvent(template: UnsignedEvent, privkeyHex: string): NostrEve
   return { id, pubkey, created_at, kind: template.kind, tags: template.tags, content: template.content, sig }
 }
 
+/**
+ * Sign an event with NIP-13 Proof of Work.
+ * Mines a nonce tag until the event ID has `difficulty` leading zero bits.
+ */
+export function signEventWithPow(template: UnsignedEvent, privkeyHex: string, difficulty: number): NostrEvent {
+  const sk = hexToBytes(privkeyHex)
+  const pubkey = bytesToHex(schnorr.getPublicKey(sk))
+  const created_at = template.created_at || Math.floor(Date.now() / 1000)
+  const encoder = new TextEncoder()
+
+  // Remove any existing nonce tag, add ours
+  const baseTags = template.tags.filter(t => t[0] !== 'nonce')
+
+  for (let nonce = 0; ; nonce++) {
+    const tags = [...baseTags, ['nonce', String(nonce), String(difficulty)]]
+    const serialized = JSON.stringify([0, pubkey, created_at, template.kind, tags, template.content])
+    const id = bytesToHex(sha256(encoder.encode(serialized)))
+
+    if (checkPowHex(id, difficulty)) {
+      const sig = bytesToHex(schnorr.sign(hexToBytes(id), sk))
+      return { id, pubkey, created_at, kind: template.kind, tags, content: template.content, sig }
+    }
+  }
+}
+
+/** Check if a hex event ID has at least `difficulty` leading zero bits. */
+function checkPowHex(idHex: string, difficulty: number): boolean {
+  for (let i = 0; i < difficulty; i++) {
+    const byteIndex = Math.floor(i / 8)
+    const bitIndex = 7 - (i % 8)
+    const byte = parseInt(idHex.substring(byteIndex * 2, byteIndex * 2 + 2), 16)
+    if ((byte >> bitIndex) & 1) return false
+  }
+  return true
+}
+
 // --- NIP-44 Encryption (for NIP-XX messages) ---
 
 let _nip44: typeof import('nostr-tools/nip44') | null = null

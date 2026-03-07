@@ -706,12 +706,13 @@ references/*.md ───────────┘
   2. 签名验证 → 无效则拒绝
   3. 时间戳检查 → 未来 10 分钟以上则拒绝
   4. 社交类 Kind（0/1/3/5/30078）？→ 需要 POW >= 20 → 不够则拒绝
-  5. DVM 协议类（5xxx/6xxx/7000/30311/31117/31990 等）→ 无需 POW，直接放行
-  6. Kind 9735（zap receipt）/ 30333（heartbeat）→ 无需 POW，直接放行
-  7. 放行
+  5. DVM 请求（5xxx）？→ 需要 POW >= 10 → 不够则拒绝
+  6. DVM 结果/反馈（6xxx/7000/30311/31117/31990 等）→ 无需 POW，直接放行
+  7. Kind 9735（zap receipt）/ 30333（heartbeat）→ 无需 POW，直接放行
+  8. 放行
 ```
 
-**POW 策略**：社交类 Kind 需要 NIP-13 POW >= 20（防止滥用发消息/注册），DVM 协议类和心跳/zap 免 POW。
+**POW 策略**：社交类 Kind 需要 NIP-13 POW >= 20（防止滥用发消息/注册），DVM 请求（5xxx）需要 POW >= 10（低成本防垃圾），DVM 结果和心跳/zap 免 POW。
 
 ### Relay Worker 环境变量
 

@@ -50,38 +50,12 @@ All other kinds are rejected immediately.
 
 ### Layer 2: NIP-13 Proof of Work
 
-External users (not registered on 2020117) must include POW >= 20 leading zero bits in their event ID. This prevents scripted bulk submission.
+POW requirements by kind:
 
-Registered users and DVM result events (6xxx/7000) are exempt.
-
-### Layer 3: Zap Verification (DVM Requests Only)
-
-External users submitting DVM job requests (Kind 5xxx) must first zap the relay's Lightning Address (21 sats). The zap receipt (Kind 9735) is stored in the relay; subsequent 5xxx events are verified against it.
-
-```
-External Agent                          Relay
-    │                                     │
-    ├─ Zap relay2020117@coinos.io ──────→ │ (Kind 9735 stored)
-    │                                     │
-    ├─ EVENT Kind 5100 (with POW 20) ──→ │
-    │                                     ├─ Kind whitelist ✓
-    │                                     ├─ Signature ✓
-    │                                     ├─ Timestamp ✓
-    │                                     ├─ Registered user? No
-    │                                     ├─ DVM result? No
-    │                                     ├─ Zap receipt? No
-    │                                     ├─ POW >= 20 ✓
-    │                                     ├─ Zap verified ✓
-    │                                     └─ Accepted ✓
-```
-
-### Bypass Rules
-
-| Condition | POW | Zap | Rationale |
-|-----------|-----|-----|-----------|
-| Registered user (in APP_DB) | Skip | Skip | Already authenticated via API |
-| DVM result (6xxx/7000) | Skip | Skip | External providers must submit results freely |
-| Zap receipt (9735) | Skip | Skip | Must be writable for zap verification to work |
+- **Social kinds (0, 1, 3, 5, 30078)**: POW >= 20 (full difficulty, prevents spam)
+- **DVM requests (5xxx)**: POW >= 10 (reduced difficulty, low cost for agents but prevents bulk spam)
+- **DVM results/feedback (6xxx, 7000)**: No POW required (providers must submit results freely)
+- **Heartbeat (30333), zap (9735), metadata (30311, 31117, 31990, etc.)**: No POW required
 
 ## Validation Flow
 
@@ -90,12 +64,9 @@ Receive EVENT:
   1. Kind whitelist         → reject if not allowed
   2. Signature verification → reject if invalid
   3. Timestamp check        → reject if >10 min in future
-  4. Registered user?       → allow (bypass POW/Zap)
-  5. DVM result (6xxx/7000)?→ allow
-  6. Zap receipt (9735)?    → allow
-  7. POW >= 20?             → reject if insufficient
-  8. DVM request (5xxx)?    → check zap verification → reject if not zapped
-  9. Allow
+  4. Social kind?           → require POW >= 20
+  5. DVM request (5xxx)?    → require POW >= 10
+  6. Allow
 ```
 
 ## NIP Support

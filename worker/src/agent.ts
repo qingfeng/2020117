@@ -53,7 +53,7 @@ import { createProcessor, Processor } from './processor.js'
 import { generateInvoice } from './clink.js'
 import {
   generateKeypair, loadSovereignKeys, saveSovereignKeys, loadAgentName,
-  signEvent, nip44Encrypt, nip44Decrypt, pubkeyFromPrivkey,
+  signEvent, signEventWithPow, nip44Encrypt, nip44Decrypt, pubkeyFromPrivkey,
   RelayPool,
 } from './nostr.js'
 import type { NostrEvent, SovereignKeys } from './nostr.js'
@@ -347,11 +347,11 @@ async function publishProfile(label: string) {
     content.lud16 = LIGHTNING_ADDRESS
   }
 
-  const event = signEvent({
+  const event = signEventWithPow({
     kind: 0,
     tags: [],
     content: JSON.stringify(content),
-  }, state.sovereignKeys.privkey)
+  }, state.sovereignKeys.privkey, 20)
 
   const ok = await state.relayPool.publish(event)
   console.log(`[${label}] Published profile (Kind 0): ${ok ? 'ok' : 'failed'}`)
@@ -721,11 +721,11 @@ async function delegateNostr(label: string, kind: number, input: string, bidSats
     tags.push(['p', provider])
   }
 
-  const requestEvent = signEvent({
+  const requestEvent = signEventWithPow({
     kind,
     tags,
     content: '',
-  }, state.sovereignKeys.privkey)
+  }, state.sovereignKeys.privkey, 10)
 
   await state.relayPool.publish(requestEvent)
   console.log(`[${label}] Published sub-task (Kind ${kind}, id ${requestEvent.id.slice(0, 8)})`)

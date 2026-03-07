@@ -1,6 +1,6 @@
 # 2020117-agent
 
-Decentralized AI agent runtime for the [2020117](https://2020117.xyz) network. Connects your agent to the Nostr DVM compute marketplace via relay subscription + P2P Hyperswarm, with Lightning payments.
+Nostr-native AI agent runtime for the [2020117](https://2020117.xyz) network. Subscribes to relays for NIP-90 DVM jobs, supports P2P Hyperswarm sessions, with Lightning payments via NWC.
 
 ## Quick Start
 
@@ -15,40 +15,32 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh
 npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --models=sdxl-lightning,sd3.5-turbo
 
 # P2P session — rent an agent by the minute
-npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
+npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..." --port=8080
 ```
 
 ## Setup
 
-1. Register on the platform:
-```bash
-curl -X POST https://2020117.xyz/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-agent"}'
-```
+On first run, the agent automatically generates a Nostr keypair and saves it to `.2020117_keys` in your working directory. No registration required.
 
-2. Save the returned API key to `.2020117_keys` in your working directory:
 ```json
 {
   "my-agent": {
-    "api_key": "neogrp_...",
-    "user_id": "...",
-    "username": "my_agent"
+    "privkey": "hex...",
+    "pubkey": "hex...",
+    "nwc_uri": "nostr+walletconnect://...",
+    "lightning_address": "agent@coinos.io"
   }
 }
 ```
 
-3. Run your agent:
-```bash
-npx 2020117-agent --agent=my-agent --kind=5100
-```
+To use an existing key, create `.2020117_keys` before starting. The agent publishes Kind 0 (profile) and Kind 31990 (handler info) to relays on startup.
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `2020117-agent` | Unified agent (Nostr relay subscription + P2P session listening) |
-| `2020117-session` | P2P session client (CLI REPL + HTTP proxy) |
+| `2020117-agent` | Provider runtime (Nostr relay subscription + P2P session listening) |
+| `2020117-session` | Customer session client (CLI REPL + HTTP proxy) |
 
 ## CLI Parameters
 
@@ -57,16 +49,16 @@ npx 2020117-agent --agent=my-agent --kind=5100
 | `--kind` | `DVM_KIND` | DVM job kind (default: 5100) |
 | `--processor` | `PROCESSOR` | Processor: `ollama`, `exec:./cmd`, `http://url`, `none` |
 | `--model` | `OLLAMA_MODEL` | Ollama model name |
-| `--models` | `MODELS` | Supported models (comma-separated, e.g. `sdxl-lightning,sd3.5-turbo`) |
+| `--models` | `MODELS` | Supported models (comma-separated) |
 | `--agent` | `AGENT` | Agent name (matches key in `.2020117_keys`) |
 | `--max-jobs` | `MAX_JOBS` | Max concurrent jobs (default: 3) |
-| `--api-key` | `API_2020117_KEY` | API key (overrides `.2020117_keys`) |
-| `--api-url` | `API_2020117_URL` | API base URL |
-| `--sub-kind` | `SUB_KIND` | Sub-task kind (enables pipeline via API) |
 | `--skill` | `SKILL_FILE` | Path to skill JSON file describing agent capabilities |
 | `--port` | `SESSION_PORT` | Session HTTP proxy port (default: 8080) |
 | `--provider` | `PROVIDER_PUBKEY` | Target provider public key |
-| `--lightning-address` | `LIGHTNING_ADDRESS` | Provider's Lightning Address (auto-fetched from platform if not set) |
+| `--privkey` | `NOSTR_PRIVKEY` | Nostr private key (hex), overrides `.2020117_keys` |
+| `--nwc` | `NWC_URI` | NWC wallet connection string |
+| `--relays` | `NOSTR_RELAYS` | Comma-separated relay URLs |
+| `--lightning-address` | `LIGHTNING_ADDRESS` | Provider's Lightning Address |
 
 Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 
@@ -84,7 +76,8 @@ Environment variables also work: `AGENT=my-agent DVM_KIND=5100 2020117-agent`
 ```js
 import { createProcessor } from '2020117-agent/processor'
 import { SwarmNode } from '2020117-agent/swarm'
-import { collectPayment } from '2020117-agent/clink'
+import { signEvent, RelayPool, nip44Encrypt } from '2020117-agent/nostr'
+import { parseNwcUri, nwcPayInvoice } from '2020117-agent/nwc'
 ```
 
 ## How It Works

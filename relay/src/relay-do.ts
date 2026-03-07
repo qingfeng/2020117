@@ -15,6 +15,8 @@ interface Session {
 export class RelayDO implements DurableObject {
   private sessions = new Map<WebSocket, Session>()
   private env: Env
+  private registeredPubkeys = new Set<string>()
+  private pubkeyCacheExpiry = 0
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
@@ -113,23 +115,30 @@ export class RelayDO implements DurableObject {
       return
     }
 
-    // 4. POW check:
+    // 4. Registered user check — skip POW for platform users
+    const isRegistered = await this.isRegisteredPubkey(event.pubkey)
+
+    // 5. POW check (skip for registered users):
     //    - Social kinds (0/1/3/5/30078): full POW (MIN_POW, default 20)
-    //    - DVM requests (5xxx): reduced POW (10) to prevent spam while keeping agent access easy
-    //    - DVM results/feedback (6xxx/7000), heartbeat (30333), zap (9735),
-    //      and other DVM metadata (30311/31117/31990/30382/21117/21002) are exempt
-    const SOCIAL_KINDS = new Set([0, 1, 3, 5, 30078])
-    const minPow = parseInt(this.env.MIN_POW || '20', 10)
-    if (SOCIAL_KINDS.has(event.kind)) {
-      if (!checkPow(event.id, minPow)) {
-        this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
-        return
-      }
-    } else if (event.kind >= 5000 && event.kind <= 5999) {
-      const dvmPow = Math.min(10, minPow)
-      if (!checkPow(event.id, dvmPow)) {
-        this.sendOk(ws, event.id, false, `pow: required difficulty ${dvmPow} for DVM requests`)
-        return
+    //    - Exempt (zero POW): DVM results (6xxx), feedback (7000), heartbeat (30333), zap (9735)
+    //    - Everything else: reduced POW (10) — DVM requests (5xxx), endorsements (30311), etc.
+    if (!isRegistered) {
+      const SOCIAL_KINDS = new Set([0, 1, 3, 5, 30078])
+      const EXEMPT_KINDS = new Set([9735, 30333])  // zap, heartbeat
+      const isExempt = EXEMPT_KINDS.has(event.kind) ||
+        (event.kind >= 6000 && event.kind <= 6999) || event.kind === 7000
+      const minPow = parseInt(this.env.MIN_POW || '20', 10)
+      if (SOCIAL_KINDS.has(event.kind)) {
+        if (!checkPow(event.id, minPow)) {
+          this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
+          return
+        }
+      } else if (!isExempt) {
+        const lowPow = Math.min(10, minPow)
+        if (!checkPow(event.id, lowPow)) {
+          this.sendOk(ws, event.id, false, `pow: required difficulty ${lowPow}`)
+          return
+        }
       }
     }
 
@@ -234,6 +243,35 @@ export class RelayDO implements DurableObject {
     }
 
     return true
+  }
+
+  // --- Registered User Check (APP_DB) ---
+
+  private async isRegisteredPubkey(pubkey: string): Promise<boolean> {
+    // Check cache first (refresh every 5 minutes)
+    const now = Date.now()
+    if (now < this.pubkeyCacheExpiry && this.registeredPubkeys.size > 0) {
+      return this.registeredPubkeys.has(pubkey)
+    }
+
+    // Refresh cache from APP_DB
+    try {
+      const result = await this.env.APP_DB.prepare(
+        'SELECT nostr_pubkey FROM user WHERE nostr_pubkey IS NOT NULL'
+      ).all<{ nostr_pubkey: string }>()
+
+      this.registeredPubkeys.clear()
+      for (const row of result.results) {
+        if (row.nostr_pubkey) this.registeredPubkeys.add(row.nostr_pubkey)
+      }
+      this.pubkeyCacheExpiry = now + 5 * 60 * 1000  // 5 min TTL
+    } catch (e) {
+      console.error('[Relay] Failed to load registered pubkeys:', e)
+      // On error, don't bypass POW
+      return false
+    }
+
+    return this.registeredPubkeys.has(pubkey)
   }
 
   // --- Subscription Persistence (Hibernation API) ---

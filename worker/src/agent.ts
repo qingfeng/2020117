@@ -600,7 +600,7 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     // Publish reputation endorsement (Kind 30311) for customer
     try {
-      const endorsementEvent = signEvent({
+      const endorsementEvent = signEventWithPow({
         kind: 30311,
         tags: [
           ['d', event.pubkey],
@@ -612,7 +612,7 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
           rating: 5,
           context: { jobs_together: 1, kinds: [KIND], last_job_at: Math.floor(Date.now() / 1000) },
         }),
-      }, state.sovereignKeys.privkey)
+      }, state.sovereignKeys.privkey, 10)
       await state.relayPool.publish(endorsementEvent)
       console.log(`[${label}] Published endorsement (Kind 30311) for ${event.pubkey.slice(0, 8)}`)
     } catch (e: any) {
@@ -1167,7 +1167,7 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
   // Publish Kind 30311 endorsement for customer (best-effort)
   if (state.sovereignKeys && state.relayPool && session.customerPubkey) {
     try {
-      const endorsement = signEvent({
+      const endorsement = signEventWithPow({
         kind: 30311,
         tags: [
           ['d', session.customerPubkey],
@@ -1184,7 +1184,7 @@ function endSession(node: SwarmNode, session: SessionState, label: string) {
             last_job_at: Math.floor(Date.now() / 1000),
           },
         }),
-      }, state.sovereignKeys.privkey)
+      }, state.sovereignKeys.privkey, 10)
       state.relayPool.publish(endorsement).catch(() => {})
       console.log(`[${label}] Published endorsement for customer ${session.customerPubkey.slice(0, 8)}`)
     } catch {}

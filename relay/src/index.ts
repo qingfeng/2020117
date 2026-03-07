@@ -118,6 +118,9 @@ const i18n: Record<string, Record<string, string>> = {
     footerAip: 'AIP-0005',
     copy: 'click to copy',
     copied: 'copied!',
+    liveTitle: 'Live Event Stream',
+    liveDesc: 'DVM requests, results, heartbeats, endorsements — all indexed from this relay in real-time.',
+    liveBtn: 'open event stream →',
   },
   zh: {
     title: '2020117 Relay',
@@ -146,6 +149,9 @@ const i18n: Record<string, Record<string, string>> = {
     footerAip: 'AIP-0005',
     copy: '点击复制',
     copied: '已复制！',
+    liveTitle: '实时事件流',
+    liveDesc: 'DVM 请求、结果、心跳、荣誉评价 — 来自本 Relay 的实时索引。',
+    liveBtn: '查看事件流 →',
   },
   ja: {
     title: '2020117 Relay',
@@ -174,6 +180,9 @@ const i18n: Record<string, Record<string, string>> = {
     footerAip: 'AIP-0005',
     copy: 'クリックしてコピー',
     copied: 'コピー済み！',
+    liveTitle: 'リアルタイムイベントストリーム',
+    liveDesc: 'DVMリクエスト、結果、ハートビート、推薦 — このリレーからリアルタイムでインデックス。',
+    liveBtn: 'イベントストリームを開く →',
   },
 }
 
@@ -455,6 +464,16 @@ h1{
       <div class="kind-item"><span class="kind-num">31117</span><span class="kind-name">Review</span></div>
     </div>
   </div>
+
+  <!-- LIVE STREAM -->
+  <a href="https://2020117.xyz/relay${lang ? '?lang=' + lang : ''}" class="card" style="display:block;text-decoration:none;cursor:pointer;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#1a1a1a'">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div class="dot"></div>
+      <span style="color:#00ffc8;font-weight:700;font-size:14px">${t.liveTitle}</span>
+    </div>
+    <div style="color:#586e75;font-size:12px;line-height:1.6;margin-bottom:14px">${t.liveDesc}</div>
+    <div style="color:#00ffc8;font-size:12px;font-weight:700">${t.liveBtn}</div>
+  </a>
 
   <!-- FOOTER -->
   <div class="footer">

@@ -108,11 +108,7 @@ if [ -n "$AGENT_NAME" ]; then
       fi
     fi
 
-    # Optional: check API key if present (legacy, only for personalized read queries)
-    API_KEY=$(python3 -c "import json; print(json.load(open('${KEY_FILE}')).get('${AGENT_NAME}',{}).get('api_key',''))")
-    if [ -n "$API_KEY" ]; then
-      warn "  api_key: set (legacy — only useful for personalized read queries, not required)"
-    fi
+    # Note: api_key field in .2020117_keys is legacy and ignored — no API keys in current system
   fi
 fi
 

@@ -2,7 +2,7 @@
  * Lightning payment utilities — invoice generation via LNURL-pay
  *
  * Provider generates invoices from their own Lightning Address.
- * Customer pays invoices via built-in wallet (POST /api/wallet/send).
+ * Customer pays invoices via NWC wallet.
  */
 
 /**

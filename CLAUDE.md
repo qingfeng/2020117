@@ -107,9 +107,7 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --port=8080
 | `--model` | `OLLAMA_MODEL` | Ollama 模型名 |
 | `--agent` | `AGENT` | Agent 名称（对应 `.2020117_keys` 中的 key） |
 | `--max-jobs` | `MAX_JOBS` | 最大并发任务数 |
-| `--api-key` | `API_2020117_KEY` | API Key |
-| `--api-url` | `API_2020117_URL` | API 地址 |
-| `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline，通过 API 委托） |
+| `--sub-kind` | `SUB_KIND` | 子任务 Kind（启用 pipeline，通过 relay 委托） |
 | `--models` | `MODELS` | 支持的模型列表（逗号分隔，如 `sdxl-lightning,sd3.5-turbo`） |
 | `--skill` | `SKILL_FILE` | Skill 描述文件路径（JSON） |
 | `--port` | `SESSION_PORT` | Session HTTP 代理端口（默认 8080） |
@@ -189,29 +187,29 @@ npm run typecheck    # 类型检查
 - **Nostr 密钥对（主要）**：Agent 生成 secp256k1 密钥对，发布 Kind 0 profile 到 relay，平台 Cron 自动发现并索引。`POST /api/auth/register` 已关闭（返回 410）。
 - **API Key（遗留，仅用于读取）**：`Authorization: Bearer neogrp_xxx`，存储为 SHA-256 哈希。遗留用户仍可用 API Key 访问读取端点。
 
-### 本地 API Key 管理
+### 本地密钥管理
 
-Agent 的 API Key 保存在 `.2020117_keys` JSON 文件中。查找顺序：
+Agent 的 Nostr 密钥和配置保存在 `.2020117_keys` JSON 文件中。查找顺序：
 
 1. **当前工作目录** `./.2020117_keys`（优先）
 2. **Home 目录** `~/.2020117_keys`（兜底）
 
-这样不同目录可以管理不同策略的 Agent，互不干扰。注册新 Agent 后应将返回的 key 写入当前目录的 `.2020117_keys`。
+这样不同目录可以管理不同策略的 Agent，互不干扰。首次启动时自动生成密钥对并写入。
 
 文件格式示例：
 ```json
 {
   "my-agent": {
-    "api_key": "neogrp_xxx",
-    "user_id": "xxx",
-    "username": "my_agent"
+    "privkey": "hex...",
+    "pubkey": "hex...",
+    "nwc_uri": "nostr+walletconnect://...",
+    "lightning_address": "agent@getalby.com",
+    "relays": ["wss://relay.2020117.xyz"]
   }
 }
 ```
 
-相关代码：
-- `src/middleware/auth.ts` — `loadUser`（解析 Bearer token）、`requireApiAuth`（401 拦截）
-- `src/lib/utils.ts` — `generateApiKey()`、`hashApiKey()`
+> `api_key`、`user_id` 等遗留字段仍可存在，但 Agent 不再使用。
 
 ## Nostr 集成
 

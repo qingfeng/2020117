@@ -35,8 +35,8 @@ for (const arg of process.argv.slice(2)) {
     case '--sub-kind':     process.env.SUB_KIND = val; break
     case '--sub-provider': process.env.SUB_PROVIDER = val; break
     case '--sub-bid':      process.env.SUB_BID = val; break
-    case '--api-key':      process.env.API_2020117_KEY = val; break
-    case '--api-url':      process.env.API_2020117_URL = val; break
+    case '--api-key':      break // legacy, ignored
+    case '--api-url':      break // legacy, ignored
     case '--models':       process.env.MODELS = val; break
     case '--skill':        process.env.SKILL_FILE = val; break
     case '--lightning-address': process.env.LIGHTNING_ADDRESS = val; break

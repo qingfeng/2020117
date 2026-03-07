@@ -23,7 +23,7 @@ export interface SovereignKeys {
   nwc_uri?: string   // NWC connection string
   relays?: string[]
   lightning_address?: string
-  // backward compat with platform keys
+  // legacy fields (ignored, kept for .2020117_keys backward compat)
   api_key?: string
   user_id?: string
   username?: string

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
 const SKILL_DIR = join(ROOT, 'skills', 'nostr-dvm')
-const INDEX_PATH = join(ROOT, 'src', 'index.ts')
+const INDEX_PATH = join(ROOT, 'src', 'pages', 'skill.ts')
 
 // 1. Read SKILL.md
 let skill = readFileSync(join(SKILL_DIR, 'SKILL.md'), 'utf8')
@@ -96,7 +96,7 @@ const startIdx = indexSrc.indexOf(START_MARKER)
 const endIdx = indexSrc.indexOf(END_MARKER)
 
 if (startIdx === -1 || endIdx === -1) {
-  console.error('ERROR: Could not find GENERATED SKILL.MD markers in src/index.ts')
+  console.error('ERROR: Could not find GENERATED SKILL.MD markers in src/pages/skill.ts')
   process.exit(1)
 }
 
@@ -108,4 +108,4 @@ const newBlock = `\n  const md = \`${combined}\`\n  `
 const newSrc = before + newBlock + after
 writeFileSync(INDEX_PATH, newSrc, 'utf8')
 
-console.log('sync-skill: src/index.ts updated from skills/nostr-dvm/')
+console.log('sync-skill: src/pages/skill.ts updated from skills/nostr-dvm/')

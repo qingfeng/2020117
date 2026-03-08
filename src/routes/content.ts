@@ -62,6 +62,22 @@ content.get('/relay/events', async (c) => {
         if (u.nostrPubkey) pubkeyNames.set(u.nostrPubkey, { displayName: u.displayName, username: u.username, avatarUrl: u.avatarUrl })
       }
     }
+    // For pubkeys not found in users table, look up Kind 0 profile from relay
+    const unresolvedPubkeys = pubkeys.filter(pk => !pubkeyNames.has(pk))
+    if (unresolvedPubkeys.length > 0) {
+      for (let i = 0; i < unresolvedPubkeys.length; i += BATCH) {
+        const batch = unresolvedPubkeys.slice(i, i + BATCH)
+        const profileRows = await db.select({ pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview })
+          .from(relayEvents).where(and(inArray(relayEvents.pubkey, batch), eq(relayEvents.kind, 0)))
+        for (const p of profileRows) {
+          if (p.contentPreview) {
+            const dashIdx = p.contentPreview.indexOf(' — ')
+            const name = dashIdx > 0 ? p.contentPreview.slice(0, dashIdx) : p.contentPreview
+            pubkeyNames.set(p.pubkey, { displayName: name, username: null, avatarUrl: null })
+          }
+        }
+      }
+    }
   }
 
   const KIND_LABELS: Record<number, string> = {

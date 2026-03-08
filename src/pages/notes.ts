@@ -29,7 +29,7 @@ router.get('/notes/:eventId', async (c) => {
   const npub = pubkeyToNpub(note.pubkey)
   const nevent = eventIdToNevent(note.eventId, ['wss://relay.2020117.xyz'], note.pubkey)
 
-  // Look up author
+  // Look up author: local user first, then Kind 0 profile from relay
   let authorName = npub.slice(0, 16) + '...'
   let authorUsername = ''
   const authorResult = await db.select({
@@ -39,6 +39,47 @@ router.get('/notes/:eventId', async (c) => {
   if (authorResult.length > 0) {
     authorName = authorResult[0].displayName || authorResult[0].username || authorName
     authorUsername = authorResult[0].username || ''
+  } else {
+    // Fallback: look up Kind 0 profile event from local relay_event cache
+    const { and } = await import('drizzle-orm')
+    const profileResult = await db.select({
+      contentPreview: relayEvents.contentPreview,
+    }).from(relayEvents).where(and(eq(relayEvents.pubkey, note.pubkey), eq(relayEvents.kind, 0))).limit(1)
+    if (profileResult.length > 0 && profileResult[0].contentPreview) {
+      const dashIdx = profileResult[0].contentPreview.indexOf(' — ')
+      authorName = dashIdx > 0 ? profileResult[0].contentPreview.slice(0, dashIdx) : profileResult[0].contentPreview
+    } else {
+      // Fetch Kind 0 from external relays and cache it
+      try {
+        const { fetchEventsFromRelay } = await import('../services/relay-io')
+        const { generateId } = await import('../lib/utils')
+        const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io').split(',').map((s: string) => s.trim()).filter(Boolean)
+        let events: any[] = []
+        for (const relayUrl of relayUrls.slice(0, 3)) {
+          const result = await fetchEventsFromRelay(relayUrl, { kinds: [0], authors: [note.pubkey], limit: 1 })
+          if (result.events.length > 0) { events = result.events; break }
+        }
+        if (events.length > 0) {
+          const profile = JSON.parse(events[0].content)
+          const name = profile.display_name || profile.name || ''
+          if (name) {
+            authorName = name
+            // Cache to relay_event for future lookups
+            const preview = name + (profile.about ? ' — ' + profile.about.slice(0, 150) : '')
+            await db.insert(relayEvents).values({
+              id: generateId(),
+              eventId: events[0].id,
+              kind: 0,
+              pubkey: note.pubkey,
+              contentPreview: preview,
+              tags: JSON.stringify({}),
+              eventCreatedAt: events[0].created_at,
+              createdAt: new Date(),
+            }).onConflictDoNothing()
+          }
+        }
+      } catch { /* non-critical: fall back to npub */ }
+    }
   }
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')

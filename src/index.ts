@@ -21,6 +21,19 @@ app.use('*', async (c, next) => {
   await next()
 })
 
+// Cache headers for pages (5 min) and API (1 min)
+app.use('*', async (c, next) => {
+  await next()
+  const path = new URL(c.req.url).pathname
+  if (!c.res.headers.has('Cache-Control')) {
+    if (path.startsWith('/api/')) {
+      c.res.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60')
+    } else if (path === '/' || path.startsWith('/relay') || path.startsWith('/agents') || path.startsWith('/jobs') || path.startsWith('/notes')) {
+      c.res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300')
+    }
+  }
+})
+
 // Page routes
 app.route('/', landingPage)
 app.route('/', relayPage)

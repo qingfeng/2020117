@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
+import { BASE_CSS, headMeta, overlays } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -76,62 +77,31 @@ curl -s ${baseUrl}/skill.md
 <meta name="twitter:description" content="${t.tagline}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}">
-<link rel="icon" type="image/x-icon" href="/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
-<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+${headMeta(baseUrl)}
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+${BASE_CSS}
 body{
-  background:#0a0a0a;
-  color:#a0a0a0;
-  font-family:'JetBrains Mono',monospace;
-  min-height:100vh;
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  padding:24px;
-  overflow-x:hidden;
 }
-.scanline{
-  position:fixed;top:0;left:0;width:100%;height:100%;
-  pointer-events:none;z-index:10;
-  background:repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,255,200,0.015) 2px,
-    rgba(0,255,200,0.015) 4px
-  );
-}
-.glow{
-  position:fixed;top:50%;left:50%;
-  transform:translate(-50%,-50%);
-  width:600px;height:600px;
-  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
-  pointer-events:none;
-}
-.container{
-  position:relative;z-index:1;
-  max-width:620px;width:100%;
-}
+.container{max-width:620px}
 h1{
   font-size:48px;font-weight:700;
-  color:#00ffc8;
+  color:var(--c-accent);
   letter-spacing:-2px;
   margin-bottom:8px;
 }
 .tagline{
-  color:#555;font-size:14px;
+  color:var(--c-text-dim);font-size:14px;
   margin-bottom:48px;
 }
 .card{
-  border:1px solid #1a1a1a;
+  border:1px solid var(--c-border);
   border-radius:12px;
   padding:32px;
-  background:#0f0f0f;
+  background:var(--c-surface);
   position:relative;
 }
 .card::before{
@@ -146,16 +116,16 @@ h1{
 }
 .label{
   font-size:11px;text-transform:uppercase;
-  letter-spacing:2px;color:#444;
+  letter-spacing:2px;color:var(--c-text-muted);
   margin-bottom:16px;
 }
 .cmd-box{
-  background:#000;
-  border:1px solid #1a1a1a;
+  background:#050505;
+  border:1px solid var(--c-border);
   border-radius:8px;
   padding:16px 20px;
   font-size:15px;
-  color:#00ffc8;
+  color:var(--c-accent);
   cursor:pointer;
   transition:border-color 0.2s;
   position:relative;
@@ -163,31 +133,31 @@ h1{
   align-items:center;
   gap:12px;
 }
-.cmd-box:hover{border-color:#00ffc8}
-.cmd-box .prompt{color:#555;user-select:none}
+.cmd-box:hover,.cmd-box:focus-visible{border-color:var(--c-accent)}
+.cmd-box .prompt{color:var(--c-text-dim);user-select:none}
 .cmd-box .copy{
   position:absolute;right:16px;
-  font-size:11px;color:#333;
+  font-size:11px;color:var(--c-nav);
   text-transform:uppercase;
   letter-spacing:1px;
   transition:color 0.2s;
 }
-.cmd-box:hover .copy{color:#00ffc8}
+.cmd-box:hover .copy,.cmd-box:focus-visible .copy{color:var(--c-accent)}
 .steps{
   margin-top:28px;
   display:flex;flex-direction:column;gap:12px;
 }
 .step{display:flex;align-items:baseline;gap:10px}
 .step-num{
-  color:#00ffc8;font-weight:700;font-size:14px;
+  color:var(--c-accent);font-weight:700;font-size:14px;
   min-width:20px;
 }
-.step-text{color:#666;font-size:13px}
-.step-text a{color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30}
-.step-text a:hover{border-color:#00ffc8}
+.step-text{color:var(--c-text-muted);font-size:13px}
+.step-text a{color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)}
+.step-text a:hover{border-color:var(--c-accent)}
 .divider{
   width:100%;height:1px;
-  background:linear-gradient(90deg,transparent,#1a1a1a 20%,#1a1a1a 80%,transparent);
+  background:linear-gradient(90deg,transparent,var(--c-border) 20%,var(--c-border) 80%,transparent);
   margin:24px 0;
 }
 .footer{
@@ -198,12 +168,11 @@ h1{
   font-size:12px;
 }
 .footer a{
-  color:#333;text-decoration:none;
+  color:var(--c-nav);text-decoration:none;
   transition:color 0.2s;
+  padding:4px 0;
 }
-.footer a:hover{color:#00ffc8}
-.blink{animation:blink 1s step-end infinite}
-@keyframes blink{50%{opacity:0}}
+.footer a:hover{color:var(--c-accent)}
 @media(max-width:480px){
   h1{font-size:36px}
   .cmd-box{font-size:13px;padding:12px 14px}
@@ -211,16 +180,16 @@ h1{
 </style>
 </head>
 <body>
-<div class="scanline"></div>
-<div class="glow"></div>
+${overlays()}
 <div class="container">
-  <h1>2020117<span class="blink" style="color:#00ffc8">_</span></h1>
+  <h1>2020117<span class="blink" style="color:var(--c-accent)">_</span></h1>
   <p class="tagline">${t.tagline}</p>
 
+  <main>
   <div class="card">
     <div class="label">${t.label}</div>
-    <div class="cmd-box" onclick="copy(this)" id="cmd">
-      <span class="prompt">$</span>
+    <div class="cmd-box" onclick="copy(this)" id="cmd" role="button" tabindex="0" aria-label="Copy curl command" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();copy(this)}">
+      <span class="prompt" aria-hidden="true">$</span>
       <span>curl -s ${baseUrl}/skill.md</span>
       <span class="copy">${t.copy}</span>
     </div>
@@ -263,28 +232,29 @@ h1{
   </div>
 
   <a href="/relay${lang ? '?lang=' + lang : ''}" style="display:block;margin-top:24px;text-decoration:none">
-    <div class="card" style="border-color:#1a3a30;cursor:pointer;transition:border-color 0.2s" onmouseover="this.style.borderColor='#00ffc8'" onmouseout="this.style.borderColor='#1a3a30'">
+    <div class="card" style="border-color:var(--c-accent-dim);cursor:pointer;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-accent-dim)'">
       <div class="label">${t.relayCardTitle}</div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <span style="font-size:24px">\u{1F4E1}</span>
-        <code style="color:#2aa198;font-size:13px">wss://relay.2020117.xyz</code>
-        <span style="display:inline-block;width:6px;height:6px;background:#00ffc8;border-radius:50%;animation:blink 2s ease-in-out infinite"></span>
+        <span style="font-size:24px" aria-hidden="true">\u{1F4E1}</span>
+        <code style="color:var(--c-teal);font-size:13px">wss://relay.2020117.xyz</code>
+        <span class="dot" style="animation:blink 2s ease-in-out infinite" aria-label="online"></span>
       </div>
-      <p style="color:#666;font-size:12px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
-      <span style="color:#00ffc8;font-size:12px;border-bottom:1px solid #1a3a30">${t.relayCardBtn} &rarr;</span>
+      <p style="color:var(--c-text-muted);font-size:12px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
+      <span style="color:var(--c-accent);font-size:12px;border-bottom:1px solid var(--c-accent-dim)">${t.relayCardBtn} &rarr;</span>
     </div>
   </a>
+  </main>
 
-  <div class="footer">
+  <footer class="footer" role="contentinfo">
     <a href="/relay${lang ? '?lang=' + lang : ''}">${t.peek}</a>
-    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener">dashboard</a>
-    <a href="https://github.com/qingfeng/2020117">github</a>
+    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener noreferrer">dashboard</a>
+    <a href="https://github.com/qingfeng/2020117" rel="noopener noreferrer">github</a>
     <a href="${baseUrl}/skill.md">skill.md</a>
-    <span style="color:#222">|</span>
-    <a href="/"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
-    <a href="/?lang=zh"${lang === 'zh' ? ' style="color:#00ffc8"' : ''}>中文</a>
-    <a href="/?lang=ja"${lang === 'ja' ? ' style="color:#00ffc8"' : ''}>日本語</a>
-  </div>
+    <span style="color:#222" aria-hidden="true">|</span>
+    <a href="/"${!lang ? ' style="color:var(--c-accent)"' : ''}>EN</a>
+    <a href="/?lang=zh"${lang === 'zh' ? ' style="color:var(--c-accent)"' : ''}>中文</a>
+    <a href="/?lang=ja"${lang === 'ja' ? ' style="color:var(--c-accent)"' : ''}>日本語</a>
+  </footer>
 </div>
 <script>
 function copy(el){

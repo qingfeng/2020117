@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import type { AppContext } from '../types'
+import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -61,8 +62,8 @@ router.get('/jobs/:id', async (c) => {
   }
 
   const STATUS_COLORS: Record<string, string> = {
-    open: '#ffb000', processing: '#2aa198', result_available: '#268bd2',
-    completed: '#00ffc8', cancelled: '#666', error: '#dc322f',
+    open: 'var(--c-gold)', processing: 'var(--c-teal)', result_available: 'var(--c-blue)',
+    completed: 'var(--c-accent)', cancelled: 'var(--c-text-muted)', error: 'var(--c-red)',
   }
 
   const STATUS_LABELS: Record<string, string> = {
@@ -109,13 +110,16 @@ router.get('/jobs/:id', async (c) => {
       const preview = re.contentPreview ? re.contentPreview.slice(0, 500) : '(no content)'
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
-<style>body{background:#0a0a0a;color:#93a1a1;font-family:'SF Mono',monospace;margin:0;padding:40px 20px}
-.c{max-width:640px;margin:0 auto}.label{color:#586e75;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+${headMeta(baseUrl)}
+<style>${BASE_CSS}
+.c{max-width:640px;margin:0 auto}.label{color:var(--c-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
 .val{color:#93a1a1;font-size:13px;margin-bottom:20px;word-break:break-all}
 .kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;
-background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:#268bd2;margin-bottom:20px}
-a{color:#00ffc8;text-decoration:none}a:hover{opacity:0.7}
-h1{color:#fdf6e3;font-size:18px;margin:0 0 20px}</style></head><body><div class="c">
+background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue);margin-bottom:20px}
+a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
+h1{color:#fdf6e3;font-size:18px;margin:0 0 20px}</style></head><body>
+${overlays()}
+<main class="c">
 <div style="margin-bottom:20px"><a href="/relay">&larr; back to relay</a></div>
 <h1>relay event</h1>
 <span class="kind">${esc(kindLabel)}</span>
@@ -125,8 +129,8 @@ h1{color:#fdf6e3;font-size:18px;margin:0 0 20px}</style></head><body><div class=
 <div class="label">content</div><div class="val" style="white-space:pre-wrap">${esc(preview)}</div>
 ${tags.input ? `<div class="label">input</div><div class="val">${esc(String(tags.input).slice(0, 500))}</div>` : ''}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
-<div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:12px;color:#586e75">view on nostr &rarr;</a></div>
-</div></body></html>`)
+<div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:12px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
+</main></body></html>`)
     }
     // Not found locally — redirect to nostr viewer
     const nevent404 = eventIdToNevent(jobId, ['wss://relay.2020117.xyz'])
@@ -136,7 +140,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const j = result[0]
   const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
   const bidSats = j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0
-  const statusColor = STATUS_COLORS[j.status] || '#666'
+  const statusColor = STATUS_COLORS[j.status] || 'var(--c-text-muted)'
   const statusLabel = STATUS_LABELS[j.status] || j.status
   let customerName = j.customerName || j.customerUsername || 'unknown'
   // If customer name is a placeholder (nostr:xxx...), try to resolve from Kind 0
@@ -198,7 +202,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
       : `<div class="result-content">${esc(j.result)}</div>`
     resultHtml = `
     <div class="section">
-      <div class="section-label">result${providerName ? ` \u2014 by <span style="color:#00ffc8">${esc(providerName)}</span>` : ''}</div>
+      <div class="section-label">result${providerName ? ` \u2014 by <span style="color:var(--c-accent)">${esc(providerName)}</span>` : ''}</div>
       ${resultBody}
     </div>`
   }
@@ -223,13 +227,13 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
           }
         }
         const reasonStr = r.reason ? ` \u2014 ${esc(r.reason)}` : ''
-        const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:#444;font-size:10px">[view on nostr]</a>` : ''
+        const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:var(--c-text-muted);font-size:10px">[view on nostr]</a>` : ''
         const timeStr = r.rejected_at ? new Date(r.rejected_at).toISOString().slice(0, 16).replace('T', ' ') : ''
-        return `<div style="padding:6px 0;border-bottom:1px solid #1a1a1a;font-size:11px"><span style="color:#dc322f">rejected</span> <span style="color:#586e75">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:#333;float:right">${timeStr}</span></div>`
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--c-border);font-size:11px"><span style="color:var(--c-red)">rejected</span> <span style="color:var(--c-text-dim)">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:var(--c-nav);float:right">${timeStr}</span></div>`
       }))
       rejectionsHtml = `
       <div class="section" style="margin-top:20px">
-        <div class="section-label" style="color:#dc322f55">previous attempts (${rejections.length})</div>
+        <div class="section-label" style="color:color-mix(in srgb,var(--c-red) 33%,transparent)">previous attempts (${rejections.length})</div>
         ${items.join('')}
       </div>`
     }
@@ -253,58 +257,14 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
 <meta name="twitter:description" content="${ogDesc}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}/jobs/${j.id}">
-<link rel="icon" type="image/x-icon" href="/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
-<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+${headMeta(baseUrl)}
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
-body{
-  background:#0a0a0a;
-  color:#a0a0a0;
-  font-family:'JetBrains Mono',monospace;
-  min-height:100vh;
-  padding:24px;
-  overflow-x:hidden;
-}
-.scanline{
-  position:fixed;top:0;left:0;width:100%;height:100%;
-  pointer-events:none;z-index:10;
-  background:repeating-linear-gradient(
-    0deg,transparent,transparent 2px,
-    rgba(0,255,200,0.015) 2px,rgba(0,255,200,0.015) 4px
-  );
-}
-.glow{
-  position:fixed;top:50%;left:50%;
-  transform:translate(-50%,-50%);
-  width:600px;height:600px;
-  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
-  pointer-events:none;
-}
-.container{
-  position:relative;z-index:1;
-  max-width:720px;width:100%;
-  margin:0 auto;
-}
-header{
-  display:flex;align-items:baseline;gap:16px;
-  margin-bottom:32px;
-}
-header h1{
-  font-size:24px;font-weight:700;
-  color:#00ffc8;letter-spacing:-1px;
-}
-header a{
-  color:#333;text-decoration:none;font-size:12px;
-  transition:color 0.2s;
-}
-header a:hover{color:#00ffc8}
+${BASE_CSS}
 .job-card{
-  border:1px solid #1a1a1a;
+  border:1px solid var(--c-border);
   border-radius:12px;
   padding:24px 28px;
-  background:#0f0f0f;
+  background:var(--c-surface);
   position:relative;
 }
 .job-card::before{
@@ -316,6 +276,10 @@ header a:hover{color:#00ffc8}
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
   mask-composite:xor;-webkit-mask-composite:xor;
   padding:1px;border-radius:12px;
+}
+.job-card:focus-visible{
+  outline:2px solid var(--c-accent);
+  outline-offset:2px;
 }
 .job-meta{
   display:flex;flex-wrap:wrap;align-items:center;gap:10px;
@@ -332,12 +296,12 @@ header a:hover{color:#00ffc8}
 }
 .kind-tag{
   display:inline-block;
-  background:#0a1a15;
-  border:1px solid #1a3a30;
+  background:var(--c-accent-bg);
+  border:1px solid var(--c-accent-dim);
   border-radius:4px;
   padding:3px 10px;
   font-size:11px;
-  color:#00ffc8;
+  color:var(--c-accent);
 }
 .sats-tag{
   display:inline-block;
@@ -345,19 +309,15 @@ header a:hover{color:#00ffc8}
   background:rgba(255,176,0,0.12);
   border:1px solid rgba(255,176,0,0.3);
   border-radius:4px;
-  color:#ffb000;font-size:11px;font-weight:700;
+  color:var(--c-gold);font-size:11px;font-weight:700;
 }
 .customer{
-  font-size:12px;color:#586e75;
+  font-size:12px;color:var(--c-text-dim);
   margin-bottom:16px;
+  overflow-wrap:break-word;word-break:break-word;
 }
-.customer span{color:#00ffc8;font-weight:700}
+.customer span{color:var(--c-accent);font-weight:700}
 .section{margin-top:16px}
-.section-label{
-  font-size:10px;color:#444;
-  text-transform:uppercase;letter-spacing:1.5px;
-  margin-bottom:8px;
-}
 .input-content{
   color:#93a1a1;font-size:13px;
   line-height:1.7;
@@ -365,22 +325,21 @@ header a:hover{color:#00ffc8}
   word-break:break-word;
 }
 .result-content{
-  color:#2aa198;font-size:13px;
+  color:var(--c-teal);font-size:13px;
   line-height:1.7;
   white-space:pre-line;
   word-break:break-word;
   padding:12px 16px;
-  border-left:2px solid #2aa198;
+  border-left:2px solid var(--c-teal);
   background:rgba(42,161,152,0.05);
   border-radius:0 6px 6px 0;
 }
 .timestamp{
   margin-top:20px;
   padding-top:16px;
-  border-top:1px solid #1a1a1a;
-  font-size:11px;color:#333;
+  border-top:1px solid var(--c-border);
+  font-size:11px;color:var(--c-nav);
 }
-@keyframes blink{50%{opacity:0}}
 @media(max-width:480px){
   .job-card{padding:16px 18px}
   .input-content,.result-content{font-size:12px}
@@ -388,25 +347,20 @@ header a:hover{color:#00ffc8}
 </style>
 </head>
 <body>
-<div class="scanline"></div>
-<div class="glow"></div>
+${overlays()}
 <div class="container">
-  <header>
-    <h1>2020117<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
-    <a href="/">back</a>
-    <a href="/relay">relay</a>
-    <a href="/agents">agents</a>
-  </header>
+  ${headerNav({ currentPath: '/jobs/' + jobId, lang: undefined })}
 
-  <div class="job-card">
+  <main>
+  <article class="job-card">
     <div class="job-meta">
-      <span class="status-tag" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}55">${statusLabel}</span>
+      <span class="status-tag" style="background:color-mix(in srgb,${statusColor} 13%,transparent);color:${statusColor};border:1px solid color-mix(in srgb,${statusColor} 33%,transparent)">${statusLabel}</span>
       <span class="kind-tag">${esc(kindLabel)}</span>
       <span class="sats-tag">\u26A1 ${bidSats} sats</span>
     </div>
 
-    <div class="customer">by ${j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)}</div>
-    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>`}</div>` : ''}
+    <div class="customer">by ${j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)}</div>
+    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>`}</div>` : ''}
 
     ${j.input ? `<div class="section">
       <div class="section-label">input</div>
@@ -418,7 +372,8 @@ header a:hover{color:#00ffc8}
     ${rejectionsHtml}
 
     <div class="timestamp">${createdDate}</div>
-  </div>
+  </article>
+  </main>
 </div>
 </body>
 </html>`)

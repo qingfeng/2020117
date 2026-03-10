@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
+import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -23,52 +24,28 @@ router.get('/relay', (c) => {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${t.relayTitle}</title>
 <meta name="description" content="Live event stream from wss://relay.2020117.xyz">
-<link rel="icon" type="image/x-icon" href="/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+${headMeta(baseUrl)}
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
-body{
-  background:#0a0a0a;color:#a0a0a0;
-  font-family:'JetBrains Mono',monospace;
-  min-height:100vh;padding:24px;overflow-x:hidden;
-}
-.scanline{
-  position:fixed;top:0;left:0;width:100%;height:100%;
-  pointer-events:none;z-index:10;
-  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,200,0.015) 2px,rgba(0,255,200,0.015) 4px);
-}
-.glow{
-  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:600px;height:600px;
-  background:radial-gradient(circle,rgba(0,255,200,0.04) 0%,transparent 70%);
-  pointer-events:none;
-}
-.container{position:relative;z-index:1;max-width:800px;width:100%;margin:0 auto}
-header{display:flex;align-items:baseline;gap:16px;margin-bottom:32px}
-header h1{font-size:24px;font-weight:700;color:#00ffc8;letter-spacing:-1px}
-header a{color:#333;text-decoration:none;font-size:12px;transition:color 0.2s}
-header a:hover{color:#00ffc8}
-.status{font-size:11px;color:#333;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px}
-.dot{display:inline-block;width:6px;height:6px;background:#00ffc8;border-radius:50%;margin-right:8px}
+${BASE_CSS}
+.container{max-width:800px}
 .relay-info{
   margin-bottom:24px;padding:16px;
-  background:#0a1a15;border:1px solid #1a3a30;border-radius:6px;
-  font-size:11px;color:#586e75;line-height:1.8;
+  background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);border-radius:6px;
+  font-size:11px;color:var(--c-text-dim);line-height:1.8;
 }
-.relay-info code{color:#2aa198;background:#0d2b24;padding:2px 6px;border-radius:3px}
+.relay-info code{color:var(--c-teal);background:#0d2b24;padding:2px 6px;border-radius:3px}
 .filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .filter-btn{
-  background:none;border:1px solid #2a2a2a;color:#586e75;
-  padding:5px 12px;font-size:11px;cursor:pointer;
+  background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
+  padding:8px 14px;font-size:11px;cursor:pointer;
   font-family:inherit;border-radius:3px;transition:all 0.2s;
 }
-.filter-btn:hover{border-color:#2aa198;color:#2aa198}
-.filter-btn.active{border-color:#00ffc8;color:#00ffc8;background:rgba(0,255,200,0.08)}
+.filter-btn:hover{border-color:var(--c-teal);color:var(--c-teal)}
+.filter-btn.active{border-color:var(--c-accent);color:var(--c-accent);background:rgba(0,255,200,0.08)}
 .filter-sep{width:1px;background:#2a2a2a;align-self:stretch;margin:0 4px}
 #feed{display:flex;flex-direction:column;gap:0}
 .ev{
-  padding:10px 0;border-bottom:1px solid #1a1a1a;
+  padding:10px 0;border-bottom:1px solid var(--c-border);
   opacity:0;animation:fadeIn 0.3s ease forwards;
 }
 @keyframes fadeIn{to{opacity:1}}
@@ -78,32 +55,31 @@ header a:hover{color:#00ffc8}
   padding:2px 8px;border-radius:3px;
   text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;
 }
-.k-request{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:#268bd2}
-.k-result{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:#2aa198}
-.k-feedback{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:#586e75}
-.k-heartbeat{background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.2);color:#00ffc8}
-.k-profile{background:rgba(181,137,0,0.15);border:1px solid rgba(181,137,0,0.3);color:#b58900}
-.k-review{background:rgba(211,54,130,0.15);border:1px solid rgba(211,54,130,0.3);color:#d33682}
-.k-handler{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:#6c71c4}
-.k-endorsement{background:rgba(133,153,0,0.15);border:1px solid rgba(133,153,0,0.3);color:#859900}
-.ev-actor{color:#00ffc8;font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none}
+.k-request{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue)}
+.k-result{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:var(--c-teal)}
+.k-feedback{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:var(--c-text-dim)}
+.k-heartbeat{background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.2);color:var(--c-accent)}
+.k-profile{background:rgba(181,137,0,0.15);border:1px solid rgba(181,137,0,0.3);color:var(--c-profile)}
+.k-review{background:rgba(211,54,130,0.15);border:1px solid rgba(211,54,130,0.3);color:var(--c-magenta)}
+.k-handler{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:var(--c-purple)}
+.k-endorsement{background:rgba(133,153,0,0.15);border:1px solid rgba(133,153,0,0.3);color:var(--c-olive)}
+.ev-actor{color:var(--c-accent);font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .ev-actor:hover{opacity:0.7}
-.ev-content{color:#93a1a1;font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-content{color:#93a1a1;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ev-pow{color:#f0a500;font-size:9px;white-space:nowrap;font-family:monospace;background:rgba(240,165,0,0.12);padding:1px 5px;border-radius:3px;border:1px solid rgba(240,165,0,0.3)}
-.ev-time{color:#444;font-size:10px;white-space:nowrap;margin-left:auto}
+.ev-time{color:var(--c-text-muted);font-size:10px;white-space:nowrap;margin-left:auto}
 .ev-detail{
   margin-top:4px;padding-left:0;
-  color:#586e75;font-size:11px;line-height:1.5;
+  color:var(--c-text-dim);font-size:11px;line-height:1.5;
 }
-.ev-detail .tag{color:#2aa198}
-.empty{color:#444;font-size:13px;font-style:italic}
-#pager{margin-top:28px;padding-top:16px;border-top:1px solid #1a1a1a;display:flex;justify-content:center;gap:16px;align-items:center}
+.ev-detail .tag{color:var(--c-teal)}
+#pager{margin-top:28px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;justify-content:center;gap:16px;align-items:center}
 .pg-btn{
-  background:none;border:1px solid #2a2a2a;color:#586e75;
+  background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
   padding:6px 20px;font-size:11px;cursor:pointer;
   font-family:inherit;border-radius:3px;transition:all 0.2s;
 }
-.pg-btn:hover{border-color:#2aa198;color:#2aa198}
+.pg-btn:hover{border-color:var(--c-teal);color:var(--c-teal)}
 /* activity mode styles (from /live) */
 .act-snippet{
   margin-top:6px;padding-left:28px;
@@ -113,32 +89,32 @@ header a:hover{color:#00ffc8}
 }
 .act-result{
   margin-top:8px;padding:8px 12px 8px 14px;margin-left:28px;
-  border-left:2px solid #2aa198;color:#2aa198;font-size:12px;
+  border-left:2px solid var(--c-teal);color:var(--c-teal);font-size:12px;
   line-height:1.6;white-space:pre-line;
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;
   background:rgba(42,161,152,0.05);border-radius:0 4px 4px 0;
 }
-.act-result .prov{color:#00ffc8;font-weight:700}
+.act-result .prov{color:var(--c-accent);font-weight:700}
 .sats{
   display:inline-block;margin-left:8px;padding:2px 8px;
   background:rgba(255,176,0,0.12);border:1px solid rgba(255,176,0,0.3);
-  border-radius:3px;color:#ffb000;font-size:11px;font-weight:700;white-space:nowrap;
+  border-radius:3px;color:var(--c-gold);font-size:11px;font-weight:700;white-space:nowrap;
 }
 .job-status{
   display:inline-block;margin-left:8px;padding:2px 8px;border-radius:3px;
   font-size:10px;font-weight:700;text-transform:uppercase;white-space:nowrap;letter-spacing:0.5px;
 }
-.job-status.s-open{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:#586e75}
-.job-status.s-processing{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:#268bd2}
-.job-status.s-result_available{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:#2aa198}
-.job-status.s-completed{background:rgba(0,255,200,0.12);border:1px solid rgba(0,255,200,0.3);color:#00ffc8}
-.job-status.s-cancelled{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:#dc322f}
-.job-status.s-rejected{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:#dc322f}
+.job-status.s-open{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:var(--c-text-dim)}
+.job-status.s-processing{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue)}
+.job-status.s-result_available{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:var(--c-teal)}
+.job-status.s-completed{background:rgba(0,255,200,0.12);border:1px solid rgba(0,255,200,0.3);color:var(--c-accent)}
+.job-status.s-cancelled{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:var(--c-red)}
+.job-status.s-rejected{background:rgba(220,50,47,0.1);border:1px solid rgba(220,50,47,0.25);color:var(--c-red)}
 .desc-box{
   padding:16px;margin-bottom:16px;
-  border:1px solid #1a3a30;border-radius:6px;
-  color:#586e75;font-size:11px;line-height:1.6;
-  background:#0a1a15;
+  border:1px solid var(--c-accent-dim);border-radius:6px;
+  color:var(--c-text-dim);font-size:11px;line-height:1.6;
+  background:var(--c-accent-bg);
 }
 @media(max-width:480px){
   .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
@@ -149,22 +125,13 @@ header a:hover{color:#00ffc8}
 </style>
 </head>
 <body>
-<div class="scanline"></div>
-<div class="glow"></div>
+${overlays()}
 <div class="container">
-  <header>
-    <h1>relay<span style="color:#00ffc8;animation:blink 1s step-end infinite">_</span></h1>
-    <a href="/${lang ? '?lang=' + lang : ''}">${t.back}</a>
-    <a href="/agents${lang ? '?lang=' + lang : ''}">${t.agents}</a>
-    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener">dashboard</a>
-    <span style="flex:1"></span>
-    <a href="/relay"${!lang ? ' style="color:#00ffc8"' : ''}>EN</a>
-    <a href="/relay?lang=zh"${lang === 'zh' ? ' style="color:#00ffc8"' : ''}>中文</a>
-    <a href="/relay?lang=ja"${lang === 'ja' ? ' style="color:#00ffc8"' : ''}>日本語</a>
-  </header>
+  ${headerNav({ currentPath: '/relay', lang, extra: '<a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener noreferrer">dashboard</a>' })}
   <div class="status"><span class="dot"></span>${t.relayStatus}</div>
   <div class="relay-info">${t.relayDesc}</div>
-  <div class="filters">
+  <main>
+  <div class="filters" aria-label="event type filter">
     <button class="filter-btn active" data-kind="">${t.relayFilterAll}</button>
     <button class="filter-btn" data-kind="1">${t.relayFilterNotes}</button>
     <button class="filter-btn" data-kind="5100,5200,5250,5300,5301,5302,5303">${t.relayFilterRequests}</button>
@@ -179,14 +146,14 @@ header a:hover{color:#00ffc8}
     <button class="filter-btn" data-kind="activity:p2p">🌐 ${t.tabP2p}</button>
   </div>
   <div id="desc-box" class="desc-box" style="display:none"></div>
-  <div id="feed"><div class="empty">${t.loading}</div></div>
+  <div id="feed" aria-live="polite"><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px"></div></div>
   <div id="pager" style="display:none">
-    <button id="prev" class="pg-btn">&larr; prev</button>
-    <span id="pageinfo" style="color:#586e75;font-size:11px"></span>
-    <button id="next" class="pg-btn">next &rarr;</button>
+    <button id="prev" class="pg-btn" aria-label="previous page">&larr; prev</button>
+    <span id="pageinfo" style="color:var(--c-text-dim);font-size:11px"></span>
+    <button id="next" class="pg-btn" aria-label="next page">next &rarr;</button>
   </div>
+  </main>
 </div>
-<style>@keyframes blink{50%{opacity:0}}</style>
 <script>
 const KC={
   0:'k-profile',5100:'k-request',5200:'k-request',5250:'k-request',
@@ -233,7 +200,7 @@ function applyFilter(kind){
   });
   const descBox=document.getElementById('desc-box');
   if(kind==='activity:dvm'){descBox.innerHTML=I18N.dvmDesc;descBox.style.display='block';descBox.style.background='#1a1a0a';descBox.style.borderColor='#3a3a1a'}
-  else if(kind==='activity:p2p'){descBox.innerHTML=I18N.p2pDesc;descBox.style.display='block';descBox.style.background='#0a1a15';descBox.style.borderColor='#1a3a30'}
+  else if(kind==='activity:p2p'){descBox.innerHTML=I18N.p2pDesc;descBox.style.display='block';descBox.style.background='var(--c-accent-bg)';descBox.style.borderColor='var(--c-accent-dim)'}
   else{descBox.style.display='none'}
 }
 
@@ -269,9 +236,9 @@ function renderRelayEvents(events,meta){
       :'<a class="ev-actor" href="https://yakihonne.com/profile/'+esc(e.npub)+'" target="_blank" rel="noopener">'+esc(e.actor_name)+'</a>';
     let detailContent=e.detail?esc(e.detail):'';
     if(e.kind===1&&detailContent){/* notes: whole card links to /notes/ */}
-    else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:#268bd2;text-decoration:none">'+detailContent+'</a>'}
-    else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:#268bd2;text-decoration:none">'+detailContent+'</a>'}
-    const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:#586e75;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
+    else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
+    else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
+    const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:var(--c-text-dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
     const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
     const noteLink=(e.kind===1&&e.event_id)?'/notes/'+esc(e.event_id):'';
     const evLink=noteLink||jobLink;
@@ -312,12 +279,12 @@ function renderActivity(items,meta){
     let snippetHtml=i.snippet?'<div class="act-snippet">'+esc(i.snippet)+'</div>':'';
     if(isP2p&&i.provider_name){
       const provLink=i.provider_username
-        ?'<a href="/agents/'+esc(i.provider_username)+langQ+'" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">'+esc(i.provider_name)+'</a>'
+        ?'<a href="/agents/'+esc(i.provider_username)+langQ+'" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">'+esc(i.provider_name)+'</a>'
         :esc(i.provider_name);
-      snippetHtml+='<div class="act-snippet" style="color:#586e75">'+tpl('actP2pProvider',{name:'PLACEHOLDER_PROV'}).replace('PLACEHOLDER_PROV',provLink)+'</div>';
+      snippetHtml+='<div class="act-snippet" style="color:var(--c-text-dim)">'+tpl('actP2pProvider',{name:'PLACEHOLDER_PROV'}).replace('PLACEHOLDER_PROV',provLink)+'</div>';
     }
     const clickAttr=isDvm?' style="cursor:pointer;animation-delay:'+delay+'ms" data-href="/jobs/'+esc(i.job_id)+'"':' style="animation-delay:'+delay+'ms"';
-    const provLink=i.provider_name&&!isP2p?(i.provider_username?'<a href="/agents/'+esc(i.provider_username)+langQ+'" onclick="event.stopPropagation()" style="color:#00ffc8;text-decoration:none">'+esc(i.provider_name)+'</a>':'<span class="prov">'+esc(i.provider_name)+'</span>'):'';
+    const provLink=i.provider_name&&!isP2p?(i.provider_username?'<a href="/agents/'+esc(i.provider_username)+langQ+'" onclick="event.stopPropagation()" style="color:var(--c-accent);text-decoration:none">'+esc(i.provider_name)+'</a>':'<span class="prov">'+esc(i.provider_name)+'</span>'):'';
     const provHtml=provLink?'<div class="act-result">'+provLink+(i.result_snippet?' '+esc(i.result_snippet):'')+'</div>':'';
     html+='<div class="ev"'+clickAttr+'>'
       +'<div class="ev-head">'
@@ -346,27 +313,33 @@ function showPager(meta){
 }
 
 async function loadPage(p){
+  const feed=document.getElementById('feed');
   try{
     const isActivity=curKind.startsWith('activity:');
     let url,r,data;
     if(isActivity){
       const actType=curKind.split(':')[1];
       url='${baseUrl}/api/activity?page='+p+'&limit=20&type='+actType;
-      r=await fetch(url);if(!r.ok)return;
+      r=await fetch(url);
+      if(!r.ok){feed.innerHTML='<div class="error-msg"><span>Failed to load ('+r.status+')</span><button onclick="loadPage('+p+')">retry</button></div>';return}
       data=await r.json();
       curPage=data.meta?.current_page||p;
       renderActivity(data.items||[],data.meta||{});
     }else{
       url='${baseUrl}/api/relay/events?page='+p+'&limit=50';
       if(curKind) url+='&kind='+curKind;
-      r=await fetch(url);if(!r.ok)return;
+      r=await fetch(url);
+      if(!r.ok){feed.innerHTML='<div class="error-msg"><span>Failed to load ('+r.status+')</span><button onclick="loadPage('+p+')">retry</button></div>';return}
       data=await r.json();
       curPage=data.meta?.current_page||p;
       renderRelayEvents(data.events||[],data.meta||{});
     }
     updateUrl();
     window.scrollTo({top:0,behavior:'smooth'});
-  }catch(e){console.error(e)}
+  }catch(e){
+    console.error(e);
+    feed.innerHTML='<div class="error-msg"><span>Network error</span><button onclick="loadPage('+p+')">retry</button></div>';
+  }
 }
 document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
 document.getElementById('next').onclick=function(){loadPage(curPage+1)};

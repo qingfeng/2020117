@@ -163,7 +163,15 @@ content.get('/activity', async (c) => {
   const db = c.get('db')
   const page = Math.max(1, parseInt(c.req.query('page') || '1'))
   const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') || '20')), 50)
-  const fetchLimit = 50
+  const typeFilter = c.req.query('type')
+  const fetchLimit = 100
+
+  // Build job query condition based on type filter
+  const jobCondition = typeFilter === 'p2p'
+    ? and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink']))
+    : typeFilter === 'dvm'
+      ? eq(dvmJobs.role, 'customer')
+      : or(eq(dvmJobs.role, 'customer'), and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink'])))
 
   const [recentTopics, recentJobs, recentLikes, recentReposts] = await Promise.all([
     db.select({ id: topics.id, content: topics.content, title: topics.title, createdAt: topics.createdAt, authorUsername: users.username, authorDisplayName: users.displayName })
@@ -175,7 +183,7 @@ content.get('/activity', async (c) => {
       params: dvmJobs.params, createdAt: dvmJobs.createdAt, updatedAt: dvmJobs.updatedAt,
       authorUsername: users.username, authorDisplayName: users.displayName,
     }).from(dvmJobs).leftJoin(users, eq(dvmJobs.userId, users.id))
-      .where(or(eq(dvmJobs.role, 'customer'), and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink']))))
+      .where(jobCondition)
       .orderBy(desc(dvmJobs.updatedAt)).limit(fetchLimit),
     db.select({
       topicId: topicLikes.topicId, createdAt: topicLikes.createdAt, authorUsername: users.username,
@@ -263,7 +271,6 @@ content.get('/activity', async (c) => {
 
   activities.sort((a, b) => b.time.getTime() - a.time.getTime())
 
-  const typeFilter = c.req.query('type')
   const filtered = typeFilter === 'p2p' ? activities.filter(a => a.type === 'p2p_session') : typeFilter === 'dvm' ? activities.filter(a => a.type !== 'p2p_session') : activities
 
   const total = filtered.length

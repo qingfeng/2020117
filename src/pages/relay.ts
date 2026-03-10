@@ -6,9 +6,8 @@ const router = new Hono<AppContext>()
 
 // Live activity page — redirect to /relay (merged)
 router.get('/live', (c) => {
-  const lang = c.req.query('lang')
-  const target = '/relay' + (lang ? '?lang=' + lang : '')
-  return c.redirect(target, 301)
+  const qs = new URL(c.req.url).search
+  return c.redirect('/relay' + qs, 301)
 })
 
 // Relay timeline page
@@ -221,16 +220,26 @@ function kindIcon(k){
 let curKind='';
 let curPage=1;
 
+function updateUrl(){
+  const u=new URL(location.href);
+  if(curKind)u.searchParams.set('filter',curKind);else u.searchParams.delete('filter');
+  if(curPage>1)u.searchParams.set('page',String(curPage));else u.searchParams.delete('page');
+  history.replaceState(null,'',u.toString());
+}
+function applyFilter(kind){
+  curKind=kind;
+  document.querySelectorAll('.filter-btn').forEach(b=>{
+    b.classList.toggle('active',(b.dataset.kind||'')===kind);
+  });
+  const descBox=document.getElementById('desc-box');
+  if(kind==='activity:dvm'){descBox.innerHTML=I18N.dvmDesc;descBox.style.display='block';descBox.style.background='#1a1a0a';descBox.style.borderColor='#3a3a1a'}
+  else if(kind==='activity:p2p'){descBox.innerHTML=I18N.p2pDesc;descBox.style.display='block';descBox.style.background='#0a1a15';descBox.style.borderColor='#1a3a30'}
+  else{descBox.style.display='none'}
+}
+
 document.querySelectorAll('.filter-btn').forEach(btn=>{
   btn.addEventListener('click',function(){
-    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-    this.classList.add('active');
-    curKind=this.dataset.kind||'';
-    /* show/hide description box for activity modes */
-    const descBox=document.getElementById('desc-box');
-    if(curKind==='activity:dvm'){descBox.innerHTML=I18N.dvmDesc;descBox.style.display='block';descBox.style.background='#1a1a0a';descBox.style.borderColor='#3a3a1a'}
-    else if(curKind==='activity:p2p'){descBox.innerHTML=I18N.p2pDesc;descBox.style.display='block';descBox.style.background='#0a1a15';descBox.style.borderColor='#1a3a30'}
-    else{descBox.style.display='none'}
+    applyFilter(this.dataset.kind||'');
     loadPage(1);
   });
 });
@@ -355,13 +364,21 @@ async function loadPage(p){
       curPage=data.meta?.current_page||p;
       renderRelayEvents(data.events||[],data.meta||{});
     }
+    updateUrl();
     window.scrollTo({top:0,behavior:'smooth'});
   }catch(e){console.error(e)}
 }
 document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
 document.getElementById('next').onclick=function(){loadPage(curPage+1)};
 document.getElementById('feed').addEventListener('click',function(ev){var t=ev.target;while(t&&t!==this){if(t.dataset&&t.dataset.href){if(ev.target.tagName==='A')return;location.href=t.dataset.href;return}t=t.parentElement}});
-loadPage(1);
+/* restore filter from URL */
+(function(){
+  const u=new URL(location.href);
+  const f=u.searchParams.get('filter')||'';
+  const p=parseInt(u.searchParams.get('page')||'1')||1;
+  if(f)applyFilter(f);
+  loadPage(p);
+})();
 </script>
 </body>
 </html>`)

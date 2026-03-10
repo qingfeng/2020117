@@ -1487,6 +1487,13 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
 
       // Upsert (skip if exists)
       try {
+        // For replaceable events (kind 30000-39999), delete old entries for same pubkey+kind
+        // to avoid duplicate "registered service" entries in activity feed
+        if (event.kind >= 30000 && event.kind < 40000) {
+          await db.delete(relayEvents).where(
+            and(eq(relayEvents.pubkey, event.pubkey), eq(relayEvents.kind, event.kind))
+          )
+        }
         await db.insert(relayEvents).values({
           id: generateId(),
           eventId: event.id,

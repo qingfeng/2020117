@@ -405,8 +405,8 @@ header a:hover{color:#00ffc8}
       <span class="sats-tag">\u26A1 ${bidSats} sats</span>
     </div>
 
-    <div class="customer">by <span>${esc(customerName)}</span></div>
-    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>` : `<span>${esc(providerName)}</span>`}</div>` : ''}
+    <div class="customer">by ${j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)}</div>
+    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:#00ffc8;text-decoration:none;border-bottom:1px solid #1a3a30">${esc(providerName)}</a>`}</div>` : ''}
 
     ${j.input ? `<div class="section">
       <div class="section-label">input</div>

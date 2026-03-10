@@ -245,7 +245,7 @@ export class RelayDO implements DurableObject {
     return true
   }
 
-  // --- Registered User Check (APP_DB) ---
+  // --- Registered User Check (relay DB Kind 0) ---
 
   private async isRegisteredPubkey(pubkey: string): Promise<boolean> {
     // Check cache first (refresh every 5 minutes)
@@ -254,20 +254,19 @@ export class RelayDO implements DurableObject {
       return this.registeredPubkeys.has(pubkey)
     }
 
-    // Refresh cache from APP_DB
+    // Refresh cache: pubkeys that have published Kind 0 to THIS relay (requires POW 20)
     try {
-      const result = await this.env.APP_DB.prepare(
-        'SELECT nostr_pubkey FROM user WHERE nostr_pubkey IS NOT NULL'
-      ).all<{ nostr_pubkey: string }>()
+      const result = await this.env.DB.prepare(
+        'SELECT DISTINCT pubkey FROM events WHERE kind = 0'
+      ).all<{ pubkey: string }>()
 
       this.registeredPubkeys.clear()
       for (const row of result.results) {
-        if (row.nostr_pubkey) this.registeredPubkeys.add(row.nostr_pubkey)
+        if (row.pubkey) this.registeredPubkeys.add(row.pubkey)
       }
       this.pubkeyCacheExpiry = now + 5 * 60 * 1000  // 5 min TTL
     } catch (e) {
-      console.error('[Relay] Failed to load registered pubkeys:', e)
-      // On error, don't bypass POW
+      console.error('[Relay] Failed to load Kind 0 pubkeys:', e)
       return false
     }
 

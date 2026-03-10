@@ -84,7 +84,7 @@ router.get('/notes/:eventId', async (c) => {
   }
 
   // Fetch replies (Kind 1), reactions (Kind 7), reposts (Kind 6) referencing this event
-  const [replies, reactions, reposts] = await Promise.all([
+  const [localReplies, localReactions, localReposts] = await Promise.all([
     db.select({
       eventId: relayEvents.eventId,
       pubkey: relayEvents.pubkey,
@@ -107,6 +107,65 @@ router.get('/notes/:eventId', async (c) => {
       and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
     ).orderBy(relayEvents.eventCreatedAt).limit(100),
   ])
+
+  // If local DB lacks interactions, fetch from public relays and cache
+  let replies = localReplies
+  let reactions = localReactions as { pubkey: string; contentPreview: string | null; eventCreatedAt: number }[]
+  let reposts = localReposts as { pubkey: string; eventCreatedAt: number }[]
+
+  if (localReactions.length === 0 || localReposts.length === 0 || localReplies.length === 0) {
+    try {
+      const { fetchEventsFromRelay } = await import('../services/relay-io')
+      const { generateId } = await import('../lib/utils')
+      const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io,wss://nos.lol').split(',').map((s: string) => s.trim()).filter(Boolean)
+
+      // Fetch Kind 1 (replies), 7 (reactions), 6 (reposts) referencing this event
+      const kindsToFetch: number[] = []
+      if (localReplies.length === 0) kindsToFetch.push(1)
+      if (localReactions.length === 0) kindsToFetch.push(7)
+      if (localReposts.length === 0) kindsToFetch.push(6)
+
+      const seenIds = new Set<string>()
+      for (const relayUrl of relayUrls.slice(0, 3)) {
+        try {
+          const { events } = await fetchEventsFromRelay(relayUrl, {
+            kinds: kindsToFetch, '#e': [eventId], limit: 100,
+          })
+          for (const ev of events) {
+            if (seenIds.has(ev.id)) continue
+            seenIds.add(ev.id)
+            // Cache to relay_event
+            const eTags: Record<string, string> = {}
+            for (const tag of ev.tags) {
+              if (tag[0] === 'e') eTags.e = tag[1] || ''
+              if (tag[0] === 'p') eTags.p = tag[1] || ''
+            }
+            try {
+              await db.insert(relayEvents).values({
+                id: generateId(), eventId: ev.id, kind: ev.kind,
+                pubkey: ev.pubkey,
+                contentPreview: ev.kind === 7 ? (ev.content || '+') : (ev.kind === 1 ? ev.content?.slice(0, 200) || null : null),
+                tags: JSON.stringify(eTags),
+                eventCreatedAt: ev.created_at, createdAt: new Date(),
+              }).onConflictDoNothing()
+            } catch { /* already exists */ }
+
+            if (ev.kind === 1 && localReplies.length === 0) {
+              (replies as any[]).push({ eventId: ev.id, pubkey: ev.pubkey, contentPreview: ev.content?.slice(0, 200) || '', eventCreatedAt: ev.created_at })
+            } else if (ev.kind === 7) {
+              (reactions as any[]).push({ pubkey: ev.pubkey, contentPreview: ev.content || '+', eventCreatedAt: ev.created_at })
+            } else if (ev.kind === 6) {
+              (reposts as any[]).push({ pubkey: ev.pubkey, eventCreatedAt: ev.created_at })
+            }
+          }
+        } catch { /* relay unavailable, continue */ }
+      }
+      // Sort and deduplicate
+      replies.sort((a, b) => a.eventCreatedAt - b.eventCreatedAt)
+      reactions = [...new Map(reactions.map(r => [r.pubkey, r])).values()]
+      reposts = [...new Map(reposts.map(r => [r.pubkey, r])).values()]
+    } catch { /* non-critical */ }
+  }
 
   // Resolve all interaction author names in bulk
   const allPubkeys = [...new Set([

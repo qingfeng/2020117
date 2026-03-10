@@ -155,8 +155,6 @@ ${overlays()}
   <div class="filters" aria-label="event type filter">
     <button class="filter-btn active" data-kind="">${t.relayFilterAll}</button>
     <button class="filter-btn" data-kind="1">${t.relayFilterNotes}</button>
-    <button class="filter-btn" data-kind="7">${t.relayFilterReactions}</button>
-    <button class="filter-btn" data-kind="6">${t.relayFilterReposts}</button>
     <button class="filter-btn" data-kind="5100,5200,5250,5300,5301,5302,5303">${t.relayFilterRequests}</button>
     <button class="filter-btn" data-kind="6100,6200,6250,6300,6301,6302,6303">${t.relayFilterResults}</button>
     <button class="filter-btn" data-kind="7000">${t.relayFilterFeedback}</button>

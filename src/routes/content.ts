@@ -29,7 +29,7 @@ content.get('/relay/events', async (c) => {
   const kindParam = c.req.query('kind')
   const offset = (page - 1) * limit
 
-  const EXCLUDED_KINDS = [7000, 30333, 31990]
+  const EXCLUDED_KINDS = [6, 7, 7000, 30333, 31990]
   let conditions
   let filteringNotes = false
   if (kindParam) {
@@ -181,19 +181,18 @@ content.get('/relay/events', async (c) => {
   const noteStats = new Map<string, { reply_count: number; reaction_count: number; repost_count: number; replies_preview: Array<{ actor_name: string; username: string | null; content: string; created_at: number }> }>()
 
   if (noteEventIds.length > 0) {
-    // Batch: for each note, count replies/reactions/reposts + get 3 latest replies
     for (const noteId of noteEventIds) {
-      const [replyRows, reactionCount, repostCount] = await Promise.all([
+      // Get reply previews + latest interaction timestamps in parallel
+      const [replyRows, reactionRows, repostRows] = await Promise.all([
         db.select({ eventId: relayEvents.eventId, pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview, eventCreatedAt: relayEvents.eventCreatedAt })
           .from(relayEvents).where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
           .orderBy(desc(relayEvents.eventCreatedAt)).limit(3),
-        db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
+        db.select({ count: sql<number>`COUNT(*)`, latest: sql<number>`MAX(${relayEvents.eventCreatedAt})` }).from(relayEvents)
           .where(and(eq(relayEvents.kind, 7), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
-        db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
+        db.select({ count: sql<number>`COUNT(*)`, latest: sql<number>`MAX(${relayEvents.eventCreatedAt})` }).from(relayEvents)
           .where(and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
       ])
 
-      // Also count total replies (not just the 3 we fetched)
       const replyCountResult = replyRows.length < 3 ? [{ count: replyRows.length }]
         : await db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
           .where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
@@ -208,20 +207,34 @@ content.get('/relay/events', async (c) => {
         }
       })
 
+      // last_activity_at = max of note creation, latest reply, latest reaction, latest repost
+      const latestReply = replyRows[0]?.eventCreatedAt || 0
+      const latestReaction = reactionRows[0]?.latest || 0
+      const latestRepost = repostRows[0]?.latest || 0
+      const noteCreatedAt = events.find(e => e.event_id === noteId)?.created_at || 0
+      const lastActivityAt = Math.max(noteCreatedAt, latestReply, latestReaction, latestRepost)
+
       noteStats.set(noteId, {
         reply_count: replyCountResult[0]?.count || 0,
-        reaction_count: reactionCount[0]?.count || 0,
-        repost_count: repostCount[0]?.count || 0,
+        reaction_count: reactionRows[0]?.count || 0,
+        repost_count: repostRows[0]?.count || 0,
         replies_preview: repliesPreview,
+        last_activity_at: lastActivityAt,
       })
     }
   }
 
+  // Enrich notes with stats, use last_activity_at for sorting
   const enrichedEvents = events.map(e => {
     const stats = noteStats.get(e.event_id)
-    if (stats) return { ...e, ...stats }
-    return e
+    if (stats) {
+      return { ...e, ...stats, sort_at: stats.last_activity_at }
+    }
+    return { ...e, sort_at: e.created_at }
   })
+
+  // Re-sort: notes with recent activity bubble up (Reddit-style)
+  enrichedEvents.sort((a, b) => (b.sort_at || b.created_at) - (a.sort_at || a.created_at))
 
   return c.json({ events: enrichedEvents, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } })
 })

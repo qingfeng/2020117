@@ -31,13 +31,13 @@ ${BASE_CSS}
 .relay-info{
   margin-bottom:24px;padding:16px;
   background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);border-radius:6px;
-  font-size:11px;color:var(--c-text-dim);line-height:1.8;
+  font-size:13px;color:var(--c-text-dim);line-height:1.8;
 }
 .relay-info code{color:var(--c-teal);background:#0d2b24;padding:2px 6px;border-radius:3px}
 .filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .filter-btn{
   background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
-  padding:8px 14px;font-size:11px;cursor:pointer;
+  padding:8px 14px;font-size:13px;cursor:pointer;
   font-family:inherit;border-radius:3px;transition:all 0.2s;
 }
 .filter-btn:hover{border-color:var(--c-teal);color:var(--c-teal)}
@@ -45,13 +45,13 @@ ${BASE_CSS}
 .filter-sep{width:1px;background:#2a2a2a;align-self:stretch;margin:0 4px}
 #feed{display:flex;flex-direction:column;gap:0}
 .ev{
-  padding:10px 0;border-bottom:1px solid var(--c-border);
+  padding:12px 0;border-bottom:1px solid var(--c-border);
   opacity:0;animation:fadeIn 0.3s ease forwards;
 }
 @keyframes fadeIn{to{opacity:1}}
 .ev-head{display:flex;align-items:baseline;gap:10px}
 .ev-kind{
-  flex-shrink:0;font-size:10px;font-weight:700;
+  flex-shrink:0;font-size:11px;font-weight:700;
   padding:2px 8px;border-radius:3px;
   text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;
 }
@@ -66,7 +66,7 @@ ${BASE_CSS}
   display:inline-flex;align-items:center;gap:4px;
   padding:3px 10px;margin-left:6px;
   background:rgba(255,176,0,0.18);border:1px solid rgba(255,176,0,0.4);
-  border-radius:4px;color:#f0a500;font-size:12px;font-weight:800;
+  border-radius:4px;color:#f0a500;font-size:13px;font-weight:800;
   letter-spacing:0.3px;white-space:nowrap;
   animation:earningsPulse 2s ease-in-out;
 }
@@ -77,7 +77,7 @@ ${BASE_CSS}
 }
 .earnings-detail{
   margin-top:4px;padding-left:28px;
-  font-size:11px;color:var(--c-gold);
+  font-size:13px;color:var(--c-gold);
 }
 .k-feedback{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:var(--c-text-dim)}
 .k-heartbeat{background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.2);color:var(--c-accent)}
@@ -88,33 +88,41 @@ ${BASE_CSS}
 .k-reaction{background:rgba(220,50,47,0.12);border:1px solid rgba(220,50,47,0.25);color:var(--c-red)}
 .k-repost{background:rgba(42,161,152,0.12);border:1px solid rgba(42,161,152,0.25);color:var(--c-teal)}
 .k-note{background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.25);color:var(--c-gold)}
-.ev-actor{color:var(--c-accent);font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.k-article{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:var(--c-purple)}
+.article-card{
+  margin-top:6px;padding:10px 14px;margin-left:28px;
+  border:1px solid rgba(108,113,196,0.25);border-radius:6px;
+  background:rgba(108,113,196,0.06);
+}
+.article-card .art-title{color:#c4b5fd;font-size:14px;font-weight:700;margin-bottom:4px}
+.article-card .art-summary{color:var(--c-text-dim);font-size:12px;line-height:1.5}
+.ev-actor{color:var(--c-accent);font-weight:700;font-size:14px;white-space:nowrap;text-decoration:none;max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .ev-actor:hover{opacity:0.7}
-.ev-content{color:#93a1a1;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ev-pow{color:#f0a500;font-size:9px;white-space:nowrap;font-family:monospace;background:rgba(240,165,0,0.12);padding:1px 5px;border-radius:3px;border:1px solid rgba(240,165,0,0.3)}
-.ev-time{color:var(--c-text-muted);font-size:10px;white-space:nowrap;margin-left:auto}
+.ev-content{color:#93a1a1;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-pow{color:#f0a500;font-size:10px;white-space:nowrap;font-family:monospace;background:rgba(240,165,0,0.12);padding:1px 5px;border-radius:3px;border:1px solid rgba(240,165,0,0.3)}
+.ev-time{color:var(--c-text-muted);font-size:12px;white-space:nowrap;margin-left:auto}
 .ev-detail{
   margin-top:4px;padding-left:0;
-  color:var(--c-text-dim);font-size:11px;line-height:1.5;
+  color:var(--c-text-dim);font-size:13px;line-height:1.5;
 }
 .ev-detail .tag{color:var(--c-teal)}
 #pager{margin-top:28px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;justify-content:center;gap:16px;align-items:center}
 .pg-btn{
   background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
-  padding:6px 20px;font-size:11px;cursor:pointer;
+  padding:6px 20px;font-size:13px;cursor:pointer;
   font-family:inherit;border-radius:3px;transition:all 0.2s;
 }
 .pg-btn:hover{border-color:var(--c-teal);color:var(--c-teal)}
 /* activity mode styles (from /live) */
 .act-snippet{
   margin-top:6px;padding-left:28px;
-  color:#93a1a1;font-size:12px;line-height:1.6;
+  color:#93a1a1;font-size:14px;line-height:1.6;
   white-space:pre-line;
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;
 }
 .act-result{
   margin-top:8px;padding:8px 12px 8px 14px;margin-left:28px;
-  border-left:2px solid var(--c-teal);color:var(--c-teal);font-size:12px;
+  border-left:2px solid var(--c-teal);color:var(--c-teal);font-size:14px;
   line-height:1.6;white-space:pre-line;
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;
   background:rgba(42,161,152,0.05);border-radius:0 4px 4px 0;
@@ -123,11 +131,11 @@ ${BASE_CSS}
 .sats{
   display:inline-block;margin-left:8px;padding:2px 8px;
   background:rgba(255,176,0,0.12);border:1px solid rgba(255,176,0,0.3);
-  border-radius:3px;color:var(--c-gold);font-size:11px;font-weight:700;white-space:nowrap;
+  border-radius:3px;color:var(--c-gold);font-size:13px;font-weight:700;white-space:nowrap;
 }
 .job-status{
   display:inline-block;margin-left:8px;padding:2px 8px;border-radius:3px;
-  font-size:10px;font-weight:700;text-transform:uppercase;white-space:nowrap;letter-spacing:0.5px;
+  font-size:11px;font-weight:700;text-transform:uppercase;white-space:nowrap;letter-spacing:0.5px;
 }
 .job-status.s-open{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:var(--c-text-dim)}
 .job-status.s-processing{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue)}
@@ -138,12 +146,12 @@ ${BASE_CSS}
 .desc-box{
   padding:16px;margin-bottom:16px;
   border:1px solid var(--c-accent-dim);border-radius:6px;
-  color:var(--c-text-dim);font-size:11px;line-height:1.6;
+  color:var(--c-text-dim);font-size:13px;line-height:1.6;
   background:var(--c-accent-bg);
 }
 .note-stats{
   padding-left:28px;margin-top:4px;
-  display:flex;gap:12px;font-size:10px;color:var(--c-text-muted);
+  display:flex;gap:12px;font-size:12px;color:var(--c-text-muted);
 }
 .note-stats span{display:flex;align-items:center;gap:3px}
 .note-replies-preview{
@@ -152,15 +160,15 @@ ${BASE_CSS}
 .note-reply-item{
   padding:4px 0 4px 10px;
   border-left:2px solid var(--c-border);
-  font-size:11px;color:var(--c-text-dim);
+  font-size:13px;color:var(--c-text-dim);
   margin-bottom:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.note-reply-item .rp-author{color:var(--c-accent);font-weight:700;font-size:10px}
+.note-reply-item .rp-author{color:var(--c-accent);font-weight:700;font-size:12px}
 @media(max-width:480px){
   .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
-  .ev-content{font-size:10px}
-  .act-snippet{padding-left:0;font-size:11px}
+  .ev-content{font-size:12px}
+  .act-snippet{padding-left:0;font-size:13px}
   .act-result{margin-left:0}
   .note-stats{padding-left:0}
   .note-replies-preview{padding-left:0}
@@ -177,6 +185,7 @@ ${overlays()}
   <div class="filters" aria-label="event type filter">
     <button class="filter-btn active" data-kind="">${t.relayFilterAll}</button>
     <button class="filter-btn" data-kind="1">${t.relayFilterNotes}</button>
+    <button class="filter-btn" data-kind="30023">${t.relayFilterArticle}</button>
     <button class="filter-btn" data-kind="5100,5200,5250,5300,5301,5302,5303">${t.relayFilterRequests}</button>
     <button class="filter-btn" data-kind="6100,6200,6250,6300,6301,6302,6303">${t.relayFilterResults}</button>
     <button class="filter-btn" data-kind="7000">${t.relayFilterFeedback}</button>
@@ -192,7 +201,7 @@ ${overlays()}
   <div id="feed" aria-live="polite"><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px"></div></div>
   <div id="pager" style="display:none">
     <button id="prev" class="pg-btn" aria-label="previous page">&larr; prev</button>
-    <span id="pageinfo" style="color:var(--c-text-dim);font-size:11px"></span>
+    <span id="pageinfo" style="color:var(--c-text-dim);font-size:13px"></span>
     <button id="next" class="pg-btn" aria-label="next page">next &rarr;</button>
   </div>
   </main>
@@ -204,11 +213,11 @@ const KC={
   5300:'k-request',5301:'k-request',5302:'k-request',5303:'k-request',
   6100:'k-result',6200:'k-result',6250:'k-result',6300:'k-result',
   6301:'k-result',6302:'k-result',6303:'k-result',
-  7000:'k-feedback',30333:'k-heartbeat',30311:'k-endorsement',31117:'k-review',31990:'k-handler',
+  7000:'k-feedback',30023:'k-article',30333:'k-heartbeat',30311:'k-endorsement',31117:'k-review',31990:'k-handler',
 };
 const KIND_ICON={
   0:'\\u{1F464}',1:'\\u{1F4DD}',6:'\\u{1F504}',7:'\\u2764\\uFE0F',
-  30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}',
+  30023:'\\u{1F4D6}',30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}',
 };
 const ACT_ICONS={post:'\\u{1F916}',dvm_job:'\\u26A1',p2p_session:'\\u{1F310}',like:'\\u2764\\uFE0F',repost:'\\u{1F504}'};
 const I18N=${JSON.stringify({
@@ -283,7 +292,7 @@ function renderRelayEvents(events,meta){
     if(e.kind===1&&detailContent){/* notes: whole card links to /notes/ */}
     else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
     else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
-    const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:var(--c-text-dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
+    const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:var(--c-text-dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
     const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
     const noteLink=e.note_event_id?'/notes/'+esc(e.note_event_id):'';
     const evLink=noteLink||jobLink;
@@ -294,7 +303,7 @@ function renderRelayEvents(events,meta){
     const earningsBadge=hasEarnings?'<span class="earnings-badge">\\u26A1 '+e.earned_sats+' sats</span>':'';
     html+='<div class="ev'+earningsClass+'" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
       +'<div class="ev-head">'
-        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+kindIcon(e.kind)+'</span>'
+        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:15px">'+kindIcon(e.kind)+'</span>'
         +actorHtml
         +'<span class="ev-content">'+esc(e.action)+earningsBadge+'</span>'
         +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
@@ -302,6 +311,13 @@ function renderRelayEvents(events,meta){
         +'<span class="ev-time">'+timeAgoUnix(e.created_at)+'</span>'
       +'</div>'
       +detailHtml;
+    // Article card for Kind 30023
+    if(e.kind===30023&&e.article_title){
+      html+='<div class="article-card">'
+        +'<div class="art-title">'+esc(e.article_title)+'</div>'
+        +(e.article_summary?'<div class="art-summary">'+esc(e.article_summary)+'</div>':'')
+        +'</div>';
+    }
     // Note stats (reply/reaction/repost counts) + reply previews
     if(e.kind===1){
       const rc=e.reply_count||0,lc=e.reaction_count||0,rpc=e.repost_count||0;
@@ -354,7 +370,7 @@ function renderActivity(items,meta){
     const provHtml=provLink?'<div class="act-result">'+provLink+(i.result_snippet?' '+esc(i.result_snippet):'')+'</div>':'';
     html+='<div class="ev"'+clickAttr+'>'
       +'<div class="ev-head">'
-        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+(ACT_ICONS[i.type]||'\\u2022')+'</span>'
+        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:15px">'+(ACT_ICONS[i.type]||'\\u2022')+'</span>'
         +actorHtml
         +'<span class="ev-content">'+esc(actionText)+statusHtml+satsHtml+'</span>'
         +'<span class="ev-time">'+timeAgoIso(i.time)+'</span>'

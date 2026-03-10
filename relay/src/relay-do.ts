@@ -123,7 +123,7 @@ export class RelayDO implements DurableObject {
     //    - Exempt (zero POW): DVM results (6xxx), feedback (7000), heartbeat (30333), zap (9735)
     //    - Everything else: reduced POW (10) — DVM requests (5xxx), endorsements (30311), etc.
     if (!isRegistered) {
-      const SOCIAL_KINDS = new Set([0, 1, 3, 5, 6, 7, 16, 30078])
+      const SOCIAL_KINDS = new Set([0, 1, 3, 5, 6, 7, 16, 30023, 30078])
       const EXEMPT_KINDS = new Set([9735, 30333])  // zap, heartbeat
       const isExempt = EXEMPT_KINDS.has(event.kind) ||
         (event.kind >= 6000 && event.kind <= 6999) || event.kind === 7000

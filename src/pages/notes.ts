@@ -24,6 +24,7 @@ router.get('/notes/:eventId', async (c) => {
 
   if (result.length === 0) {
     return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Note not found — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/relay" style="color:var(--c-accent);font-size:12px">back to relay</a></main></body></html>`, 404)
+
   }
 
   const note = result[0]
@@ -249,13 +250,13 @@ ${BASE_CSS}
   margin-bottom:16px;
 }
 .author{
-  font-size:12px;color:var(--c-text-dim);
+  font-size:14px;color:var(--c-text-dim);
   margin-bottom:16px;
 }
 .author a,.author span{color:var(--c-accent);font-weight:700;text-decoration:none}
 .author a:hover{border-bottom:1px solid var(--c-accent)}
 .note-content{
-  color:#93a1a1;font-size:14px;
+  color:#93a1a1;font-size:16px;
   line-height:1.8;
   white-space:pre-line;
   word-break:break-word;
@@ -264,14 +265,14 @@ ${BASE_CSS}
   margin-top:20px;
   padding-top:16px;
   border-top:1px solid var(--c-border);
-  font-size:11px;color:var(--c-nav);
+  font-size:13px;color:var(--c-nav);
   display:flex;justify-content:space-between;align-items:center;
 }
-.note-footer a{color:var(--c-text-muted);text-decoration:none;font-size:10px}
+.note-footer a{color:var(--c-text-muted);text-decoration:none;font-size:12px}
 .note-footer a:hover{color:var(--c-accent)}
 .replies-section{margin-top:32px}
 .replies-header{
-  font-size:11px;color:var(--c-text-muted);
+  font-size:12px;color:var(--c-text-muted);
   text-transform:uppercase;letter-spacing:1.5px;
   margin-bottom:16px;
   display:flex;align-items:center;gap:8px;
@@ -279,7 +280,7 @@ ${BASE_CSS}
 .replies-header .count{
   background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);
   border-radius:4px;padding:2px 8px;
-  color:var(--c-accent);font-size:10px;
+  color:var(--c-accent);font-size:12px;
 }
 .reply{
   border-left:2px solid var(--c-border);
@@ -289,42 +290,42 @@ ${BASE_CSS}
 .reply:last-child{margin-bottom:0}
 .reply:hover{border-left-color:var(--c-accent-dim)}
 .reply-author{
-  font-size:11px;color:var(--c-text-dim);margin-bottom:6px;
+  font-size:13px;color:var(--c-text-dim);margin-bottom:6px;
 }
 .reply-author a{color:var(--c-accent);text-decoration:none;font-weight:700}
 .reply-author a:hover{border-bottom:1px solid var(--c-accent)}
 .reply-content{
-  font-size:13px;color:var(--c-text);
+  font-size:15px;color:var(--c-text);
   line-height:1.6;white-space:pre-line;word-break:break-word;
 }
 .reply-time{
-  font-size:10px;color:var(--c-nav);margin-top:6px;
+  font-size:12px;color:var(--c-nav);margin-top:6px;
 }
 .reply-time a{color:var(--c-text-muted);text-decoration:none}
 .reply-time a:hover{color:var(--c-accent)}
 .no-replies{
-  color:var(--c-text-muted);font-size:12px;font-style:italic;
+  color:var(--c-text-muted);font-size:14px;font-style:italic;
   padding:12px 0;
 }
 .interactions{
   margin-top:20px;padding:12px 0;
   border-top:1px solid var(--c-border);
   display:flex;gap:20px;flex-wrap:wrap;
-  font-size:12px;color:var(--c-text-dim);
+  font-size:14px;color:var(--c-text-dim);
 }
 .interaction-group{display:flex;align-items:center;gap:6px}
-.interaction-group .icon{font-size:14px}
-.interaction-group .label{color:var(--c-text-muted);font-size:11px}
+.interaction-group .icon{font-size:16px}
+.interaction-group .label{color:var(--c-text-muted);font-size:13px}
 .interaction-faces{
   display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;
 }
 .interaction-faces a,.interaction-faces span{
-  font-size:10px;color:var(--c-accent);text-decoration:none;
+  font-size:12px;color:var(--c-accent);text-decoration:none;
 }
 .interaction-faces a:hover{border-bottom:1px solid var(--c-accent)}
 @media(max-width:480px){
   .note-card{padding:16px 18px}
-  .note-content{font-size:13px}
+  .note-content{font-size:15px}
   .reply{padding-left:12px}
 }
 </style>

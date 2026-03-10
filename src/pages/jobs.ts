@@ -114,24 +114,24 @@ router.get('/jobs/:id', async (c) => {
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
 ${headMeta(baseUrl)}
 <style>${BASE_CSS}
-.c{max-width:640px;margin:0 auto}.label{color:var(--c-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-.val{color:#93a1a1;font-size:13px;margin-bottom:20px;word-break:break-all}
-.kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;
+.c{max-width:640px;margin:0 auto}.label{color:var(--c-text-dim);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.val{color:#93a1a1;font-size:15px;margin-bottom:20px;word-break:break-all}
+.kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:700;text-transform:uppercase;
 background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue);margin-bottom:20px}
 a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
-h1{color:#fdf6e3;font-size:18px;margin:0 0 20px}</style></head><body>
+h1{color:#fdf6e3;font-size:20px;margin:0 0 20px}</style></head><body>
 ${overlays()}
 <main class="c">
 <div style="margin-bottom:20px"><a href="/relay">&larr; back to relay</a></div>
 <h1>relay event</h1>
 <span class="kind">${esc(kindLabel)}</span>
-<div class="label">event id</div><div class="val" style="font-size:11px">${esc(re.eventId)}</div>
+<div class="label">event id</div><div class="val" style="font-size:13px">${esc(re.eventId)}</div>
 <div class="label">pubkey</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
 <div class="label">time</div><div class="val">${esc(timeStr)}</div>
 <div class="label">content</div><div class="val" style="white-space:pre-wrap">${esc(preview)}</div>
 ${tags.input ? `<div class="label">input</div><div class="val">${esc(String(tags.input).slice(0, 500))}</div>` : ''}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
-<div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:12px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
+<div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
 </main></body></html>`)
     }
     // Not found locally — redirect to nostr viewer
@@ -270,9 +270,9 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
           }
         }
         const reasonStr = r.reason ? ` \u2014 ${esc(r.reason)}` : ''
-        const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:var(--c-text-muted);font-size:10px">[view on nostr]</a>` : ''
+        const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:var(--c-text-muted);font-size:12px">[view on nostr]</a>` : ''
         const timeStr = r.rejected_at ? new Date(r.rejected_at).toISOString().slice(0, 16).replace('T', ' ') : ''
-        return `<div style="padding:6px 0;border-bottom:1px solid var(--c-border);font-size:11px"><span style="color:var(--c-red)">rejected</span> <span style="color:var(--c-text-dim)">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:var(--c-nav);float:right">${timeStr}</span></div>`
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--c-border);font-size:13px"><span style="color:var(--c-red)">rejected</span> <span style="color:var(--c-text-dim)">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:var(--c-nav);float:right">${timeStr}</span></div>`
       }))
       rejectionsHtml = `
       <div class="section" style="margin-top:20px">
@@ -332,7 +332,7 @@ ${BASE_CSS}
   display:inline-block;
   padding:3px 10px;
   border-radius:4px;
-  font-size:11px;
+  font-size:12px;
   font-weight:700;
   text-transform:uppercase;
   letter-spacing:1px;
@@ -343,7 +343,7 @@ ${BASE_CSS}
   border:1px solid var(--c-accent-dim);
   border-radius:4px;
   padding:3px 10px;
-  font-size:11px;
+  font-size:12px;
   color:var(--c-accent);
 }
 .sats-tag{
@@ -352,23 +352,23 @@ ${BASE_CSS}
   background:rgba(255,176,0,0.12);
   border:1px solid rgba(255,176,0,0.3);
   border-radius:4px;
-  color:var(--c-gold);font-size:11px;font-weight:700;
+  color:var(--c-gold);font-size:13px;font-weight:700;
 }
 .customer{
-  font-size:12px;color:var(--c-text-dim);
+  font-size:14px;color:var(--c-text-dim);
   margin-bottom:16px;
   overflow-wrap:break-word;word-break:break-word;
 }
 .customer span{color:var(--c-accent);font-weight:700}
 .section{margin-top:16px}
 .input-content{
-  color:#93a1a1;font-size:13px;
+  color:#93a1a1;font-size:15px;
   line-height:1.7;
   white-space:pre-line;
   word-break:break-word;
 }
 .result-content{
-  color:var(--c-teal);font-size:13px;
+  color:var(--c-teal);font-size:15px;
   line-height:1.7;
   white-space:pre-line;
   word-break:break-word;
@@ -381,13 +381,13 @@ ${BASE_CSS}
   margin-top:20px;
   padding-top:16px;
   border-top:1px solid var(--c-border);
-  font-size:11px;color:var(--c-nav);
+  font-size:13px;color:var(--c-nav);
 }
 .activity-log{margin-top:24px}
 .activity-log .section-label{margin-bottom:10px}
 .activity-item{
   padding:8px 0;border-bottom:1px solid var(--c-border);
-  font-size:11px;color:var(--c-text-dim);
+  font-size:13px;color:var(--c-text-dim);
   display:flex;align-items:baseline;gap:8px;
 }
 .activity-item:last-child{border-bottom:none}
@@ -397,10 +397,10 @@ ${BASE_CSS}
 .activity-item .status-success{color:var(--c-accent)}
 .activity-item .status-error{color:var(--c-red)}
 .activity-item .status-payment{color:var(--c-gold)}
-.activity-item .atime{color:var(--c-nav);font-size:10px;margin-left:auto;white-space:nowrap}
+.activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
 @media(max-width:480px){
   .job-card{padding:16px 18px}
-  .input-content,.result-content{font-size:12px}
+  .input-content,.result-content{font-size:14px}
 }
 </style>
 </head>

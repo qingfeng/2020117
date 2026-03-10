@@ -90,6 +90,40 @@ content.get('/relay/events', async (c) => {
         }
       }
     }
+
+    // For still-unresolved pubkeys, fetch Kind 0 from external relays and cache
+    const stillUnresolved = pubkeys.filter(pk => !pubkeyNames.has(pk))
+    if (stillUnresolved.length > 0) {
+      try {
+        const { fetchEventsFromRelay } = await import('../services/relay-io')
+        const { generateId } = await import('../lib/utils')
+        const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io').split(',').map((s: string) => s.trim()).filter(Boolean)
+        // Fetch in parallel, limit to 5 pubkeys to keep response fast
+        await Promise.all(stillUnresolved.slice(0, 5).map(async (pk) => {
+          for (const relayUrl of relayUrls.slice(0, 2)) {
+            try {
+              const result = await fetchEventsFromRelay(relayUrl, { kinds: [0], authors: [pk], limit: 1 })
+              if (result.events.length > 0) {
+                const profile = JSON.parse(result.events[0].content)
+                const name = profile.display_name || profile.name || ''
+                if (name) {
+                  const preview = name + (profile.about ? ' — ' + profile.about.slice(0, 150) : '')
+                  pubkeyNames.set(pk, { displayName: name, username: null, avatarUrl: null })
+                  // Cache to D1 for future lookups
+                  await db.insert(relayEvents).values({
+                    id: generateId(), eventId: result.events[0].id, kind: 0, pubkey: pk,
+                    contentPreview: preview, tags: JSON.stringify({}),
+                    eventCreatedAt: result.events[0].created_at, createdAt: new Date(),
+                  }).onConflictDoNothing()
+                  return
+                }
+                break
+              }
+            } catch { /* skip relay */ }
+          }
+        }))
+      } catch { /* non-critical */ }
+    }
   }
 
   const KIND_LABELS: Record<number, string> = {
@@ -98,7 +132,7 @@ content.get('/relay/events', async (c) => {
     5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
     6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
     6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
-    7000: 'job feedback', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
+    7000: 'job feedback', 30023: 'article', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
   }
 
   const events = rows.map(r => {
@@ -112,6 +146,15 @@ content.get('/relay/events', async (c) => {
       const dashIdx = preview.indexOf(' — ')
       if (dashIdx > 0) { profileName = preview.slice(0, dashIdx); profileAbout = preview.slice(dashIdx + 3) }
       else profileName = preview
+    }
+
+    // Extract article title and summary from Kind 30023
+    let articleTitle: string | null = null
+    let articleSummary: string | null = null
+    if (r.kind === 30023 && preview) {
+      const dashIdx = preview.indexOf(' — ')
+      if (dashIdx > 0) { articleTitle = preview.slice(0, dashIdx); articleSummary = preview.slice(dashIdx + 3) }
+      else articleTitle = preview
     }
 
     let handlerName: string | null = null
@@ -128,6 +171,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
     else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
     else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : `feedback: ${tags.status || 'update'}`
+    else if (kindNum === 30023) action = 'published article'
     else if (kindNum === 30333) action = 'heartbeat'
     else if (kindNum === 30311) action = 'endorsed agent'
     else if (kindNum === 31117) action = `reviewed job (${tags.rating ? tags.rating + '/5' : ''})`
@@ -142,6 +186,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
     else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
     else if (kindNum >= 6100 && kindNum <= 6303) detail = tags.e ? `→ job ${eventIdToNevent(tags.e).slice(0, 24)}...` : (preview ? preview.slice(0, 150) : '')
+    else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
     else if (kindNum === 30333) detail = ''
     else if (kindNum === 30311 && preview) detail = preview
     else if (kindNum === 31990 && handlerName) detail = handlerName
@@ -172,6 +217,8 @@ content.get('/relay/events', async (c) => {
         : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null) : null,
       note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
+      article_title: articleTitle, article_summary: articleSummary,
+      article_naddr: kindNum === 30023 ? (tags.d ? `naddr:${tags.d}` : null) : null,
       created_at: r.eventCreatedAt,
     }
   })

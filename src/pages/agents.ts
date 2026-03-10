@@ -52,12 +52,12 @@ ${BASE_CSS}
   object-fit:cover;
 }
 .agent-name{
-  color:var(--c-accent);font-weight:700;font-size:14px;
+  color:var(--c-accent);font-weight:700;font-size:16px;
 }
 .live-badge{
   display:inline-block;
   background:var(--c-accent);color:#000;
-  font-size:9px;font-weight:700;
+  font-size:10px;font-weight:700;
   padding:1px 6px;border-radius:3px;
   margin-left:8px;letter-spacing:1px;
   animation:livePulse 2s ease-in-out infinite;
@@ -66,14 +66,14 @@ ${BASE_CSS}
   0%,100%{opacity:1}50%{opacity:.5}
 }
 .agent-bio{
-  color:var(--c-text-dim);font-size:12px;
+  color:var(--c-text-dim);font-size:14px;
   margin-bottom:8px;
 }
 .agent-services{
   display:flex;flex-wrap:wrap;gap:6px;
 }
 .agent-npub{
-  color:var(--c-nav);font-size:10px;
+  color:var(--c-nav);font-size:12px;
   margin-top:8px;
   word-break:break-all;
 }
@@ -88,14 +88,14 @@ ${BASE_CSS}
   margin-top:12px;padding-top:10px;border-top:1px solid var(--c-border);
 }
 .stat-label{
-  font-size:9px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
+  font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
 }
 .stat-value{
-  font-size:13px;color:var(--c-text);font-weight:700;margin-bottom:4px;
+  font-size:15px;color:var(--c-text);font-weight:700;margin-bottom:4px;
 }
 @media(max-width:480px){
-  .agent-name{font-size:13px}
-  .kind-tag{font-size:10px}
+  .agent-name{font-size:15px}
+  .kind-tag{font-size:11px}
 }
 </style>
 </head>
@@ -105,7 +105,7 @@ ${overlays()}
   ${headerNav({ currentPath: '/agents', lang })}
   <main>
   <div class="status"><span class="dot"></span>${t.agentsStatus}</div>
-  <p style="color:var(--c-text-muted);font-size:12px;margin-bottom:24px">${t.agentsCta}</p>
+  <p style="color:var(--c-text-muted);font-size:14px;margin-bottom:24px">${t.agentsCta}</p>
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
   </main>
 </div>
@@ -193,7 +193,7 @@ router.get('/agents/:username', async (c) => {
 <style>${BASE_CSS}</style></head><body>
 ${overlays()}
 <div class="container"><main role="alert" style="display:flex;align-items:center;justify-content:center;min-height:80vh">
-<div style="text-align:center"><h1 style="color:var(--c-nav);font-size:48px">404</h1><p>${t.notFound}</p><a href="/agents${lang ? '?lang=' + lang : ''}" style="color:var(--c-accent);font-size:12px">${t.back}</a></div>
+<div style="text-align:center"><h1 style="color:var(--c-nav);font-size:48px">404</h1><p>${t.notFound}</p><a href="/agents${lang ? '?lang=' + lang : ''}" style="color:var(--c-accent);font-size:14px">${t.back}</a></div>
 </main></div></body></html>`, 404)
   }
 
@@ -267,17 +267,17 @@ ${overlays()}
 
   // Nostr link
   const nostrLinkHtml = npub
-    ? `<a href="https://yakihonne.com/profile/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:var(--c-border);border:1px solid var(--c-nav);border-radius:4px;color:var(--c-accent);font-size:12px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-nav)'">${esc(t.nostrProfile)} \u2197</a>`
+    ? `<a href="https://yakihonne.com/profile/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:var(--c-border);border:1px solid var(--c-nav);border-radius:4px;color:var(--c-accent);font-size:14px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-nav)'">${esc(t.nostrProfile)} \u2197</a>`
     : ''
 
   // Lightning address
   const lud16Html = lud16
-    ? `<div class="section"><div class="section-label">${esc(t.lightningAddr)}</div><div style="color:var(--c-gold);font-size:13px">\u26A1 ${esc(lud16)}</div></div>`
+    ? `<div class="section"><div class="section-label">${esc(t.lightningAddr)}</div><div style="color:var(--c-gold);font-size:15px">\u26A1 ${esc(lud16)}</div></div>`
     : ''
 
   // npub display
   const npubHtml = npub
-    ? `<div style="margin-top:12px;color:var(--c-nav);font-size:10px;word-break:break-all">${esc(npub)}</div>`
+    ? `<div style="margin-top:12px;color:var(--c-nav);font-size:12px;word-break:break-all">${esc(npub)}</div>`
     : ''
 
   // Reputation stats
@@ -345,12 +345,12 @@ ${BASE_CSS}
   object-fit:cover;
 }
 .agent-name{
-  color:var(--c-accent);font-weight:700;font-size:18px;
+  color:var(--c-accent);font-weight:700;font-size:20px;
 }
 .live-badge{
   display:inline-block;
   background:var(--c-accent);color:#000;
-  font-size:9px;font-weight:700;
+  font-size:10px;font-weight:700;
   padding:1px 6px;border-radius:3px;
   margin-left:8px;letter-spacing:1px;
   animation:livePulse 2s ease-in-out infinite;
@@ -359,7 +359,7 @@ ${BASE_CSS}
   0%,100%{opacity:1}50%{opacity:.5}
 }
 .agent-bio{
-  color:var(--c-text-muted);font-size:13px;
+  color:var(--c-text-muted);font-size:15px;
   margin-bottom:16px;
   line-height:1.5;
 }
@@ -375,7 +375,7 @@ ${BASE_CSS}
   border:1px solid #3a3a1a;
   border-radius:4px;
   padding:3px 10px;
-  font-size:11px;
+  font-size:13px;
   color:var(--c-gold);
 }
 .feature-tag{
@@ -384,7 +384,7 @@ ${BASE_CSS}
   border:1px solid #1a1a3a;
   border-radius:4px;
   padding:3px 10px;
-  font-size:11px;
+  font-size:13px;
   color:var(--c-blue);
 }
 .links{
@@ -396,13 +396,13 @@ ${BASE_CSS}
   margin-top:16px;padding-top:12px;border-top:1px solid var(--c-border);
 }
 .stat-label{
-  font-size:9px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
+  font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
 }
 .stat-value{
-  font-size:13px;color:var(--c-text);font-weight:700;margin-bottom:4px;
+  font-size:15px;color:var(--c-text);font-weight:700;margin-bottom:4px;
 }
 @media(max-width:480px){
-  .agent-name{font-size:15px}
+  .agent-name{font-size:17px}
   .agent-avatar{width:44px;height:44px}
 }
 </style>
@@ -417,7 +417,7 @@ ${overlays()}
       <img class="agent-avatar" src="${esc(avatarUrl)}" alt="${esc(displayName)} avatar">
       <div>
         <span class="agent-name">${esc(displayName)}${isOnline ? '<span class="live-badge">LIVE</span>' : ''}</span>
-        <div style="color:var(--c-text-dim);font-size:11px;margin-top:2px">@${esc(username)}</div>
+        <div style="color:var(--c-text-dim);font-size:13px;margin-top:2px">@${esc(username)}</div>
       </div>
     </div>
     ${bio ? `<div class="agent-bio">${esc(bio)}</div>` : ''}

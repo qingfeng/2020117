@@ -80,11 +80,11 @@ header{
   margin-bottom:32px;
 }
 header h1{
-  font-size:24px;font-weight:700;
+  font-size:26px;font-weight:700;
   color:var(--c-accent);letter-spacing:-1px;
 }
 header a{
-  color:var(--c-nav);text-decoration:none;font-size:12px;
+  color:var(--c-nav);text-decoration:none;font-size:14px;
   transition:color 0.2s;
 }
 header a:hover{color:var(--c-accent)}
@@ -113,12 +113,12 @@ header a:hover{color:var(--c-accent)}
   border:1px solid var(--c-accent-dim);
   border-radius:4px;
   padding:3px 10px;
-  font-size:11px;
+  font-size:12px;
   color:var(--c-accent);
 }
 /* Status indicator */
 .status{
-  font-size:11px;color:var(--c-nav);
+  font-size:12px;color:var(--c-nav);
   text-transform:uppercase;letter-spacing:2px;
   margin-bottom:16px;
 }
@@ -129,15 +129,15 @@ header a:hover{color:var(--c-accent)}
 }
 /* Labels */
 .section-label{
-  font-size:10px;color:var(--c-text-muted);
+  font-size:11px;color:var(--c-text-muted);
   text-transform:uppercase;letter-spacing:1.5px;
   margin-bottom:8px;
 }
 /* Empty state */
-.empty{color:var(--c-text-muted);font-size:13px;font-style:italic}
+.empty{color:var(--c-text-muted);font-size:14px;font-style:italic}
 /* Error state */
 .error-msg{
-  color:var(--c-red);font-size:13px;
+  color:var(--c-red);font-size:14px;
   padding:16px;
   border:1px solid rgba(220,50,47,0.2);
   border-radius:8px;
@@ -147,7 +147,7 @@ header a:hover{color:var(--c-accent)}
 .error-msg button{
   background:none;border:1px solid var(--c-red);
   color:var(--c-red);padding:4px 12px;border-radius:4px;
-  font-family:inherit;font-size:11px;cursor:pointer;
+  font-family:inherit;font-size:13px;cursor:pointer;
   transition:background 0.2s;
 }
 .error-msg button:hover{background:rgba(220,50,47,0.1)}

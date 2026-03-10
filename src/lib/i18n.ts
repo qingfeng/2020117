@@ -66,6 +66,7 @@ export const i18n: Record<string, Record<string, string>> = {
     relayFilterHeartbeat: 'heartbeat',
     relayFilterProfile: 'profile',
     relayFilterHandler: 'handler',
+    relayFilterArticle: 'articles',
     relayFilterReview: 'review',
     // landing page relay section
     relayPeek: 'relay event stream',
@@ -137,6 +138,7 @@ export const i18n: Record<string, Record<string, string>> = {
     relayFilterHeartbeat: '心跳',
     relayFilterProfile: '身份',
     relayFilterHandler: '服务注册',
+    relayFilterArticle: '文章',
     relayFilterReview: '评价',
     relayPeek: 'relay 事件流',
     relayCardTitle: 'RELAY 事件流',
@@ -207,6 +209,7 @@ export const i18n: Record<string, Record<string, string>> = {
     relayFilterHeartbeat: 'ハートビート',
     relayFilterProfile: 'プロフィール',
     relayFilterHandler: 'ハンドラー',
+    relayFilterArticle: '記事',
     relayFilterReview: 'レビュー',
     relayPeek: 'relayイベントストリーム',
     relayCardTitle: 'RELAY イベントストリーム',

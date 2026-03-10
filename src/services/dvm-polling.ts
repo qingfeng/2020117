@@ -1402,14 +1402,14 @@ export async function advanceWorkflow(db: Database, env: Bindings, completedJobI
 
 // --- Relay Event Stream ---
 
-const RELAY_EVENT_KINDS = [0, 1, 6, 7, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
+const RELAY_EVENT_KINDS = [0, 1, 6, 7, 30023, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
 
 const KIND_LABELS: Record<number, string> = {
   0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
   5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
   6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
   6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
-  7000: 'job feedback', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
+  7000: 'job feedback', 30023: 'article', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
 }
 
 function extractContentPreview(event: NostrEvent): string | null {
@@ -1420,6 +1420,13 @@ function extractContentPreview(event: NostrEvent): string | null {
       const p = JSON.parse(event.content)
       return p.name ? `${p.name}${p.about ? ' — ' + p.about.slice(0, 100) : ''}` : event.content.slice(0, 200)
     } catch { return event.content.slice(0, 200) }
+  }
+  // For Kind 30023 (long-form article), extract title from tags or first line
+  if (event.kind === 30023) {
+    const titleTag = event.tags.find((t: string[]) => t[0] === 'title')?.[1]
+    const summary = event.tags.find((t: string[]) => t[0] === 'summary')?.[1]
+    if (titleTag) return titleTag + (summary ? ' — ' + summary.slice(0, 120) : '')
+    return event.content.slice(0, 200)
   }
   // For Kind 30311, parse endorsement
   if (event.kind === 30311) {
@@ -1461,6 +1468,8 @@ function extractKeyTags(event: NostrEvent): string {
     if (tag[0] === 'd') result.d = tag[1] || ''
     if (tag[0] === 'amount') result.amount = tag[1] || ''
     if (tag[0] === 'rating') result.rating = tag[1] || ''
+    if (tag[0] === 'title') result.title = (tag[1] || '').slice(0, 200)
+    if (tag[0] === 'summary') result.summary = (tag[1] || '').slice(0, 300)
   }
   return JSON.stringify(result)
 }
@@ -1522,5 +1531,70 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
   }
   if (inserted > 0) {
     console.log(`[Relay] Indexed ${inserted} events (since ${since})`)
+  }
+}
+
+// --- Sync events from public relays for all registered 2020117.xyz users ---
+// Users publish to public relays (damus, nos.lol, etc.) — pull their events into our DB
+export async function pollPublicRelayForUsers(env: Bindings, db: Database): Promise<void> {
+  const kv = env.KV
+  const sinceKey = 'public_relay_user_sync_last'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 // 24h lookback on first run
+
+  // Get all registered user pubkeys
+  const userRows = await db.select({ pubkey: users.nostrPubkey }).from(users).where(isNotNull(users.nostrPubkey))
+  const pubkeys = userRows.map(u => u.pubkey).filter(Boolean) as string[]
+  if (pubkeys.length === 0) return
+
+  const PUBLIC_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band']
+  const SYNC_KINDS = [1, 6, 7, 30023] // notes, reposts, reactions, articles
+
+  let maxCreatedAt = since
+  let inserted = 0
+
+  for (const relayUrl of PUBLIC_RELAYS) {
+    try {
+      const { events } = await fetchEventsFromRelay(relayUrl, {
+        kinds: SYNC_KINDS,
+        authors: pubkeys,
+        since,
+        limit: 100,
+      })
+
+      for (const event of events) {
+        if (!verifyEvent(event)) continue
+        if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+
+        try {
+          // For replaceable events (kind 30000-39999), delete old entries for same pubkey+kind
+          if (event.kind >= 30000 && event.kind < 40000) {
+            await db.delete(relayEvents).where(
+              and(eq(relayEvents.pubkey, event.pubkey), eq(relayEvents.kind, event.kind))
+            )
+          }
+          await db.insert(relayEvents).values({
+            id: generateId(),
+            eventId: event.id,
+            kind: event.kind,
+            pubkey: event.pubkey,
+            contentPreview: extractContentPreview(event),
+            tags: extractKeyTags(event),
+            eventCreatedAt: event.created_at,
+            createdAt: new Date(),
+          }).onConflictDoNothing()
+          inserted++
+        } catch { /* already indexed */ }
+      }
+    } catch (e: any) {
+      console.warn(`[PublicSync] Poll from ${relayUrl} failed: ${e.message}`)
+    }
+  }
+
+  if (maxCreatedAt > since) {
+    await kv.put(sinceKey, String(maxCreatedAt))
+  }
+  if (inserted > 0) {
+    console.log(`[PublicSync] Synced ${inserted} events for ${pubkeys.length} users (since ${since})`)
   }
 }

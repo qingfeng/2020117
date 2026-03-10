@@ -94,7 +94,7 @@ h1{
   margin-bottom:8px;
 }
 .tagline{
-  color:var(--c-text-dim);font-size:14px;
+  color:var(--c-text-dim);font-size:16px;
   margin-bottom:48px;
 }
 .card{
@@ -115,7 +115,7 @@ h1{
   padding:1px;border-radius:12px;
 }
 .label{
-  font-size:11px;text-transform:uppercase;
+  font-size:12px;text-transform:uppercase;
   letter-spacing:2px;color:var(--c-text-muted);
   margin-bottom:16px;
 }
@@ -124,7 +124,7 @@ h1{
   border:1px solid var(--c-border);
   border-radius:8px;
   padding:16px 20px;
-  font-size:15px;
+  font-size:16px;
   color:var(--c-accent);
   cursor:pointer;
   transition:border-color 0.2s;
@@ -137,7 +137,7 @@ h1{
 .cmd-box .prompt{color:var(--c-text-dim);user-select:none}
 .cmd-box .copy{
   position:absolute;right:16px;
-  font-size:11px;color:var(--c-nav);
+  font-size:12px;color:var(--c-nav);
   text-transform:uppercase;
   letter-spacing:1px;
   transition:color 0.2s;
@@ -149,10 +149,10 @@ h1{
 }
 .step{display:flex;align-items:baseline;gap:10px}
 .step-num{
-  color:var(--c-accent);font-weight:700;font-size:14px;
+  color:var(--c-accent);font-weight:700;font-size:16px;
   min-width:20px;
 }
-.step-text{color:var(--c-text-muted);font-size:13px}
+.step-text{color:var(--c-text-muted);font-size:15px}
 .step-text a{color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)}
 .step-text a:hover{border-color:var(--c-accent)}
 .divider{
@@ -165,7 +165,7 @@ h1{
   display:flex;gap:16px 24px;
   flex-wrap:wrap;
   justify-content:center;
-  font-size:12px;
+  font-size:14px;
 }
 .footer a{
   color:var(--c-nav);text-decoration:none;
@@ -175,7 +175,7 @@ h1{
 .footer a:hover{color:var(--c-accent)}
 @media(max-width:480px){
   h1{font-size:36px}
-  .cmd-box{font-size:13px;padding:12px 14px}
+  .cmd-box{font-size:14px;padding:12px 14px}
 }
 </style>
 </head>
@@ -236,11 +236,11 @@ ${overlays()}
       <div class="label">${t.relayCardTitle}</div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
         <span style="font-size:24px" aria-hidden="true">\u{1F4E1}</span>
-        <code style="color:var(--c-teal);font-size:13px">wss://relay.2020117.xyz</code>
+        <code style="color:var(--c-teal);font-size:15px">wss://relay.2020117.xyz</code>
         <span class="dot" style="animation:blink 2s ease-in-out infinite" aria-label="online"></span>
       </div>
-      <p style="color:var(--c-text-muted);font-size:12px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
-      <span style="color:var(--c-accent);font-size:12px;border-bottom:1px solid var(--c-accent-dim)">${t.relayCardBtn} &rarr;</span>
+      <p style="color:var(--c-text-muted);font-size:14px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
+      <span style="color:var(--c-accent);font-size:14px;border-bottom:1px solid var(--c-accent-dim)">${t.relayCardBtn} &rarr;</span>
     </div>
   </a>
   </main>

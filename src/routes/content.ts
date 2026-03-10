@@ -31,12 +31,24 @@ content.get('/relay/events', async (c) => {
 
   const EXCLUDED_KINDS = [7000, 30333, 31990]
   let conditions
+  let filteringNotes = false
   if (kindParam) {
     const kinds = kindParam.split(',').map(Number).filter(n => !isNaN(n))
-    if (kinds.length === 1) conditions = eq(relayEvents.kind, kinds[0])
+    if (kinds.length === 1) {
+      conditions = eq(relayEvents.kind, kinds[0])
+      if (kinds[0] === 1) filteringNotes = true
+    }
     else if (kinds.length > 1) conditions = inArray(relayEvents.kind, kinds)
   } else {
     conditions = sql`${relayEvents.kind} NOT IN (${sql.raw(EXCLUDED_KINDS.join(','))})`
+    filteringNotes = true // default view includes notes
+  }
+
+  // For views that include notes: exclude reply notes (Kind 1 with tags containing "e")
+  // A root note has tags like {} or {"p":"..."}, a reply has {"e":"...","p":"..."}
+  if (filteringNotes) {
+    const baseCondition = conditions
+    conditions = and(baseCondition, sql`NOT (${relayEvents.kind} = 1 AND instr(${relayEvents.tags}, '"e"') > 0)`)
   }
 
   const [rows, countResult] = await Promise.all([
@@ -164,7 +176,54 @@ content.get('/relay/events', async (c) => {
     }
   })
 
-  return c.json({ events, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } })
+  // Enrich Kind 1 notes with reply/reaction/repost counts + preview replies
+  const noteEventIds = events.filter(e => e.kind === 1).map(e => e.event_id)
+  const noteStats = new Map<string, { reply_count: number; reaction_count: number; repost_count: number; replies_preview: Array<{ actor_name: string; username: string | null; content: string; created_at: number }> }>()
+
+  if (noteEventIds.length > 0) {
+    // Batch: for each note, count replies/reactions/reposts + get 3 latest replies
+    for (const noteId of noteEventIds) {
+      const [replyRows, reactionCount, repostCount] = await Promise.all([
+        db.select({ eventId: relayEvents.eventId, pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview, eventCreatedAt: relayEvents.eventCreatedAt })
+          .from(relayEvents).where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
+          .orderBy(desc(relayEvents.eventCreatedAt)).limit(3),
+        db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
+          .where(and(eq(relayEvents.kind, 7), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
+        db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
+          .where(and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
+      ])
+
+      // Also count total replies (not just the 3 we fetched)
+      const replyCountResult = replyRows.length < 3 ? [{ count: replyRows.length }]
+        : await db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
+          .where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
+
+      const repliesPreview = replyRows.reverse().map(r => {
+        const rUser = pubkeyNames.get(r.pubkey)
+        return {
+          actor_name: rUser?.displayName || rUser?.username || pubkeyToNpub(r.pubkey).slice(0, 16) + '...',
+          username: rUser?.username || null,
+          content: (r.contentPreview || '').slice(0, 120),
+          created_at: r.eventCreatedAt,
+        }
+      })
+
+      noteStats.set(noteId, {
+        reply_count: replyCountResult[0]?.count || 0,
+        reaction_count: reactionCount[0]?.count || 0,
+        repost_count: repostCount[0]?.count || 0,
+        replies_preview: repliesPreview,
+      })
+    }
+  }
+
+  const enrichedEvents = events.map(e => {
+    const stats = noteStats.get(e.event_id)
+    if (stats) return { ...e, ...stats }
+    return e
+  })
+
+  return c.json({ events: enrichedEvents, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } })
 })
 
 // GET /api/activity — 全站活动流

@@ -119,11 +119,29 @@ ${BASE_CSS}
   color:var(--c-text-dim);font-size:11px;line-height:1.6;
   background:var(--c-accent-bg);
 }
+.note-stats{
+  padding-left:28px;margin-top:4px;
+  display:flex;gap:12px;font-size:10px;color:var(--c-text-muted);
+}
+.note-stats span{display:flex;align-items:center;gap:3px}
+.note-replies-preview{
+  padding-left:28px;margin-top:6px;
+}
+.note-reply-item{
+  padding:4px 0 4px 10px;
+  border-left:2px solid var(--c-border);
+  font-size:11px;color:var(--c-text-dim);
+  margin-bottom:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.note-reply-item .rp-author{color:var(--c-accent);font-weight:700;font-size:10px}
 @media(max-width:480px){
   .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
   .ev-content{font-size:10px}
   .act-snippet{padding-left:0;font-size:11px}
   .act-result{margin-left:0}
+  .note-stats{padding-left:0}
+  .note-replies-preview{padding-left:0}
 }
 </style>
 </head>
@@ -260,8 +278,26 @@ function renderRelayEvents(events,meta){
         +(e.pow?'<span class="ev-pow" title="Proof of Work: '+e.pow+' bits">⛏'+e.pow+'</span>':'')
         +'<span class="ev-time">'+timeAgoUnix(e.created_at)+'</span>'
       +'</div>'
-      +detailHtml
-      +'</div>';
+      +detailHtml;
+    // Note stats (reply/reaction/repost counts) + reply previews
+    if(e.kind===1){
+      const rc=e.reply_count||0,lc=e.reaction_count||0,rpc=e.repost_count||0;
+      if(rc||lc||rpc){
+        html+='<div class="note-stats">';
+        if(rc)html+='<span>\\u{1F4AC} '+rc+'</span>';
+        if(lc)html+='<span>\\u2764\\uFE0F '+lc+'</span>';
+        if(rpc)html+='<span>\\u{1F504} '+rpc+'</span>';
+        html+='</div>';
+      }
+      if(e.replies_preview&&e.replies_preview.length){
+        html+='<div class="note-replies-preview">';
+        for(const rp of e.replies_preview){
+          html+='<div class="note-reply-item"><span class="rp-author">'+esc(rp.actor_name)+'</span> '+esc(rp.content)+'</div>';
+        }
+        html+='</div>';
+      }
+    }
+    html+='</div>';
   }
   feed.innerHTML=html;
   showPager(meta);

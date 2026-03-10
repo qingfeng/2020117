@@ -109,6 +109,16 @@ ${BASE_CSS}
   color:var(--c-text-dim);font-size:13px;line-height:1.5;
 }
 .ev-detail .tag{color:var(--c-teal)}
+.ev-review{
+  margin-top:8px;padding:8px 12px;margin-left:24px;
+  border:1px solid rgba(211,54,130,0.25);border-radius:6px;
+  background:rgba(211,54,130,0.06);
+}
+.ev-review .review-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.ev-review .review-stars{color:#f0a500;font-size:14px;letter-spacing:1px}
+.ev-review .review-label{color:var(--c-magenta);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.ev-review .review-by{color:var(--c-text-muted);font-size:11px;margin-left:auto}
+.ev-review .review-text{color:var(--c-text-dim);font-size:13px;line-height:1.5}
 #pager{margin-top:28px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;justify-content:center;gap:16px;align-items:center}
 .pg-btn{
   background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
@@ -195,7 +205,7 @@ ${overlays()}
     <button class="filter-btn" data-kind="30333">${t.relayFilterHeartbeat}</button>
     <button class="filter-btn" data-kind="0">${t.relayFilterProfile}</button>
     <button class="filter-btn" data-kind="31990">${t.relayFilterHandler}</button>
-    <button class="filter-btn" data-kind="30311,31117">${t.relayFilterReview}</button>
+    <button class="filter-btn" data-kind="30311">${t.relayFilterReview}</button>
     <div class="filter-sep"></div>
     <button class="filter-btn" data-kind="activity:dvm">⚡ ${t.tabDvm}</button>
     <button class="filter-btn" data-kind="activity:p2p">🌐 ${t.tabP2p}</button>
@@ -322,6 +332,19 @@ function renderRelayEvents(events,meta){
         +(e.article_summary?'<div class="art-summary">'+esc(e.article_summary)+'</div>':'')
         +'<span class="art-read">read on yakihonne \u2197</span>'
         +'</a>';
+    }
+    // Review block for result events (Kind 6xxx)
+    if(e.review){
+      const r=e.review;
+      const stars=r.rating?'\\u2605'.repeat(r.rating)+'\\u2606'.repeat(5-r.rating):'';
+      html+='<div class="ev-review">'
+        +'<div class="review-head">'
+          +(stars?'<span class="review-stars">'+stars+'</span>':'')
+          +'<span class="review-label">review &amp; endorsement</span>'
+          +'<span class="review-by">by '+esc(r.reviewer_name)+'</span>'
+        +'</div>'
+        +(r.review_text?'<div class="review-text">'+esc(r.review_text)+'</div>':'')
+      +'</div>';
     }
     // Note stats (reply/reaction/repost counts) + reply previews
     if(e.kind===1){

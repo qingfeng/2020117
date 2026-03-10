@@ -174,7 +174,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 30023) action = 'published article'
     else if (kindNum === 30333) action = 'heartbeat'
     else if (kindNum === 30311) action = 'endorsed agent'
-    else if (kindNum === 31117) action = `reviewed job (${tags.rating ? tags.rating + '/5' : ''})`
+    else if (kindNum === 31117) action = `reviewed job${tags.rating ? ' (' + tags.rating + '/5)' : ''}`
     else if (kindNum === 31990) action = 'registered service'
     else action = KIND_LABELS[kindNum] || `kind ${kindNum}`
 
@@ -185,10 +185,21 @@ content.get('/relay/events', async (c) => {
     if (kindNum === 0 && profileAbout) detail = profileAbout
     else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
     else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
-    else if (kindNum >= 6100 && kindNum <= 6303) detail = tags.e ? `→ job ${eventIdToNevent(tags.e).slice(0, 24)}...` : (preview ? preview.slice(0, 150) : '')
+    else if (kindNum >= 6100 && kindNum <= 6303) {
+      const parts: string[] = []
+      if (preview) parts.push(preview.slice(0, 200))
+      if (tags.e) parts.push(`→ job ${eventIdToNevent(tags.e).slice(0, 24)}...`)
+      detail = parts.join(' ')
+    }
     else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
     else if (kindNum === 30333) detail = ''
     else if (kindNum === 30311 && preview) detail = preview
+    else if (kindNum === 31117) {
+      const parts: string[] = []
+      if (preview) parts.push(preview.slice(0, 200))
+      if (tags.e) parts.push(`→ job ${eventIdToNevent(tags.e).slice(0, 24)}...`)
+      detail = parts.join(' ')
+    }
     else if (kindNum === 31990 && handlerName) detail = handlerName
     else if (kindNum === 6 && tags.e) detail = ''
     else if (kindNum === 7 && tags.e) detail = ''
@@ -214,7 +225,7 @@ content.get('/relay/events', async (c) => {
       avatar_url: user?.avatarUrl || null, action, detail, pow,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
       job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
-        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null) : null,
+        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000 || kindNum === 31117) ? (tags.e || null) : null,
       note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       article_title: articleTitle, article_summary: articleSummary,
@@ -274,12 +285,12 @@ content.get('/relay/events', async (c) => {
   // Enrich DVM events with earnings data from dvm_job table
   // For Kind 6xxx results: tags.e references the request event, look up dvm_job.request_event_id
   // For Kind 5xxx requests: the event_id IS the request event, look up dvm_job.request_event_id
-  const dvmEventIds = events.filter(e => (e.kind >= 5100 && e.kind <= 5303) || (e.kind >= 6100 && e.kind <= 6303))
+  const dvmEventIds = events.filter(e => (e.kind >= 5100 && e.kind <= 5303) || (e.kind >= 6100 && e.kind <= 6303) || e.kind === 31117)
   const earningsMap = new Map<string, { earned_sats: number; provider_name: string | null; customer_name: string | null; status: string }>()
 
   if (dvmEventIds.length > 0) {
     // Collect request event IDs: for Kind 5xxx it's event_id, for Kind 6xxx it's ref_event_id (tags.e)
-    const requestEventIds = dvmEventIds.map(e => e.kind >= 6100 ? e.ref_event_id : e.event_id).filter(Boolean) as string[]
+    const requestEventIds = dvmEventIds.map(e => (e.kind >= 6100 || e.kind === 31117) ? e.ref_event_id : e.event_id).filter(Boolean) as string[]
     if (requestEventIds.length > 0) {
       const jobRows = await db.select({
         requestEventId: dvmJobs.requestEventId,
@@ -294,7 +305,7 @@ content.get('/relay/events', async (c) => {
       for (const job of jobRows) {
         if (!job.requestEventId) continue
         const sats = Math.round((job.paidMsats || job.priceMsats || job.bidMsats || 0) / 1000)
-        if (sats > 0 && (job.status === 'completed' || job.status === 'result_available')) {
+        if (sats > 0) {
           const provUser = job.providerPubkey ? pubkeyNames.get(job.providerPubkey) : null
           const custUser = job.customerPubkey ? pubkeyNames.get(job.customerPubkey) : null
           earningsMap.set(job.requestEventId, {
@@ -308,17 +319,64 @@ content.get('/relay/events', async (c) => {
     }
   }
 
-  // Enrich notes with stats, use last_activity_at for sorting
-  const enrichedEvents = events.map(e => {
+  // Attach Kind 31117 reviews to their parent Kind 6xxx result events
+  // Build map: request_event_id → review data
+  const reviewMap = new Map<string, { reviewer_name: string; rating: number | null; review_text: string; created_at: number }>()
+  // First, collect from current page events
+  for (const e of events) {
+    if (e.kind === 31117 && e.ref_event_id) {
+      const rawTags = rows.find(r => r.eventId === e.event_id)?.tags
+      const tags = rawTags ? JSON.parse(rawTags) : {}
+      reviewMap.set(e.ref_event_id, {
+        reviewer_name: e.actor_name,
+        rating: tags.rating ? parseInt(tags.rating) : null,
+        review_text: e.detail || '',
+        created_at: e.created_at,
+      })
+    }
+  }
+  // Also look up reviews from DB for result events missing a review in current page
+  const resultRequestIds = events
+    .filter(e => e.kind >= 6100 && e.kind <= 6303 && e.ref_event_id && !reviewMap.has(e.ref_event_id))
+    .map(e => e.ref_event_id!)
+  if (resultRequestIds.length > 0) {
+    // Find Kind 31117 review events that reference these request event IDs via tags.e
+    for (const reqId of resultRequestIds.slice(0, 10)) {
+      const reviewRows = await db.select({ pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview, tags: relayEvents.tags, eventCreatedAt: relayEvents.eventCreatedAt })
+        .from(relayEvents).where(and(eq(relayEvents.kind, 31117), sql`instr(${relayEvents.tags}, ${reqId}) > 0`))
+        .orderBy(desc(relayEvents.eventCreatedAt)).limit(1)
+      if (reviewRows.length > 0) {
+        const rr = reviewRows[0]
+        const rrTags = rr.tags ? JSON.parse(rr.tags) : {}
+        const reviewer = pubkeyNames.get(rr.pubkey)
+        reviewMap.set(reqId, {
+          reviewer_name: reviewer?.displayName || reviewer?.username || pubkeyToNpub(rr.pubkey).slice(0, 16) + '...',
+          rating: rrTags.rating ? parseInt(rrTags.rating) : null,
+          review_text: rr.contentPreview || '',
+          created_at: rr.eventCreatedAt,
+        })
+      }
+    }
+  }
+
+  // Filter out Kind 31117 from main list (they'll appear under result events)
+  const filteredEvents = events.filter(e => e.kind !== 31117)
+
+  // Enrich with stats, earnings, and reviews
+  const enrichedEvents = filteredEvents.map(e => {
     const stats = noteStats.get(e.event_id)
     // Look up earnings: for results use ref_event_id, for requests use event_id
     const earningsKey = (e.kind >= 6100 && e.kind <= 6303) ? e.ref_event_id : e.event_id
     const earnings = earningsKey ? earningsMap.get(earningsKey) : undefined
     const earningsData = earnings ? { earned_sats: earnings.earned_sats, provider_name: earnings.provider_name, customer_name: earnings.customer_name, job_status: earnings.status } : {}
+    // Attach review to result events
+    const reviewKey = (e.kind >= 6100 && e.kind <= 6303) ? e.ref_event_id : null
+    const review = reviewKey ? reviewMap.get(reviewKey) : undefined
+    const reviewData = review ? { review: review } : {}
     if (stats) {
-      return { ...e, ...stats, ...earningsData, sort_at: stats.last_activity_at }
+      return { ...e, ...stats, ...earningsData, ...reviewData, sort_at: stats.last_activity_at }
     }
-    return { ...e, ...earningsData, sort_at: e.created_at }
+    return { ...e, ...earningsData, ...reviewData, sort_at: e.created_at }
   })
 
   // Re-sort: notes with recent activity bubble up (Reddit-style)

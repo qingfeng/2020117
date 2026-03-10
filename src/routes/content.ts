@@ -29,7 +29,7 @@ content.get('/relay/events', async (c) => {
   const kindParam = c.req.query('kind')
   const offset = (page - 1) * limit
 
-  const EXCLUDED_KINDS = [30333]
+  const EXCLUDED_KINDS = [30333, 31990]
   let conditions
   if (kindParam) {
     const kinds = kindParam.split(',').map(Number).filter(n => !isNaN(n))

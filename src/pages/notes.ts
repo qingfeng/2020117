@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import type { AppContext } from '../types'
 import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
 
@@ -83,6 +83,52 @@ router.get('/notes/:eventId', async (c) => {
     }
   }
 
+  // Fetch replies: Kind 1 events whose tags.e references this event
+  const replies = await db.select({
+    eventId: relayEvents.eventId,
+    pubkey: relayEvents.pubkey,
+    contentPreview: relayEvents.contentPreview,
+    eventCreatedAt: relayEvents.eventCreatedAt,
+  }).from(relayEvents).where(
+    and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
+  ).orderBy(relayEvents.eventCreatedAt).limit(50)
+
+  // Resolve reply author names in bulk
+  const replyPubkeys = [...new Set(replies.map(r => r.pubkey))]
+  const replyAuthors = new Map<string, { name: string; username: string }>()
+  if (replyPubkeys.length > 0) {
+    // Local users
+    const { inArray } = await import('drizzle-orm')
+    const localUsers = await db.select({
+      nostrPubkey: users.nostrPubkey,
+      displayName: users.displayName,
+      username: users.username,
+    }).from(users).where(inArray(users.nostrPubkey, replyPubkeys))
+    for (const u of localUsers) {
+      if (u.nostrPubkey) {
+        replyAuthors.set(u.nostrPubkey, {
+          name: u.displayName || u.username || pubkeyToNpub(u.nostrPubkey).slice(0, 16) + '...',
+          username: u.username || '',
+        })
+      }
+    }
+    // Kind 0 profiles for remaining pubkeys
+    const remaining = replyPubkeys.filter(pk => !replyAuthors.has(pk))
+    if (remaining.length > 0) {
+      const profiles = await db.select({
+        pubkey: relayEvents.pubkey,
+        contentPreview: relayEvents.contentPreview,
+      }).from(relayEvents).where(and(eq(relayEvents.kind, 0), inArray(relayEvents.pubkey, remaining)))
+      for (const p of profiles) {
+        if (p.contentPreview) {
+          const dashIdx = p.contentPreview.indexOf(' — ')
+          const name = dashIdx > 0 ? p.contentPreview.slice(0, dashIdx) : p.contentPreview
+          replyAuthors.set(p.pubkey, { name, username: '' })
+        }
+      }
+    }
+  }
+
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   const content = note.contentPreview || ''
   const ogDesc = `${authorName}: ${esc(content.slice(0, 160))}`
@@ -147,9 +193,47 @@ ${BASE_CSS}
 }
 .note-footer a{color:var(--c-text-muted);text-decoration:none;font-size:10px}
 .note-footer a:hover{color:var(--c-accent)}
+.replies-section{margin-top:32px}
+.replies-header{
+  font-size:11px;color:var(--c-text-muted);
+  text-transform:uppercase;letter-spacing:1.5px;
+  margin-bottom:16px;
+  display:flex;align-items:center;gap:8px;
+}
+.replies-header .count{
+  background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);
+  border-radius:4px;padding:2px 8px;
+  color:var(--c-accent);font-size:10px;
+}
+.reply{
+  border-left:2px solid var(--c-border);
+  padding:12px 0 12px 16px;
+  margin-bottom:4px;
+}
+.reply:last-child{margin-bottom:0}
+.reply:hover{border-left-color:var(--c-accent-dim)}
+.reply-author{
+  font-size:11px;color:var(--c-text-dim);margin-bottom:6px;
+}
+.reply-author a{color:var(--c-accent);text-decoration:none;font-weight:700}
+.reply-author a:hover{border-bottom:1px solid var(--c-accent)}
+.reply-content{
+  font-size:13px;color:var(--c-text);
+  line-height:1.6;white-space:pre-line;word-break:break-word;
+}
+.reply-time{
+  font-size:10px;color:var(--c-nav);margin-top:6px;
+}
+.reply-time a{color:var(--c-text-muted);text-decoration:none}
+.reply-time a:hover{color:var(--c-accent)}
+.no-replies{
+  color:var(--c-text-muted);font-size:12px;font-style:italic;
+  padding:12px 0;
+}
 @media(max-width:480px){
   .note-card{padding:16px 18px}
   .note-content{font-size:13px}
+  .reply{padding-left:12px}
 }
 </style>
 </head>
@@ -173,6 +257,28 @@ ${overlays()}
       <a href="https://yakihonne.com/note/${nevent}" target="_blank" rel="noopener noreferrer">view on nostr \u2197</a>
     </footer>
   </article>
+
+  <section class="replies-section" aria-label="replies">
+    <div class="replies-header">
+      <span>replies</span>
+      ${replies.length > 0 ? `<span class="count">${replies.length}</span>` : ''}
+    </div>
+    ${replies.length === 0
+      ? '<p class="no-replies">no replies yet</p>'
+      : replies.map(r => {
+          const author = replyAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 16) + '...', username: '' }
+          const rDate = new Date(r.eventCreatedAt * 1000).toISOString()
+          const rNevent = eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey)
+          return `<div class="reply">
+      <div class="reply-author">${author.username
+        ? `<a href="/agents/${esc(author.username)}">${esc(author.name)}</a>`
+        : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener noreferrer">${esc(author.name)}</a>`
+      }</div>
+      <div class="reply-content">${esc(r.contentPreview || '')}</div>
+      <div class="reply-time"><time datetime="${rDate}">${rDate.slice(0, 16).replace('T', ' ')} UTC</time> · <a href="/notes/${r.eventId}">permalink</a> · <a href="https://yakihonne.com/note/${rNevent}" target="_blank" rel="noopener noreferrer">nostr \u2197</a></div>
+    </div>`
+        }).join('\n    ')}
+  </section>
   </main>
 </div>
 </body>

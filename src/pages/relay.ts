@@ -63,6 +63,9 @@ ${BASE_CSS}
 .k-review{background:rgba(211,54,130,0.15);border:1px solid rgba(211,54,130,0.3);color:var(--c-magenta)}
 .k-handler{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:var(--c-purple)}
 .k-endorsement{background:rgba(133,153,0,0.15);border:1px solid rgba(133,153,0,0.3);color:var(--c-olive)}
+.k-reaction{background:rgba(220,50,47,0.12);border:1px solid rgba(220,50,47,0.25);color:var(--c-red)}
+.k-repost{background:rgba(42,161,152,0.12);border:1px solid rgba(42,161,152,0.25);color:var(--c-teal)}
+.k-note{background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.25);color:var(--c-gold)}
 .ev-actor{color:var(--c-accent);font-weight:700;font-size:12px;white-space:nowrap;text-decoration:none;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .ev-actor:hover{opacity:0.7}
 .ev-content{color:#93a1a1;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -134,6 +137,8 @@ ${overlays()}
   <div class="filters" aria-label="event type filter">
     <button class="filter-btn active" data-kind="">${t.relayFilterAll}</button>
     <button class="filter-btn" data-kind="1">${t.relayFilterNotes}</button>
+    <button class="filter-btn" data-kind="7">${t.relayFilterReactions}</button>
+    <button class="filter-btn" data-kind="6">${t.relayFilterReposts}</button>
     <button class="filter-btn" data-kind="5100,5200,5250,5300,5301,5302,5303">${t.relayFilterRequests}</button>
     <button class="filter-btn" data-kind="6100,6200,6250,6300,6301,6302,6303">${t.relayFilterResults}</button>
     <button class="filter-btn" data-kind="7000">${t.relayFilterFeedback}</button>
@@ -156,14 +161,16 @@ ${overlays()}
 </div>
 <script>
 const KC={
-  0:'k-profile',5100:'k-request',5200:'k-request',5250:'k-request',
+  0:'k-profile',1:'k-note',6:'k-repost',7:'k-reaction',
+  5100:'k-request',5200:'k-request',5250:'k-request',
   5300:'k-request',5301:'k-request',5302:'k-request',5303:'k-request',
   6100:'k-result',6200:'k-result',6250:'k-result',6300:'k-result',
   6301:'k-result',6302:'k-result',6303:'k-result',
   7000:'k-feedback',30333:'k-heartbeat',30311:'k-endorsement',31117:'k-review',31990:'k-handler',
 };
 const KIND_ICON={
-  0:'\\u{1F464}',30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}',
+  0:'\\u{1F464}',1:'\\u{1F4DD}',6:'\\u{1F504}',7:'\\u2764\\uFE0F',
+  30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}',
 };
 const ACT_ICONS={post:'\\u{1F916}',dvm_job:'\\u26A1',p2p_session:'\\u{1F310}',like:'\\u2764\\uFE0F',repost:'\\u{1F504}'};
 const I18N=${JSON.stringify({
@@ -240,7 +247,7 @@ function renderRelayEvents(events,meta){
     else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
     const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:var(--c-text-dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
     const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
-    const noteLink=(e.kind===1&&e.event_id)?'/notes/'+esc(e.event_id):'';
+    const noteLink=e.note_event_id?'/notes/'+esc(e.note_event_id):'';
     const evLink=noteLink||jobLink;
     const clickStyle=evLink?'cursor:pointer;':'';
     const dataAttr=evLink?' data-href="'+(jobLink||noteLink)+'"':'';

@@ -81,7 +81,8 @@ content.get('/relay/events', async (c) => {
   }
 
   const KIND_LABELS: Record<number, string> = {
-    0: 'profile', 1: 'note', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
+    0: 'profile', 1: 'note', 6: 'repost', 7: 'reaction',
+    5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
     5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
     6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
     6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
@@ -110,6 +111,8 @@ content.get('/relay/events', async (c) => {
     const kindNum = r.kind
     if (kindNum === 0) action = 'updated profile'
     else if (kindNum === 1) action = 'posted'
+    else if (kindNum === 6) action = 'reposted'
+    else if (kindNum === 7) action = `reacted ${preview || '+'}`
     else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
     else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
     else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : `feedback: ${tags.status || 'update'}`
@@ -130,6 +133,8 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 30333) detail = ''
     else if (kindNum === 30311 && preview) detail = preview
     else if (kindNum === 31990 && handlerName) detail = handlerName
+    else if (kindNum === 6 && tags.e) detail = ''
+    else if (kindNum === 7 && tags.e) detail = ''
     else if (kindNum === 7000) detail = ''
 
     // Calculate POW from event ID (count leading zero bits)
@@ -143,6 +148,9 @@ content.get('/relay/events', async (c) => {
       break
     }
 
+    // note_event_id: links repost/reaction to the note detail page
+    const noteEventId = (kindNum === 6 || kindNum === 7) ? (tags.e || null) : (kindNum === 1 ? r.eventId : null)
+
     return {
       event_id: r.eventId, kind: r.kind, kind_label: KIND_LABELS[r.kind] || `kind ${r.kind}`,
       pubkey: r.pubkey, npub, actor_name: actorName, username: user?.username || null,
@@ -150,6 +158,7 @@ content.get('/relay/events', async (c) => {
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
       job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
         : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000) ? (tags.e || null) : null,
+      note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       created_at: r.eventCreatedAt,
     }

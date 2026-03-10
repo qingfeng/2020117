@@ -1402,7 +1402,7 @@ export async function advanceWorkflow(db: Database, env: Bindings, completedJobI
 
 // --- Relay Event Stream ---
 
-const RELAY_EVENT_KINDS = [0, 1, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
+const RELAY_EVENT_KINDS = [0, 1, 6, 7, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
 
 const KIND_LABELS: Record<number, string> = {
   0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
@@ -1440,6 +1440,10 @@ function extractContentPreview(event: NostrEvent): string | null {
     const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
     return dTag ? `handler: ${dTag.slice(0, 60)}` : null
   }
+  // Kind 7 (reaction): content is the reaction emoji ("+", "🤙", etc.)
+  if (event.kind === 7) return event.content || '+'
+  // Kind 6 (repost): content is the reposted event JSON (we don't need it in preview)
+  if (event.kind === 6) return null
   // For Kind 7000 (feedback), no useful content
   if (event.kind === 7000) return null
   // For Kind 30333 (heartbeat), no useful content

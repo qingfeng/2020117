@@ -83,37 +83,54 @@ router.get('/notes/:eventId', async (c) => {
     }
   }
 
-  // Fetch replies: Kind 1 events whose tags.e references this event
-  const replies = await db.select({
-    eventId: relayEvents.eventId,
-    pubkey: relayEvents.pubkey,
-    contentPreview: relayEvents.contentPreview,
-    eventCreatedAt: relayEvents.eventCreatedAt,
-  }).from(relayEvents).where(
-    and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
-  ).orderBy(relayEvents.eventCreatedAt).limit(50)
+  // Fetch replies (Kind 1), reactions (Kind 7), reposts (Kind 6) referencing this event
+  const [replies, reactions, reposts] = await Promise.all([
+    db.select({
+      eventId: relayEvents.eventId,
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(
+      and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
+    ).orderBy(relayEvents.eventCreatedAt).limit(50),
+    db.select({
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(
+      and(eq(relayEvents.kind, 7), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
+    ).orderBy(relayEvents.eventCreatedAt).limit(100),
+    db.select({
+      pubkey: relayEvents.pubkey,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(
+      and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${eventId}) > 0`)
+    ).orderBy(relayEvents.eventCreatedAt).limit(100),
+  ])
 
-  // Resolve reply author names in bulk
-  const replyPubkeys = [...new Set(replies.map(r => r.pubkey))]
-  const replyAuthors = new Map<string, { name: string; username: string }>()
-  if (replyPubkeys.length > 0) {
-    // Local users
+  // Resolve all interaction author names in bulk
+  const allPubkeys = [...new Set([
+    ...replies.map(r => r.pubkey),
+    ...reactions.map(r => r.pubkey),
+    ...reposts.map(r => r.pubkey),
+  ])]
+  const interactionAuthors = new Map<string, { name: string; username: string }>()
+  if (allPubkeys.length > 0) {
     const { inArray } = await import('drizzle-orm')
     const localUsers = await db.select({
       nostrPubkey: users.nostrPubkey,
       displayName: users.displayName,
       username: users.username,
-    }).from(users).where(inArray(users.nostrPubkey, replyPubkeys))
+    }).from(users).where(inArray(users.nostrPubkey, allPubkeys))
     for (const u of localUsers) {
       if (u.nostrPubkey) {
-        replyAuthors.set(u.nostrPubkey, {
+        interactionAuthors.set(u.nostrPubkey, {
           name: u.displayName || u.username || pubkeyToNpub(u.nostrPubkey).slice(0, 16) + '...',
           username: u.username || '',
         })
       }
     }
-    // Kind 0 profiles for remaining pubkeys
-    const remaining = replyPubkeys.filter(pk => !replyAuthors.has(pk))
+    const remaining = allPubkeys.filter(pk => !interactionAuthors.has(pk))
     if (remaining.length > 0) {
       const profiles = await db.select({
         pubkey: relayEvents.pubkey,
@@ -123,7 +140,7 @@ router.get('/notes/:eventId', async (c) => {
         if (p.contentPreview) {
           const dashIdx = p.contentPreview.indexOf(' — ')
           const name = dashIdx > 0 ? p.contentPreview.slice(0, dashIdx) : p.contentPreview
-          replyAuthors.set(p.pubkey, { name, username: '' })
+          interactionAuthors.set(p.pubkey, { name, username: '' })
         }
       }
     }
@@ -230,6 +247,22 @@ ${BASE_CSS}
   color:var(--c-text-muted);font-size:12px;font-style:italic;
   padding:12px 0;
 }
+.interactions{
+  margin-top:20px;padding:12px 0;
+  border-top:1px solid var(--c-border);
+  display:flex;gap:20px;flex-wrap:wrap;
+  font-size:12px;color:var(--c-text-dim);
+}
+.interaction-group{display:flex;align-items:center;gap:6px}
+.interaction-group .icon{font-size:14px}
+.interaction-group .label{color:var(--c-text-muted);font-size:11px}
+.interaction-faces{
+  display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;
+}
+.interaction-faces a,.interaction-faces span{
+  font-size:10px;color:var(--c-accent);text-decoration:none;
+}
+.interaction-faces a:hover{border-bottom:1px solid var(--c-accent)}
 @media(max-width:480px){
   .note-card{padding:16px 18px}
   .note-content{font-size:13px}
@@ -252,6 +285,29 @@ ${overlays()}
 
     <div class="note-content">${esc(content)}</div>
 
+    ${(reactions.length > 0 || reposts.length > 0) ? `<div class="interactions">
+      ${reactions.length > 0 ? `<div class="interaction-group">
+        <span class="icon">\u2764\uFE0F</span>
+        <span class="label">${reactions.length}</span>
+        <div class="interaction-faces">${reactions.map(r => {
+          const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '' }
+          return a.username
+            ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
+            : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener noreferrer">${esc(a.name)}</a>`
+        }).join(', ')}</div>
+      </div>` : ''}
+      ${reposts.length > 0 ? `<div class="interaction-group">
+        <span class="icon">\u{1F504}</span>
+        <span class="label">${reposts.length}</span>
+        <div class="interaction-faces">${reposts.map(r => {
+          const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '' }
+          return a.username
+            ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
+            : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener noreferrer">${esc(a.name)}</a>`
+        }).join(', ')}</div>
+      </div>` : ''}
+    </div>` : ''}
+
     <footer class="note-footer">
       <time datetime="${createdDate}">${createdDate.slice(0, 16).replace('T', ' ')} UTC</time>
       <a href="https://yakihonne.com/note/${nevent}" target="_blank" rel="noopener noreferrer">view on nostr \u2197</a>
@@ -266,7 +322,7 @@ ${overlays()}
     ${replies.length === 0
       ? '<p class="no-replies">no replies yet</p>'
       : replies.map(r => {
-          const author = replyAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 16) + '...', username: '' }
+          const author = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 16) + '...', username: '' }
           const rDate = new Date(r.eventCreatedAt * 1000).toISOString()
           const rNevent = eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey)
           return `<div class="reply">
@@ -275,7 +331,7 @@ ${overlays()}
         : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener noreferrer">${esc(author.name)}</a>`
       }</div>
       <div class="reply-content">${esc(r.contentPreview || '')}</div>
-      <div class="reply-time"><time datetime="${rDate}">${rDate.slice(0, 16).replace('T', ' ')} UTC</time> · <a href="/notes/${r.eventId}">permalink</a> · <a href="https://yakihonne.com/note/${rNevent}" target="_blank" rel="noopener noreferrer">nostr \u2197</a></div>
+      <div class="reply-time"><time datetime="${rDate}">${rDate.slice(0, 16).replace('T', ' ')} UTC</time> \u00B7 <a href="/notes/${r.eventId}">permalink</a> \u00B7 <a href="https://yakihonne.com/note/${rNevent}" target="_blank" rel="noopener noreferrer">nostr \u2197</a></div>
     </div>`
         }).join('\n    ')}
   </section>

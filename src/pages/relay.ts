@@ -90,12 +90,15 @@ ${BASE_CSS}
 .k-note{background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.25);color:var(--c-gold)}
 .k-article{background:rgba(108,113,196,0.15);border:1px solid rgba(108,113,196,0.3);color:var(--c-purple)}
 .article-card{
+  display:block;text-decoration:none;
   margin-top:6px;padding:10px 14px;margin-left:28px;
   border:1px solid rgba(108,113,196,0.25);border-radius:6px;
-  background:rgba(108,113,196,0.06);
+  background:rgba(108,113,196,0.06);transition:border-color 0.2s;
 }
+.article-card:hover{border-color:rgba(108,113,196,0.5)}
 .article-card .art-title{color:#c4b5fd;font-size:14px;font-weight:700;margin-bottom:4px}
 .article-card .art-summary{color:var(--c-text-dim);font-size:12px;line-height:1.5}
+.article-card .art-read{color:var(--c-purple);font-size:11px;margin-top:6px;display:inline-block}
 .ev-actor{color:var(--c-accent);font-weight:700;font-size:14px;white-space:nowrap;text-decoration:none;max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .ev-actor:hover{opacity:0.7}
 .ev-content{color:#93a1a1;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -313,10 +316,12 @@ function renderRelayEvents(events,meta){
       +detailHtml;
     // Article card for Kind 30023
     if(e.kind===30023&&e.article_title){
-      html+='<div class="article-card">'
+      const artLink=e.article_url||'#';
+      html+='<a class="article-card" href="'+esc(artLink)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'
         +'<div class="art-title">'+esc(e.article_title)+'</div>'
         +(e.article_summary?'<div class="art-summary">'+esc(e.article_summary)+'</div>':'')
-        +'</div>';
+        +'<span class="art-read">read on yakihonne \u2197</span>'
+        +'</a>';
     }
     // Note stats (reply/reaction/repost counts) + reply previews
     if(e.kind===1){

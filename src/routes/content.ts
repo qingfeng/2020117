@@ -3,7 +3,7 @@ import { eq, desc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
 import { users, groups, topics, comments, topicLikes, topicReposts, dvmJobs, relayEvents } from '../db/schema'
 import { stripHtml } from '../lib/utils'
-import { pubkeyToNpub, eventIdToNevent } from '../services/nostr'
+import { pubkeyToNpub, eventIdToNevent, naddrEncode } from '../services/nostr'
 import { paginationMeta, DVM_KIND_LABELS } from './helpers'
 
 const content = new Hono<AppContext>()
@@ -218,7 +218,7 @@ content.get('/relay/events', async (c) => {
       note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       article_title: articleTitle, article_summary: articleSummary,
-      article_naddr: kindNum === 30023 ? (tags.d ? `naddr:${tags.d}` : null) : null,
+      article_url: kindNum === 30023 && tags.d ? `https://yakihonne.com/article/${naddrEncode(tags.d, r.pubkey, 30023, ['wss://relay.2020117.xyz'])}` : null,
       created_at: r.eventCreatedAt,
     }
   })

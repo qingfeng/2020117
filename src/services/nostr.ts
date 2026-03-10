@@ -134,6 +134,27 @@ export function eventIdToNevent(eventIdHex: string, relays?: string[], authorPub
   return bech32.encode('nevent', words, 1500)
 }
 
+// NIP-19 naddr encoding for parameterized replaceable events (Kind 30023 articles, etc.)
+export function naddrEncode(dTag: string, pubkeyHex: string, kind: number, relays?: string[]): string {
+  const buf: number[] = []
+  // TLV type 0: d-tag (special identifier, variable length)
+  const dBytes = new TextEncoder().encode(dTag)
+  buf.push(0, dBytes.length, ...Array.from(dBytes))
+  // TLV type 1: relay URLs
+  if (relays) {
+    for (const r of relays) {
+      const rb = new TextEncoder().encode(r)
+      buf.push(1, rb.length, ...Array.from(rb))
+    }
+  }
+  // TLV type 2: author pubkey (32 bytes)
+  buf.push(2, 32, ...Array.from(hexToBytes(pubkeyHex)))
+  // TLV type 3: kind (4 bytes big-endian)
+  buf.push(3, 4, (kind >> 24) & 0xff, (kind >> 16) & 0xff, (kind >> 8) & 0xff, kind & 0xff)
+  const words = bech32.toWords(buf)
+  return bech32.encode('naddr', words, 1500)
+}
+
 export function privkeyToNsec(hex: string): string {
   const bytes = hexToBytes(hex)
   const words = bech32.toWords(Array.from(bytes))

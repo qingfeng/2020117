@@ -81,6 +81,8 @@ router.get('/jobs/:id', async (c) => {
     params: dvmJobs.params,
     bidMsats: dvmJobs.bidMsats,
     providerPubkey: dvmJobs.providerPubkey,
+    requestEventId: dvmJobs.requestEventId,
+    eventId: dvmJobs.eventId,
     createdAt: dvmJobs.createdAt,
     updatedAt: dvmJobs.updatedAt,
     customerName: users.displayName,
@@ -168,6 +170,47 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
       providerNpub = pubkeyToNpub(j.providerPubkey)
       const resolved = await resolveDisplayName(db, c.env, j.providerPubkey)
       providerName = resolved || j.providerPubkey.slice(0, 12) + '...'
+    }
+  }
+
+  // Fetch activity: Kind 7000 feedback + Kind 6xxx results referencing this job
+  const { relayEvents } = await import('../db/schema')
+  const { sql: sqlTag } = await import('drizzle-orm')
+  const requestEventId = j.requestEventId || j.eventId || ''
+  type ActivityRow = { eventId: string; kind: number; pubkey: string; contentPreview: string | null; tags: string | null; eventCreatedAt: number }
+  let jobActivity: ActivityRow[] = []
+  if (requestEventId) {
+    jobActivity = await db.select({
+      eventId: relayEvents.eventId,
+      kind: relayEvents.kind,
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      tags: relayEvents.tags,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(
+      and(
+        sqlTag`instr(${relayEvents.tags}, ${requestEventId}) > 0`,
+        sqlTag`${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303)`,
+      )
+    ).orderBy(relayEvents.eventCreatedAt).limit(20)
+  }
+
+  // Resolve activity actor names
+  const activityActors = new Map<string, { name: string; username: string }>()
+  const actPubkeys = [...new Set(jobActivity.map(a => a.pubkey))]
+  for (const pk of actPubkeys) {
+    // Check if already resolved (provider)
+    if (pk === j.providerPubkey && providerName) {
+      activityActors.set(pk, { name: providerName, username: providerUsername })
+      continue
+    }
+    const u = await db.select({ displayName: users.displayName, username: users.username, nostrPubkey: users.nostrPubkey })
+      .from(users).where(eq(users.nostrPubkey, pk)).limit(1)
+    if (u.length > 0) {
+      activityActors.set(pk, { name: u[0].displayName || u[0].username || pubkeyToNpub(pk).slice(0, 16) + '...', username: u[0].username || '' })
+    } else {
+      const resolved = await resolveDisplayName(db, c.env, pk)
+      activityActors.set(pk, { name: resolved || pubkeyToNpub(pk).slice(0, 16) + '...', username: '' })
     }
   }
 
@@ -340,6 +383,21 @@ ${BASE_CSS}
   border-top:1px solid var(--c-border);
   font-size:11px;color:var(--c-nav);
 }
+.activity-log{margin-top:24px}
+.activity-log .section-label{margin-bottom:10px}
+.activity-item{
+  padding:8px 0;border-bottom:1px solid var(--c-border);
+  font-size:11px;color:var(--c-text-dim);
+  display:flex;align-items:baseline;gap:8px;
+}
+.activity-item:last-child{border-bottom:none}
+.activity-item .actor{color:var(--c-accent);font-weight:700;text-decoration:none}
+.activity-item .actor:hover{opacity:0.7}
+.activity-item .status-processing{color:var(--c-teal)}
+.activity-item .status-success{color:var(--c-accent)}
+.activity-item .status-error{color:var(--c-red)}
+.activity-item .status-payment{color:var(--c-gold)}
+.activity-item .atime{color:var(--c-nav);font-size:10px;margin-left:auto;white-space:nowrap}
 @media(max-width:480px){
   .job-card{padding:16px 18px}
   .input-content,.result-content{font-size:12px}
@@ -370,6 +428,32 @@ ${overlays()}
     ${resultHtml}
 
     ${rejectionsHtml}
+
+    ${jobActivity.length > 0 ? `<div class="activity-log">
+      <div class="section-label">activity</div>
+      ${jobActivity.map(a => {
+        const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
+        const tags = a.tags ? JSON.parse(a.tags) : {}
+        const aTime = new Date(a.eventCreatedAt * 1000).toISOString().slice(0, 16).replace('T', ' ')
+        let label = ''
+        let cls = ''
+        if (a.kind === 7000) {
+          const st = tags.status || 'update'
+          if (st === 'processing') { label = 'started processing'; cls = 'status-processing' }
+          else if (st === 'success') { label = 'completed'; cls = 'status-success' }
+          else if (st === 'error') { label = 'error'; cls = 'status-error' }
+          else if (st === 'payment-required') { label = 'payment required'; cls = 'status-payment' }
+          else { label = st; cls = '' }
+        } else if (a.kind >= 6100 && a.kind <= 6303) {
+          label = 'submitted result'
+          cls = 'status-success'
+        }
+        const actorHtml = actor.username
+          ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a>`
+          : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a>`
+        return `<div class="activity-item">${actorHtml} <span class="${cls}">${label}</span><span class="atime">${aTime}</span></div>`
+      }).join('\n      ')}
+    </div>` : ''}
 
     <div class="timestamp">${createdDate}</div>
   </article>

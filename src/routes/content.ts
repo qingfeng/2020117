@@ -224,13 +224,54 @@ content.get('/relay/events', async (c) => {
     }
   }
 
+  // Enrich DVM events with earnings data from dvm_job table
+  // For Kind 6xxx results: tags.e references the request event, look up dvm_job.request_event_id
+  // For Kind 5xxx requests: the event_id IS the request event, look up dvm_job.request_event_id
+  const dvmEventIds = events.filter(e => (e.kind >= 5100 && e.kind <= 5303) || (e.kind >= 6100 && e.kind <= 6303))
+  const earningsMap = new Map<string, { earned_sats: number; provider_name: string | null; customer_name: string | null; status: string }>()
+
+  if (dvmEventIds.length > 0) {
+    // Collect request event IDs: for Kind 5xxx it's event_id, for Kind 6xxx it's ref_event_id (tags.e)
+    const requestEventIds = dvmEventIds.map(e => e.kind >= 6100 ? e.ref_event_id : e.event_id).filter(Boolean) as string[]
+    if (requestEventIds.length > 0) {
+      const jobRows = await db.select({
+        requestEventId: dvmJobs.requestEventId,
+        status: dvmJobs.status,
+        bidMsats: dvmJobs.bidMsats,
+        priceMsats: dvmJobs.priceMsats,
+        paidMsats: dvmJobs.paidMsats,
+        providerPubkey: dvmJobs.providerPubkey,
+        customerPubkey: dvmJobs.customerPubkey,
+      }).from(dvmJobs).where(inArray(dvmJobs.requestEventId, requestEventIds))
+
+      for (const job of jobRows) {
+        if (!job.requestEventId) continue
+        const sats = Math.round((job.paidMsats || job.priceMsats || job.bidMsats || 0) / 1000)
+        if (sats > 0 && (job.status === 'completed' || job.status === 'result_available')) {
+          const provUser = job.providerPubkey ? pubkeyNames.get(job.providerPubkey) : null
+          const custUser = job.customerPubkey ? pubkeyNames.get(job.customerPubkey) : null
+          earningsMap.set(job.requestEventId, {
+            earned_sats: sats,
+            provider_name: provUser?.displayName || provUser?.username || null,
+            customer_name: custUser?.displayName || custUser?.username || null,
+            status: job.status,
+          })
+        }
+      }
+    }
+  }
+
   // Enrich notes with stats, use last_activity_at for sorting
   const enrichedEvents = events.map(e => {
     const stats = noteStats.get(e.event_id)
+    // Look up earnings: for results use ref_event_id, for requests use event_id
+    const earningsKey = (e.kind >= 6100 && e.kind <= 6303) ? e.ref_event_id : e.event_id
+    const earnings = earningsKey ? earningsMap.get(earningsKey) : undefined
+    const earningsData = earnings ? { earned_sats: earnings.earned_sats, provider_name: earnings.provider_name, customer_name: earnings.customer_name, job_status: earnings.status } : {}
     if (stats) {
-      return { ...e, ...stats, sort_at: stats.last_activity_at }
+      return { ...e, ...stats, ...earningsData, sort_at: stats.last_activity_at }
     }
-    return { ...e, sort_at: e.created_at }
+    return { ...e, ...earningsData, sort_at: e.created_at }
   })
 
   // Re-sort: notes with recent activity bubble up (Reddit-style)

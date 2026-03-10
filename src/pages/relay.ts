@@ -57,6 +57,28 @@ ${BASE_CSS}
 }
 .k-request{background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue)}
 .k-result{background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:var(--c-teal)}
+.ev.has-earnings{
+  background:linear-gradient(90deg,rgba(255,176,0,0.06) 0%,transparent 60%);
+  border-left:3px solid rgba(255,176,0,0.5);padding-left:10px;
+  margin-left:-13px;
+}
+.earnings-badge{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 10px;margin-left:6px;
+  background:rgba(255,176,0,0.18);border:1px solid rgba(255,176,0,0.4);
+  border-radius:4px;color:#f0a500;font-size:12px;font-weight:800;
+  letter-spacing:0.3px;white-space:nowrap;
+  animation:earningsPulse 2s ease-in-out;
+}
+@keyframes earningsPulse{
+  0%{box-shadow:0 0 0 0 rgba(255,176,0,0.4)}
+  50%{box-shadow:0 0 8px 2px rgba(255,176,0,0.2)}
+  100%{box-shadow:0 0 0 0 rgba(255,176,0,0)}
+}
+.earnings-detail{
+  margin-top:4px;padding-left:28px;
+  font-size:11px;color:var(--c-gold);
+}
 .k-feedback{background:rgba(88,110,117,0.15);border:1px solid rgba(88,110,117,0.3);color:var(--c-text-dim)}
 .k-heartbeat{background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.2);color:var(--c-accent)}
 .k-profile{background:rgba(181,137,0,0.15);border:1px solid rgba(181,137,0,0.3);color:var(--c-profile)}
@@ -267,11 +289,14 @@ function renderRelayEvents(events,meta){
     const evLink=noteLink||jobLink;
     const clickStyle=evLink?'cursor:pointer;':'';
     const dataAttr=evLink?' data-href="'+(jobLink||noteLink)+'"':'';
-    html+='<div class="ev" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
+    const hasEarnings=e.earned_sats>0;
+    const earningsClass=hasEarnings?' has-earnings':'';
+    const earningsBadge=hasEarnings?'<span class="earnings-badge">\\u26A1 '+e.earned_sats+' sats</span>':'';
+    html+='<div class="ev'+earningsClass+'" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
       +'<div class="ev-head">'
         +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px">'+kindIcon(e.kind)+'</span>'
         +actorHtml
-        +'<span class="ev-content">'+esc(e.action)+'</span>'
+        +'<span class="ev-content">'+esc(e.action)+earningsBadge+'</span>'
         +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
         +(e.pow?'<span class="ev-pow" title="Proof of Work: '+e.pow+' bits">⛏'+e.pow+'</span>':'')
         +'<span class="ev-time">'+timeAgoUnix(e.created_at)+'</span>'

@@ -110,7 +110,8 @@ router.get('/jobs/:id', async (c) => {
       const resolvedName = await resolveDisplayName(db, c.env, re.pubkey)
       const displayLabel = resolvedName || npub
       const nevent = eventIdToNevent(re.eventId, ['wss://relay.2020117.xyz'], re.pubkey)
-      const timeStr = new Date(re.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+      const timeIso = new Date(re.eventCreatedAt * 1000).toISOString()
+      const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
       const preview = re.contentPreview ? re.contentPreview.slice(0, 500) : '(no content)'
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
@@ -281,8 +282,9 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const inputPreview = j.input ? esc(j.input.slice(0, 160)) : ''
   const ogDesc = inputPreview ? `${customerName}: ${inputPreview}` : `DVM job by ${customerName}`
 
-  // Format timestamp
+  // Format timestamp (ISO for <time> tag, JS will localize on client)
   const createdDate = j.createdAt instanceof Date ? j.createdAt.toISOString() : new Date(j.createdAt as any).toISOString()
+  const localTime = (iso: string) => `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace('T', ' '))}</time>`
 
   // Build result section
   let resultHtml = ''
@@ -330,7 +332,8 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
         }
         const reasonStr = r.reason ? ` \u2014 ${esc(r.reason)}` : ''
         const eventLink = r.result_event_id ? ` <a href="https://njump.me/${eventIdToNevent(r.result_event_id)}" target="_blank" style="color:var(--c-text-muted);font-size:12px">[view on nostr]</a>` : ''
-        const timeStr = r.rejected_at ? new Date(r.rejected_at).toISOString().slice(0, 16).replace('T', ' ') : ''
+        const rejIso = r.rejected_at ? new Date(r.rejected_at).toISOString() : ''
+        const timeStr = rejIso ? `<time datetime="${esc(rejIso)}">${rejIso.slice(0, 16).replace('T', ' ')}</time>` : ''
         return `<div style="padding:6px 0;border-bottom:1px solid var(--c-border);font-size:13px"><span style="color:var(--c-red)">rejected</span> <span style="color:var(--c-text-dim)">${esc(rProvName)}</span>${reasonStr}${eventLink} <span style="color:var(--c-nav);float:right">${timeStr}</span></div>`
       }))
       rejectionsHtml = `
@@ -518,7 +521,8 @@ ${overlays()}
       ${jobActivity.map(a => {
         const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
         const tags = a.tags ? JSON.parse(a.tags) : {}
-        const aTime = new Date(a.eventCreatedAt * 1000).toISOString().slice(0, 16).replace('T', ' ')
+        const aTimeIso = new Date(a.eventCreatedAt * 1000).toISOString()
+        const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
         let label = ''
         let cls = ''
         if (a.kind === 7000) {
@@ -543,10 +547,11 @@ ${overlays()}
       }).join('\n      ')}
     </div>` : ''}
 
-    <div class="timestamp">${createdDate}</div>
+    <div class="timestamp"><time datetime="${esc(createdDate)}">${createdDate}</time></div>
   </article>
   </main>
 </div>
+<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>
 </body>
 </html>`)
 })

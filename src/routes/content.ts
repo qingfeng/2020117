@@ -684,6 +684,7 @@ content.get('/jobs/:id', async (c) => {
     customerUsername: users.username, customerDisplayName: users.displayName,
     customerAvatarUrl: users.avatarUrl, customerNostrPubkey: users.nostrPubkey,
     providerPubkey: dvmJobs.providerPubkey,
+    requestEventId: dvmJobs.requestEventId,
   }).from(dvmJobs).leftJoin(users, eq(dvmJobs.userId, users.id)).where(eq(dvmJobs.id, id)).limit(1)
 
   if (jobResult.length === 0) return c.json({ error: 'Job not found' }, 404)
@@ -699,7 +700,7 @@ content.get('/jobs/:id', async (c) => {
       : { nostr_pubkey: j.providerPubkey }
   }
 
-  // Fetch review
+  // Fetch review: dvmReviews table first, fallback to relay_events Kind 31117
   let review = null
   const reviewRows = await db.select({
     rating: dvmReviews.rating, content: dvmReviews.content, role: dvmReviews.role,
@@ -710,6 +711,17 @@ content.get('/jobs/:id', async (c) => {
   if (reviewRows.length > 0) {
     const rv = reviewRows[0]
     review = { rating: rv.rating, content: rv.content, role: rv.role, reviewer_name: rv.reviewerDisplayName || rv.reviewerUsername, created_at: rv.createdAt }
+  }
+  // Fallback: relay_events Kind 31117
+  const reqEvtId = j.requestEventId || ''
+  if (!review && reqEvtId) {
+    const relayReview = await db.select({ contentPreview: relayEvents.contentPreview, tags: relayEvents.tags, eventCreatedAt: relayEvents.eventCreatedAt })
+      .from(relayEvents).where(sql`${relayEvents.kind} = 31117 AND instr(${relayEvents.tags}, ${reqEvtId}) > 0`).limit(1)
+    if (relayReview.length > 0) {
+      const re = relayReview[0]
+      const tags = re.tags ? JSON.parse(re.tags) : {}
+      review = { rating: tags.rating ? parseInt(tags.rating) : 5, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: null, created_at: new Date(re.eventCreatedAt * 1000) }
+    }
   }
 
   return c.json({

@@ -80,6 +80,8 @@ router.get('/jobs/:id', async (c) => {
     result: dvmJobs.result,
     params: dvmJobs.params,
     bidMsats: dvmJobs.bidMsats,
+    priceMsats: dvmJobs.priceMsats,
+    paidMsats: dvmJobs.paidMsats,
     providerPubkey: dvmJobs.providerPubkey,
     requestEventId: dvmJobs.requestEventId,
     eventId: dvmJobs.eventId,
@@ -142,6 +144,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const j = result[0]
   const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
   const bidSats = j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0
+  const paidSats = j.paidMsats ? Math.floor(j.paidMsats / 1000) : (j.priceMsats ? Math.floor(j.priceMsats / 1000) : 0)
   // Status display will be determined after review check
   let effectiveStatus = j.status
   let customerName = j.customerName || j.customerUsername || 'unknown'
@@ -173,12 +176,15 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }
   }
 
-  // Fetch review from dvmReviews table
+  // Fetch review: try dvmReviews table first, fallback to relay_events Kind 31117
   const { dvmReviews, relayEvents } = await import('../db/schema')
   const { sql: sqlTag } = await import('drizzle-orm')
+  const requestEventId = j.requestEventId || j.eventId || ''
 
   type ReviewData = { rating: number; content: string | null; role: string; reviewerName: string | null; createdAt: Date }
   let reviewInfo: ReviewData | null = null
+
+  // Source 1: dvmReviews table (indexed by pollJobReviews cron)
   const reviews = await db.select({
     rating: dvmReviews.rating,
     content: dvmReviews.content,
@@ -195,6 +201,31 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     reviewInfo = { rating: r.rating, content: r.content, role: r.role, reviewerName: r.reviewerDisplayName || r.reviewerUsername || null, createdAt: r.createdAt }
   }
 
+  // Source 2: relay_events Kind 31117 (fallback when reviewer not in users table)
+  if (!reviewInfo && requestEventId) {
+    const relayReview = await db.select({
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      tags: relayEvents.tags,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(
+      sqlTag`${relayEvents.kind} = 31117 AND instr(${relayEvents.tags}, ${requestEventId}) > 0`
+    ).limit(1)
+    if (relayReview.length > 0) {
+      const re = relayReview[0]
+      const tags = re.tags ? JSON.parse(re.tags) : {}
+      const rating = tags.rating ? parseInt(tags.rating) : 5
+      const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
+      reviewInfo = {
+        rating: Math.min(5, Math.max(1, rating)),
+        content: re.contentPreview || null,
+        role: tags.role || 'customer',
+        reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
+        createdAt: new Date(re.eventCreatedAt * 1000),
+      }
+    }
+  }
+
   // Derive effective status for display
   if (reviewInfo) {
     effectiveStatus = 'completed'
@@ -205,7 +236,6 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const statusLabel = STATUS_LABELS[effectiveStatus] || effectiveStatus
 
   // Fetch activity: Kind 7000 feedback + Kind 6xxx results referencing this job
-  const requestEventId = j.requestEventId || j.eventId || ''
   type ActivityRow = { eventId: string; kind: number; pubkey: string; contentPreview: string | null; tags: string | null; eventCreatedAt: number }
   let jobActivity: ActivityRow[] = []
   if (requestEventId) {
@@ -428,14 +458,20 @@ ${BASE_CSS}
 .activity-item .status-payment{color:var(--c-gold)}
 .activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
 .review-block{
-  margin-top:16px;padding:16px 20px;
-  border-left:3px solid var(--c-gold);
-  background:rgba(255,176,0,0.06);
-  border-radius:0 8px 8px 0;
+  margin-top:16px;padding:12px 16px;
+  border:1px solid rgba(211,54,130,0.25);border-radius:6px;
+  background:rgba(211,54,130,0.06);
 }
-.review-stars{color:var(--c-gold);font-size:18px;letter-spacing:2px;margin-bottom:6px}
-.review-text{color:#93a1a1;font-size:14px;line-height:1.6;margin-bottom:4px}
-.review-meta{font-size:12px;color:var(--c-nav)}
+.review-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.review-stars{color:#f0a500;font-size:16px;letter-spacing:1px}
+.review-label{color:var(--c-magenta,#d33682);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.review-by{color:var(--c-text-muted);font-size:12px;margin-left:auto}
+.review-text{color:var(--c-text-dim);font-size:14px;line-height:1.6;margin-top:4px}
+.review-paid{
+  display:inline-block;padding:2px 8px;
+  background:rgba(255,176,0,0.15);border:1px solid rgba(255,176,0,0.3);
+  border-radius:4px;color:var(--c-gold);font-size:12px;font-weight:700;
+}
 @media(max-width:480px){
   .job-card{padding:16px 18px}
   .input-content,.result-content{font-size:14px}
@@ -466,9 +502,13 @@ ${overlays()}
     ${resultHtml}
 
     ${reviewInfo ? `<div class="review-block">
-      <div class="review-stars">${'★'.repeat(reviewInfo.rating)}${'☆'.repeat(5 - reviewInfo.rating)}</div>
+      <div class="review-head">
+        <span class="review-stars">${'★'.repeat(reviewInfo.rating)}${'☆'.repeat(5 - reviewInfo.rating)}</span>
+        <span class="review-label">review &amp; endorsement</span>
+        ${paidSats > 0 ? `<span class="review-paid">⚡ ${paidSats} sats paid</span>` : (bidSats > 0 ? `<span class="review-paid">⚡ ${bidSats} sats</span>` : '')}
+        <span class="review-by">by ${esc(reviewInfo.reviewerName || 'unknown')}</span>
+      </div>
       ${reviewInfo.content ? `<div class="review-text">${esc(reviewInfo.content)}</div>` : ''}
-      <div class="review-meta">${reviewInfo.reviewerName ? esc(reviewInfo.reviewerName) + ' · ' : ''}${reviewInfo.role}</div>
     </div>` : ''}
 
     ${rejectionsHtml}

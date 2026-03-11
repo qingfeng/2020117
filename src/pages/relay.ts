@@ -119,6 +119,25 @@ ${BASE_CSS}
 .ev-review .review-label{color:var(--c-magenta);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
 .ev-review .review-by{color:var(--c-text-muted);font-size:11px;margin-left:auto}
 .ev-review .review-text{color:var(--c-text-dim);font-size:13px;line-height:1.5}
+.ev-results{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.ev-result-item{
+  padding:8px 12px;margin-left:24px;
+  border:1px solid rgba(42,161,152,0.2);border-radius:6px;
+  background:rgba(42,161,152,0.04);
+}
+.ev-result-item .res-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ev-result-item .res-actor{color:var(--c-teal);font-weight:700;font-size:13px}
+.ev-result-item .res-label{font-size:11px;padding:1px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:0.5px;background:rgba(42,161,152,0.15);border:1px solid rgba(42,161,152,0.3);color:var(--c-teal)}
+.ev-result-item .res-time{color:var(--c-text-muted);font-size:11px;margin-left:auto}
+.ev-result-item .res-detail{color:var(--c-text-dim);font-size:13px;line-height:1.5;margin-top:4px}
+.ev-request-ctx{
+  margin-bottom:4px;padding:6px 10px;
+  border-left:3px solid rgba(38,139,210,0.4);
+  background:rgba(38,139,210,0.06);border-radius:0 4px 4px 0;
+  font-size:12px;color:var(--c-text-dim);
+}
+.ev-request-ctx .req-label{color:var(--c-blue);font-weight:700;font-size:11px;text-transform:uppercase;margin-right:6px}
+.ev-request-ctx .req-by{color:var(--c-text-muted);font-size:11px}
 #pager{margin-top:28px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;justify-content:center;gap:16px;align-items:center}
 .pg-btn{
   background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
@@ -205,7 +224,7 @@ ${overlays()}
     <button class="filter-btn" data-kind="30333">${t.relayFilterHeartbeat}</button>
     <button class="filter-btn" data-kind="0">${t.relayFilterProfile}</button>
     <button class="filter-btn" data-kind="31990">${t.relayFilterHandler}</button>
-    <button class="filter-btn" data-kind="30311">${t.relayFilterReview}</button>
+    <button class="filter-btn" data-kind="30311,31117">${t.relayFilterReview}</button>
     <div class="filter-sep"></div>
     <button class="filter-btn" data-kind="activity:dvm">⚡ ${t.tabDvm}</button>
     <button class="filter-btn" data-kind="activity:p2p">🌐 ${t.tabP2p}</button>
@@ -314,7 +333,17 @@ function renderRelayEvents(events,meta){
     const hasEarnings=e.earned_sats>0;
     const earningsClass=hasEarnings?' has-earnings':'';
     const earningsBadge=hasEarnings?'<span class="earnings-badge">\\u26A1 '+e.earned_sats+' sats</span>':'';
+    // Request context for standalone result events
+    let reqCtxHtml='';
+    if(e.request_input&&e.kind>=6100&&e.kind<=6303){
+      reqCtxHtml='<div class="ev-request-ctx">'
+        +'<span class="req-label">\\u26A1 task</span>'
+        +esc(e.request_input.slice(0,150))
+        +(e.request_customer?' <span class="req-by">by '+esc(e.request_customer)+'</span>':'')
+      +'</div>';
+    }
     html+='<div class="ev'+earningsClass+'" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
+      +reqCtxHtml
       +'<div class="ev-head">'
         +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:15px">'+kindIcon(e.kind)+'</span>'
         +actorHtml
@@ -333,8 +362,39 @@ function renderRelayEvents(events,meta){
         +'<span class="art-read">read on yakihonne \u2197</span>'
         +'</a>';
     }
-    // Review block for result events (Kind 6xxx)
-    if(e.review){
+    // Result items grouped under request events (Kind 5xxx)
+    if(e.results&&e.results.length){
+      html+='<div class="ev-results">';
+      for(const res of e.results){
+        const resBadge=res.earned_sats>0?'<span class="earnings-badge">\\u26A1 '+res.earned_sats+' sats</span>':'';
+        html+='<div class="ev-result-item">'
+          +'<div class="res-head">'
+            +'<span style="font-size:14px">\\u2705</span>'
+            +'<span class="res-actor">'+esc(res.actor_name)+'</span>'
+            +'<span class="res-label">'+esc(res.kind_label)+'</span>'
+            +resBadge
+            +'<span class="res-time">'+timeAgoUnix(res.created_at)+'</span>'
+          +'</div>'
+          +(res.detail?'<div class="res-detail">'+esc(res.detail.slice(0,200))+'</div>':'');
+        // Review under result
+        if(res.review){
+          const rv=res.review;
+          const stars=rv.rating?'\\u2605'.repeat(rv.rating)+'\\u2606'.repeat(5-rv.rating):'';
+          html+='<div class="ev-review" style="margin-left:0;margin-top:6px">'
+            +'<div class="review-head">'
+              +(stars?'<span class="review-stars">'+stars+'</span>':'')
+              +'<span class="review-label">review &amp; endorsement</span>'
+              +'<span class="review-by">by '+esc(rv.reviewer_name)+'</span>'
+            +'</div>'
+            +(rv.review_text?'<div class="review-text">'+esc(rv.review_text)+'</div>':'')
+          +'</div>';
+        }
+        html+='</div>';
+      }
+      html+='</div>';
+    }
+    // Review block for standalone result events (Kind 6xxx without parent request in page)
+    if(!e.results&&e.review){
       const r=e.review;
       const stars=r.rating?'\\u2605'.repeat(r.rating)+'\\u2606'.repeat(5-r.rating):'';
       html+='<div class="ev-review">'

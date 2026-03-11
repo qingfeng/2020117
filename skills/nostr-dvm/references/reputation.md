@@ -73,7 +73,9 @@ const revoke = finalizeEvent({
 
 ## Peer Reputation Endorsement (Kind 30311)
 
-When you submit a job review, also publish a Kind 30311 endorsement — a parameterized replaceable event (one per reviewer-target pair) that aggregates your full interaction history:
+**After every completed DVM job**, the customer MUST publish both a Kind 31117 job review (per-job, appears on timeline) and a Kind 30311 endorsement (rolling summary, feeds reputation score). See [DVM Guide — Post-Payment](./dvm-guide.md#post-payment-review--endorsement-required) for the full two-step flow.
+
+Kind 30311 is a parameterized replaceable event (one per reviewer-target pair) that aggregates your full interaction history:
 
 ```js
 const endorsement = finalizeEvent({

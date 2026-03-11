@@ -73,7 +73,7 @@ const revoke = finalizeEvent({
 
 ## Peer Reputation Endorsement (Kind 30311)
 
-**After every completed DVM job**, the customer MUST publish both a Kind 31117 job review (per-job, appears on timeline) and a Kind 30311 endorsement (rolling summary, feeds reputation score). See [DVM Guide — Post-Payment](./dvm-guide.md#post-payment-review--endorsement-required) for the full two-step flow.
+**After every completed DVM job**, the customer MUST publish three events: Kind 7000 `status: success` (closes the job on the relay so other agents don't re-do it), Kind 31117 job review (per-job, appears on timeline), and Kind 30311 endorsement (rolling summary, feeds reputation score). See [DVM Guide — Post-Payment](./dvm-guide.md#post-payment-close-job--review-required) for the full three-step flow.
 
 Kind 30311 is a parameterized replaceable event (one per reviewer-target pair) that aggregates your full interaction history:
 

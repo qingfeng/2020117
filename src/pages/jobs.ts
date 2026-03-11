@@ -142,8 +142,8 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const j = result[0]
   const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
   const bidSats = j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0
-  const statusColor = STATUS_COLORS[j.status] || 'var(--c-text-muted)'
-  const statusLabel = STATUS_LABELS[j.status] || j.status
+  // Status display will be determined after review check
+  let effectiveStatus = j.status
   let customerName = j.customerName || j.customerUsername || 'unknown'
   // If customer name is a placeholder (nostr:xxx...), try to resolve from Kind 0
   if (customerName.startsWith('nostr:') && j.customerPubkey) {
@@ -173,9 +173,38 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }
   }
 
-  // Fetch activity: Kind 7000 feedback + Kind 6xxx results referencing this job
-  const { relayEvents } = await import('../db/schema')
+  // Fetch review from dvmReviews table
+  const { dvmReviews, relayEvents } = await import('../db/schema')
   const { sql: sqlTag } = await import('drizzle-orm')
+
+  type ReviewData = { rating: number; content: string | null; role: string; reviewerName: string | null; createdAt: Date }
+  let reviewInfo: ReviewData | null = null
+  const reviews = await db.select({
+    rating: dvmReviews.rating,
+    content: dvmReviews.content,
+    role: dvmReviews.role,
+    createdAt: dvmReviews.createdAt,
+    reviewerDisplayName: users.displayName,
+    reviewerUsername: users.username,
+  }).from(dvmReviews)
+    .leftJoin(users, eq(dvmReviews.reviewerUserId, users.id))
+    .where(eq(dvmReviews.jobId, j.id))
+    .limit(1)
+  if (reviews.length > 0) {
+    const r = reviews[0]
+    reviewInfo = { rating: r.rating, content: r.content, role: r.role, reviewerName: r.reviewerDisplayName || r.reviewerUsername || null, createdAt: r.createdAt }
+  }
+
+  // Derive effective status for display
+  if (reviewInfo) {
+    effectiveStatus = 'completed'
+  } else if (j.result && effectiveStatus === 'processing') {
+    effectiveStatus = 'result_available'
+  }
+  const statusColor = STATUS_COLORS[effectiveStatus] || 'var(--c-text-muted)'
+  const statusLabel = STATUS_LABELS[effectiveStatus] || effectiveStatus
+
+  // Fetch activity: Kind 7000 feedback + Kind 6xxx results referencing this job
   const requestEventId = j.requestEventId || j.eventId || ''
   type ActivityRow = { eventId: string; kind: number; pubkey: string; contentPreview: string | null; tags: string | null; eventCreatedAt: number }
   let jobActivity: ActivityRow[] = []
@@ -190,7 +219,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }).from(relayEvents).where(
       and(
         sqlTag`instr(${relayEvents.tags}, ${requestEventId}) > 0`,
-        sqlTag`${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303)`,
+        sqlTag`${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
       )
     ).orderBy(relayEvents.eventCreatedAt).limit(20)
   }
@@ -398,6 +427,15 @@ ${BASE_CSS}
 .activity-item .status-error{color:var(--c-red)}
 .activity-item .status-payment{color:var(--c-gold)}
 .activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
+.review-block{
+  margin-top:16px;padding:16px 20px;
+  border-left:3px solid var(--c-gold);
+  background:rgba(255,176,0,0.06);
+  border-radius:0 8px 8px 0;
+}
+.review-stars{color:var(--c-gold);font-size:18px;letter-spacing:2px;margin-bottom:6px}
+.review-text{color:#93a1a1;font-size:14px;line-height:1.6;margin-bottom:4px}
+.review-meta{font-size:12px;color:var(--c-nav)}
 @media(max-width:480px){
   .job-card{padding:16px 18px}
   .input-content,.result-content{font-size:14px}
@@ -427,6 +465,12 @@ ${overlays()}
 
     ${resultHtml}
 
+    ${reviewInfo ? `<div class="review-block">
+      <div class="review-stars">${'★'.repeat(reviewInfo.rating)}${'☆'.repeat(5 - reviewInfo.rating)}</div>
+      ${reviewInfo.content ? `<div class="review-text">${esc(reviewInfo.content)}</div>` : ''}
+      <div class="review-meta">${reviewInfo.reviewerName ? esc(reviewInfo.reviewerName) + ' · ' : ''}${reviewInfo.role}</div>
+    </div>` : ''}
+
     ${rejectionsHtml}
 
     ${jobActivity.length > 0 ? `<div class="activity-log">
@@ -447,6 +491,10 @@ ${overlays()}
         } else if (a.kind >= 6100 && a.kind <= 6303) {
           label = 'submitted result'
           cls = 'status-success'
+        } else if (a.kind === 31117) {
+          const ratingVal = tags.rating || ''
+          label = ratingVal ? `reviewed (${'★'.repeat(parseInt(ratingVal))}${'☆'.repeat(5 - parseInt(ratingVal))})` : 'reviewed'
+          cls = 'status-payment'
         }
         const actorHtml = actor.username
           ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a>`

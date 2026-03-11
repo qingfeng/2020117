@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, desc, and, or, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, groups, topics, comments, topicLikes, topicReposts, dvmJobs, relayEvents } from '../db/schema'
+import { users, groups, topics, comments, topicLikes, topicReposts, dvmJobs, dvmReviews, relayEvents } from '../db/schema'
 import { stripHtml } from '../lib/utils'
 import { pubkeyToNpub, eventIdToNevent, naddrEncode } from '../services/nostr'
 import { paginationMeta, DVM_KIND_LABELS } from './helpers'
@@ -699,14 +699,28 @@ content.get('/jobs/:id', async (c) => {
       : { nostr_pubkey: j.providerPubkey }
   }
 
+  // Fetch review
+  let review = null
+  const reviewRows = await db.select({
+    rating: dvmReviews.rating, content: dvmReviews.content, role: dvmReviews.role,
+    reviewerDisplayName: users.displayName, reviewerUsername: users.username,
+    createdAt: dvmReviews.createdAt,
+  }).from(dvmReviews).leftJoin(users, eq(dvmReviews.reviewerUserId, users.id))
+    .where(eq(dvmReviews.jobId, j.id)).limit(1)
+  if (reviewRows.length > 0) {
+    const rv = reviewRows[0]
+    review = { rating: rv.rating, content: rv.content, role: rv.role, reviewer_name: rv.reviewerDisplayName || rv.reviewerUsername, created_at: rv.createdAt }
+  }
+
   return c.json({
     id: j.id, kind: j.kind, kind_label: DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`,
     status: j.status, input: j.input, input_type: j.inputType,
-    result: j.status === 'completed' || j.status === 'result_available' ? (j.result || j.output) : null,
+    result: j.result || j.output || null,
     amount_sats: (j.priceMsats || j.bidMsats) ? Math.floor((j.priceMsats || j.bidMsats || 0) / 1000) : 0,
     created_at: j.createdAt, updated_at: j.updatedAt,
     customer: { username: j.customerUsername, display_name: j.customerDisplayName, avatar_url: j.customerAvatarUrl, nostr_pubkey: j.customerNostrPubkey },
     provider,
+    review,
   })
 })
 

@@ -451,17 +451,76 @@ async function handleDvmResult(label: string, event: NostrEvent) {
   console.log(`[${label}] DVM result from ${event.pubkey.slice(0, 8)}: ${event.content.slice(0, 80)}...`)
 
   // Auto-pay if we have NWC and provider has Lightning Address
+  let paid = false
   if (amountSats > 0 && lightningAddress && state.nwcParsed) {
     try {
       const { preimage } = await nwcPayLightningAddress(state.nwcParsed, lightningAddress, amountSats)
       console.log(`[${label}] Paid ${amountSats} sats → ${lightningAddress} (preimage: ${preimage.slice(0, 16)}...)`)
+      paid = true
     } catch (e) {
       console.error(`[${label}] Payment failed: ${e instanceof Error ? e.message : 'Unknown error'}`)
     }
+  } else if (amountSats === 0) {
+    paid = true // free job
   } else if (amountSats > 0 && !lightningAddress) {
     console.warn(`[${label}] Result requires ${amountSats} sats but provider has no Lightning Address`)
   } else if (amountSats > 0 && !state.nwcParsed) {
     console.warn(`[${label}] Result requires ${amountSats} sats but no NWC wallet configured`)
+  }
+
+  // Post-payment: publish completion events on Nostr
+  if (paid && requestId) {
+    try {
+      // 1. Kind 7000 — status: success (tells relay the job is done)
+      const successEvent = signEventWithPow({
+        kind: 7000,
+        tags: [
+          ['p', event.pubkey],
+          ['e', requestId],
+          ['status', 'success'],
+        ],
+        content: '',
+      }, state.sovereignKeys.privkey, 10)
+      await state.relayPool.publish(successEvent)
+      console.log(`[${label}] Published Kind 7000 status:success for ${requestId.slice(0, 8)}`)
+
+      // 2. Kind 31117 — job review (per-job, visible on timeline)
+      const reviewEvent = signEventWithPow({
+        kind: 31117,
+        tags: [
+          ['d', requestId],
+          ['e', requestId],
+          ['p', event.pubkey],
+          ['rating', '5'],
+          ['role', 'customer'],
+          ['k', String(KIND)],
+        ],
+        content: 'Auto-reviewed: job completed and paid',
+      }, state.sovereignKeys.privkey, 10)
+      await state.relayPool.publish(reviewEvent)
+      console.log(`[${label}] Published Kind 31117 review for ${requestId.slice(0, 8)}`)
+
+      // 3. Kind 30311 — peer endorsement (rolling reputation for provider)
+      const endorsementEvent = signEventWithPow({
+        kind: 30311,
+        tags: [
+          ['d', event.pubkey],
+          ['p', event.pubkey],
+          ['rating', '5'],
+          ['k', String(KIND)],
+        ],
+        content: JSON.stringify({
+          rating: 5,
+          comment: 'Job completed and paid',
+          trusted: true,
+          context: { jobs_together: 1, kinds: [KIND], last_job_at: Math.floor(Date.now() / 1000) },
+        }),
+      }, state.sovereignKeys.privkey, 10)
+      await state.relayPool.publish(endorsementEvent)
+      console.log(`[${label}] Published Kind 30311 endorsement for ${event.pubkey.slice(0, 8)}`)
+    } catch (e: any) {
+      console.warn(`[${label}] Failed to publish post-payment events: ${e.message}`)
+    }
   }
 
 }

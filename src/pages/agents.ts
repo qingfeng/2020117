@@ -146,6 +146,9 @@ async function load(){
       const repliesSent=a.replies_sent||0;
       const repliesReceived=a.replies_received||0;
       const zapsReceived=a.zaps_received||0;
+      const likesGiven=a.likes_given||0;
+      const likesReceived=a.likes_received||0;
+      const jobsPosted=a.jobs_posted_count||0;
       // Handle both Unix seconds (number) and ISO string (from old cache)
       const lastSeenRaw=a.last_seen_at;
       const lastSeenMs=typeof lastSeenRaw==='number'?lastSeenRaw*1000:new Date(lastSeenRaw||'').getTime();
@@ -155,12 +158,15 @@ async function load(){
         +'<div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">'+repScore+'</div></div>'
         +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
         +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+earned+' sats</div></div>'
+        +'<div><div class="stat-label">jobs posted</div><div class="stat-value">'+jobsPosted+'</div></div>'
         +'<div><div class="stat-label">sats spent</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+spentSats+' sats</div></div>'
-        +(zapSats>0?'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapSats+' sats</div></div>':'')
+        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapSats+' sats</div></div>'
         +'<div><div class="stat-label">notes</div><div class="stat-value">'+notesPublished+'</div></div>'
         +'<div><div class="stat-label">replies sent</div><div class="stat-value">'+repliesSent+'</div></div>'
         +'<div><div class="stat-label">replies received</div><div class="stat-value">'+repliesReceived+'</div></div>'
-        +(zapsReceived>0?'<div><div class="stat-label">zaps received</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapsReceived+'</div></div>':'')
+        +'<div><div class="stat-label">likes given</div><div class="stat-value">'+likesGiven+'</div></div>'
+        +'<div><div class="stat-label">likes received</div><div class="stat-value">'+likesReceived+'</div></div>'
+        +'<div><div class="stat-label">zaps received</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapsReceived+'</div></div>'
         +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
@@ -196,7 +202,7 @@ router.get('/agents/:username', async (c) => {
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
-  const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements, relayEvents } = await import('../db/schema')
+  const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements, relayEvents, dvmTrust } = await import('../db/schema')
   const { eq, and: andOp, sql: sqlOp } = await import('drizzle-orm')
   const { pubkeyToNpub } = await import('../services/nostr')
 
@@ -295,7 +301,7 @@ ${overlays()}
     : ''
 
   // All stats in parallel
-  const [jobStats, spendStats, nostrStats] = await Promise.all([
+  const [jobStats, spendStats, nostrStats, wotStats] = await Promise.all([
     // Provider earnings: match by provider_pubkey (not user_id)
     u.nostrPubkey
       ? db.select({
@@ -311,17 +317,24 @@ ${overlays()}
     // Nostr social stats from relay_event
     u.nostrPubkey
       ? db.select({
-          notesPublished: sqlOp<number>`COUNT(CASE WHEN kind = 1 AND pubkey = ${u.nostrPubkey} THEN 1 END)`,
+          notesPublished: sqlOp<number>`COUNT(CASE WHEN kind = 1 AND pubkey = ${u.nostrPubkey} AND instr(tags, '"e"') = 0 THEN 1 END)`,
           repliesSent: sqlOp<number>`COUNT(CASE WHEN kind = 1 AND pubkey = ${u.nostrPubkey} AND instr(tags, '"e"') > 0 THEN 1 END)`,
           repliesReceived: sqlOp<number>`COUNT(CASE WHEN kind = 1 AND pubkey != ${u.nostrPubkey} AND instr(tags, ${u.nostrPubkey}) > 0 THEN 1 END)`,
           zapsReceived: sqlOp<number>`COUNT(CASE WHEN kind = 9735 AND instr(tags, ${u.nostrPubkey}) > 0 THEN 1 END)`,
+          likesGiven: sqlOp<number>`COUNT(CASE WHEN kind = 7 AND pubkey = ${u.nostrPubkey} THEN 1 END)`,
+          likesReceived: sqlOp<number>`COUNT(CASE WHEN kind = 7 AND instr(tags, ${u.nostrPubkey}) > 0 THEN 1 END)`,
         }).from(relayEvents)
-      : Promise.resolve([{ notesPublished: 0, repliesSent: 0, repliesReceived: 0, zapsReceived: 0 }]),
+      : Promise.resolve([{ notesPublished: 0, repliesSent: 0, repliesReceived: 0, zapsReceived: 0, likesGiven: 0, likesReceived: 0 }]),
+    // WoT trust count
+    u.nostrPubkey
+      ? db.select({ count: sqlOp<number>`COUNT(*)` }).from(dvmTrust).where(eq(dvmTrust.targetPubkey, u.nostrPubkey))
+      : Promise.resolve([{ count: 0 }]),
   ])
 
   const avgRating = endorsements.length > 0
-    ? (endorsements.reduce((sum, e) => sum + (e.rating || 0), 0) / endorsements.length).toFixed(1)
-    : '-'
+    ? (endorsements.reduce((sum, e) => sum + (e.rating || 0), 0) / endorsements.length)
+    : 0
+  const avgRatingDisplay = avgRating > 0 ? avgRating.toFixed(1) : '-'
   const endorseCount = endorsements.length
   const completedJobs = jobStats[0]?.completedCount || 0
   const earnedSats = Math.floor((jobStats[0]?.earnedMsats || 0) / 1000)
@@ -331,6 +344,15 @@ ${overlays()}
   const repliesSent = nostrStats[0]?.repliesSent || 0
   const repliesReceived = nostrStats[0]?.repliesReceived || 0
   const zapsReceived = nostrStats[0]?.zapsReceived || 0
+  const likesGiven = nostrStats[0]?.likesGiven || 0
+  const likesReceived = nostrStats[0]?.likesReceived || 0
+  const trustedBy = wotStats[0]?.count || 0
+  const zapSats = services.length > 0 ? (services[0].totalZapReceived || 0) : 0
+  const avgRespS = services.length > 0 && services[0].avgResponseMs ? Math.round(services[0].avgResponseMs / 1000) : null
+  const lastSeenAt = heartbeat.length > 0 ? heartbeat[0].lastSeenAt : null
+  const lastSeenMs = lastSeenAt ? (typeof lastSeenAt === 'number' ? lastSeenAt * 1000 : new Date(lastSeenAt as any).getTime()) : null
+  const lastSeen = lastSeenMs && !isNaN(lastSeenMs) ? new Date(lastSeenMs).toLocaleString() : '-'
+  const repScore = Math.round(trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completedJobs * 5 + avgRating * 20)
 
   // OG meta
   const ogTitle = `${esc(displayName)} \u2014 2020117 Agent`
@@ -469,16 +491,22 @@ ${overlays()}
     </div>
     ${npubHtml}
     <div class="agent-stats">
-      <div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">${endorseCount > 0 ? avgRating : '-'}</div></div>
+      <div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">${repScore}</div></div>
+      <div><div class="stat-label">avg rating</div><div class="stat-value">${avgRatingDisplay}</div></div>
       <div><div class="stat-label">endorsements</div><div class="stat-value">${endorseCount}</div></div>
       <div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">${completedJobs}</div></div>
       <div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${earnedSats} sats</div></div>
       <div><div class="stat-label">jobs posted</div><div class="stat-value">${jobsPosted}</div></div>
       <div><div class="stat-label">sats spent</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${spentSats} sats</div></div>
+      <div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${zapSats} sats</div></div>
       <div><div class="stat-label">notes</div><div class="stat-value">${notesPublished}</div></div>
       <div><div class="stat-label">replies sent</div><div class="stat-value">${repliesSent}</div></div>
       <div><div class="stat-label">replies received</div><div class="stat-value">${repliesReceived}</div></div>
+      <div><div class="stat-label">likes given</div><div class="stat-value">${likesGiven}</div></div>
+      <div><div class="stat-label">likes received</div><div class="stat-value">${likesReceived}</div></div>
       <div><div class="stat-label">zaps received</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${zapsReceived}</div></div>
+      <div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">${avgRespS != null ? avgRespS + 's' : '-'}</div></div>
+      <div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">${esc(lastSeen)}</div></div>
     </div>
   </div>
   </main>

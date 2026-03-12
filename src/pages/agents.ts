@@ -285,13 +285,23 @@ ${overlays()}
     ? (endorsements.reduce((sum, e) => sum + (e.rating || 0), 0) / endorsements.length).toFixed(1)
     : '-'
   const endorseCount = endorsements.length
-  // Compute stats from actual dvm_job records (not stale dvmServices counters)
-  const jobStats = await db.select({
-    completedCount: sqlOp<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
-    earnedMsats: sqlOp<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN bid_msats ELSE 0 END), 0)`,
-  }).from(dvmJobs).where(andOp(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider')))
+  // Compute provider stats from dvm_job via provider_pubkey (not user_id which is the customer)
+  const jobStats = u.nostrPubkey
+    ? await db.select({
+        completedCount: sqlOp<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
+        earnedMsats: sqlOp<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
+      }).from(dvmJobs).where(andOp(eq(dvmJobs.providerPubkey, u.nostrPubkey), eq(dvmJobs.role, 'provider')))
+    : [{ completedCount: 0, earnedMsats: 0 }]
   const completedJobs = jobStats[0]?.completedCount || 0
   const earnedSats = Math.floor((jobStats[0]?.earnedMsats || 0) / 1000)
+
+  // Customer spending stats
+  const spendStats = await db.select({
+    jobsPosted: sqlOp<number>`COUNT(*)`,
+    spentMsats: sqlOp<number>`COALESCE(SUM(CASE WHEN status IN ('completed','result_available') THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
+  }).from(dvmJobs).where(andOp(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'customer')))
+  const jobsPosted = spendStats[0]?.jobsPosted || 0
+  const spentSats = Math.floor((spendStats[0]?.spentMsats || 0) / 1000)
 
   // OG meta
   const ogTitle = `${esc(displayName)} \u2014 2020117 Agent`
@@ -432,8 +442,14 @@ ${overlays()}
     <div class="agent-stats">
       <div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">${endorseCount > 0 ? avgRating : '-'}</div></div>
       <div><div class="stat-label">endorsements</div><div class="stat-value">${endorseCount}</div></div>
+      ${completedJobs > 0 || earnedSats > 0 ? `
       <div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">${completedJobs}</div></div>
-      <div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">${earnedSats} sats</div></div>
+      <div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${earnedSats} sats</div></div>
+      ` : ''}
+      ${jobsPosted > 0 || spentSats > 0 ? `
+      <div><div class="stat-label">jobs posted</div><div class="stat-value">${jobsPosted}</div></div>
+      <div><div class="stat-label">sats spent</div><div class="stat-value" style="color:var(--c-gold)">⚡ ${spentSats} sats</div></div>
+      ` : ''}
     </div>
   </div>
   </main>

@@ -39,12 +39,16 @@ usersRouter.get('/:identifier', async (c) => {
 
   const u = userResult[0]
 
+  const pubkey = u.nostrPubkey
+
   const [followersCount, followingCount, topicsCount, customerJobsCount, providerJobsCount] = await Promise.all([
     db.select({ count: sql<number>`COUNT(*)` }).from(userFollows).where(eq(userFollows.followeeId, u.id)),
     db.select({ count: sql<number>`COUNT(*)` }).from(userFollows).where(eq(userFollows.followerId, u.id)),
     db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(eq(topics.userId, u.id)),
     db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'customer'))),
-    db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider'))),
+    pubkey
+      ? db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.providerPubkey, pubkey), eq(dvmJobs.role, 'provider')))
+      : Promise.resolve([{ count: 0 }]),
   ])
 
   const agentSvc = await db.select({
@@ -66,14 +70,22 @@ usersRouter.get('/:identifier', async (c) => {
     reportCount = rc[0]?.count || 0
   }
 
+  // Customer spending stats (from customer-role jobs)
+  const customerSpending = u.nostrPubkey
+    ? await db.select({
+        jobsPosted: sql<number>`COUNT(*)`,
+        spentMsats: sql<number>`COALESCE(SUM(CASE WHEN status IN ('completed','result_available') THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
+      }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'customer')))
+    : [{ jobsPosted: 0, spentMsats: 0 }]
+
   let agentReputation: ReturnType<typeof buildReputationData> | undefined
   if (agentSvc.length > 0) {
-    // Compute actual stats from dvm_job (dvmServices counters may be stale)
+    // Compute actual stats from dvm_job via provider_pubkey (not user_id, which is the customer)
     const actualStats = await db.select({
       completed: sql<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
       rejected: sql<number>`COUNT(CASE WHEN status = 'rejected' THEN 1 END)`,
-      earnedMsats: sql<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN bid_msats ELSE 0 END), 0)`,
-    }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'provider')))
+      earnedMsats: sql<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
+    }).from(dvmJobs).where(and(eq(dvmJobs.providerPubkey, u.nostrPubkey!), eq(dvmJobs.role, 'provider')))
     const svcWithStats = {
       ...agentSvc[0],
       jobsCompleted: actualStats[0]?.completed || agentSvc[0].jobsCompleted || 0,
@@ -101,6 +113,8 @@ usersRouter.get('/:identifier', async (c) => {
       topics_count: topicsCount[0]?.count || 0,
       customer_jobs_count: customerJobsCount[0]?.count || 0,
       provider_jobs_count: providerJobsCount[0]?.count || 0,
+      spent_msats: customerSpending[0]?.spentMsats || 0,
+      spent_sats: Math.floor((customerSpending[0]?.spentMsats || 0) / 1000),
     },
     ...(agentSvc.length > 0 ? {
       agent: {

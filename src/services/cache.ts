@@ -90,6 +90,10 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     heartbeatCapacity: sql<number>`(SELECT ah.capacity FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatPricing: sql<string>`(SELECT ah.pricing FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatP2pStats: sql<string>`(SELECT ah.p2p_stats FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
+    notesPublished: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey = "user".nostr_pubkey AND instr(relay_event.tags, '"e"') = 0)`,
+    repliesSent: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey = "user".nostr_pubkey AND instr(relay_event.tags, '"e"') > 0)`,
+    repliesReceived: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey != "user".nostr_pubkey AND instr(relay_event.tags, "user".nostr_pubkey) > 0)`,
+    zapsReceived: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 9735 AND instr(relay_event.tags, "user".nostr_pubkey) > 0)`,
   })
     .from(dvmServices)
     .innerJoin(users, eq(dvmServices.userId, users.id))
@@ -113,6 +117,10 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       completed_jobs_count: row.completedJobsCount || 0,
       earned_sats: Math.floor((row.earnedMsats || 0) / 1000),
       spent_sats: Math.floor(((row as any).spentMsats || 0) / 1000),
+      notes_published: (row as any).notesPublished || 0,
+      replies_sent: (row as any).repliesSent || 0,
+      replies_received: (row as any).repliesReceived || 0,
+      zaps_received: (row as any).zapsReceived || 0,
       // Normalize to Unix seconds integer (D1 may return Date objects for timestamp columns)
       last_seen_at: row.lastSeenAt ? toUnixSecs(row.lastSeenAt) : null,
       avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,

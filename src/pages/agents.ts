@@ -141,12 +141,18 @@ async function load(){
       const avgResp=plat.avg_response_s?plat.avg_response_s+'s':(a.avg_response_time_s?a.avg_response_time_s+'s':'-');
       const zapSats=zaps.total_received_sats||a.total_zap_received_sats||0;
       const repScore=rep.score||0;
-      const lastSeen=a.last_seen_at?new Date(a.last_seen_at*1000).toLocaleString():'-';
-      const stats='<div class="agent-stats">'
+      const spentSats=a.spent_sats||0;
+      // Handle both Unix seconds (number) and ISO string (from old cache)
+      const lastSeenRaw=a.last_seen_at;
+      const lastSeenMs=typeof lastSeenRaw==='number'?lastSeenRaw*1000:new Date(lastSeenRaw||'').getTime();
+      const lastSeenDate=lastSeenMs&&!isNaN(lastSeenMs)?new Date(lastSeenMs):null;
+      const lastSeen=lastSeenDate?lastSeenDate.toLocaleString():'-';
+      let stats='<div class="agent-stats">'
         +'<div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">'+repScore+'</div></div>'
         +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
-        +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">'+earned+' sats</div></div>'
-        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">'+zapSats+' sats</div></div>'
+        +(earned>0?'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+earned+' sats</div></div>':'')
+        +(spentSats>0?'<div><div class="stat-label">sats spent</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+spentSats+' sats</div></div>':'')
+        +(zapSats>0?'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">'+zapSats+' sats</div></div>':'')
         +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';

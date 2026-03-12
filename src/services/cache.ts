@@ -10,6 +10,13 @@ const DVM_KIND_LABELS: Record<number, string> = {
 
 const REPORT_FLAG_THRESHOLD = 3
 
+// D1 may return Date objects for integer timestamp columns via raw SQL — normalize to Unix seconds
+function toUnixSecs(v: unknown): number {
+  if (v instanceof Date) return Math.floor(v.getTime() / 1000)
+  if (typeof v === 'string') { const ms = new Date(v).getTime(); return isNaN(ms) ? 0 : Math.floor(ms / 1000) }
+  return Number(v) || 0
+}
+
 // Composite reputation score: WoT trust * 100 + log10(zap_sats) * 10 + completed_jobs * 5 + avg_rating * 20
 function calcReputationScore(trustedBy: number, zapSats: number, completed: number, avgRating?: number): number {
   return trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completed * 5 + Math.floor((avgRating || 0) * 20)
@@ -70,9 +77,10 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     jobsRejected: dvmServices.jobsRejected,
     totalEarnedMsats: dvmServices.totalEarnedMsats,
     lastJobAt: dvmServices.lastJobAt,
-    completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
-    earnedMsats: sql<number>`(SELECT COALESCE(SUM(dvm_job.bid_msats), 0) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
-    lastSeenAt: sql<number>`(SELECT MAX(dvm_job.updated_at) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
+    completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
+    earnedMsats: sql<number>`(SELECT COALESCE(SUM(COALESCE(dvm_job.price_msats, dvm_job.bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
+    spentMsats: sql<number>`(SELECT COALESCE(SUM(COALESCE(dvm_job.price_msats, dvm_job.bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'customer' AND dvm_job.status IN ('completed', 'result_available'))`,
+    lastSeenAt: sql<number>`(SELECT CAST(MAX(dvm_job.updated_at) AS INTEGER) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
     avgResponseMs: dvmServices.avgResponseMs,
     reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
     trustedBy: sql<number>`(SELECT COUNT(*) FROM dvm_trust WHERE dvm_trust.target_pubkey = "user".nostr_pubkey)`,
@@ -104,7 +112,9 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       skill_name: (() => { try { return row.skill ? (JSON.parse(row.skill).name || null) : null } catch { return null } })(),
       completed_jobs_count: row.completedJobsCount || 0,
       earned_sats: Math.floor((row.earnedMsats || 0) / 1000),
-      last_seen_at: row.lastSeenAt || null,
+      spent_sats: Math.floor(((row as any).spentMsats || 0) / 1000),
+      // Normalize to Unix seconds integer (D1 may return Date objects for timestamp columns)
+      last_seen_at: row.lastSeenAt ? toUnixSecs(row.lastSeenAt) : null,
       avg_response_time_s: row.avgResponseMs ? Math.round(row.avgResponseMs / 1000) : null,
       total_zap_received_sats: row.totalZapReceived || 0,
       direct_request_enabled: !!row.directRequestEnabled,
@@ -122,7 +132,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
         avg_rating: row.avgRating ? Math.round(row.avgRating * 100) / 100 : 0,
         review_count: row.reviewCount || 0,
       }),
-      _sort_ts: row.lastSeenAt || 0,
+      _sort_ts: row.lastSeenAt ? toUnixSecs(row.lastSeenAt) : 0,
     }
   })
 

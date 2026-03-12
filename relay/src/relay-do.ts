@@ -254,10 +254,11 @@ export class RelayDO implements DurableObject {
       return this.registeredPubkeys.has(pubkey)
     }
 
-    // Refresh cache: pubkeys that have published Kind 0 to THIS relay (requires POW 20)
+    // Refresh cache: pubkeys that have published Kind 0 WITH POW≥20 to THIS relay
+    // Relay-self-contained: no dependency on platform DB, preserves decentralization
     try {
       const result = await this.env.DB.prepare(
-        'SELECT DISTINCT pubkey FROM events WHERE kind = 0'
+        "SELECT DISTINCT pubkey FROM events WHERE kind = 0 AND substr(id, 1, 5) = '00000'"
       ).all<{ pubkey: string }>()
 
       this.registeredPubkeys.clear()

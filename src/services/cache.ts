@@ -1,5 +1,5 @@
-import { eq, and, sql, inArray } from 'drizzle-orm'
-import { users, dvmServices, dvmJobs, dvmTrust, externalDvms, agentHeartbeats, dvmReviews } from '../db/schema'
+import { eq, and, sql, isNotNull, inArray } from 'drizzle-orm'
+import { users, dvmServices, dvmJobs, dvmTrust, externalDvms, agentHeartbeats, dvmReviews, relayEvents } from '../db/schema'
 import { pubkeyToNpub } from './nostr'
 import type { Database } from '../db'
 
@@ -77,10 +77,10 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     jobsRejected: dvmServices.jobsRejected,
     totalEarnedMsats: dvmServices.totalEarnedMsats,
     lastJobAt: dvmServices.lastJobAt,
-    completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
-    earnedMsats: sql<number>`(SELECT COALESCE(SUM(COALESCE(dvm_job.price_msats, dvm_job.bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.role = 'provider' AND dvm_job.status = 'completed')`,
+    completedJobsCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.status = 'completed')`,
+    earnedMsats: sql<number>`(SELECT COALESCE(SUM(COALESCE(dvm_job.price_msats, dvm_job.bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.provider_pubkey = "user".nostr_pubkey AND dvm_job.status = 'completed')`,
     spentMsats: sql<number>`(SELECT COALESCE(SUM(COALESCE(dvm_job.price_msats, dvm_job.bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'customer' AND dvm_job.status IN ('completed', 'result_available'))`,
-    lastSeenAt: sql<number>`(SELECT CAST(MAX(dvm_job.updated_at) AS INTEGER) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
+    lastSeenAt: sql<number>`(SELECT CAST(strftime('%s', MAX(dvm_job.updated_at)) AS INTEGER) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id)`,
     avgResponseMs: dvmServices.avgResponseMs,
     reportCount: sql<number>`(SELECT COUNT(DISTINCT reporter_pubkey) FROM nostr_report WHERE target_pubkey = "user".nostr_pubkey)`,
     trustedBy: sql<number>`(SELECT COUNT(*) FROM dvm_trust WHERE dvm_trust.target_pubkey = "user".nostr_pubkey)`,
@@ -150,10 +150,72 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     }
   })
 
+  // --- Customer-only agents: registered users with jobs but no active dvmService ---
+  // Single query: users with at least one dvm_job but no active dvm_service entry
+  const customerResult = await db.$client.prepare(`
+    SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.nostr_pubkey, u.lightning_address,
+      (SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = u.id AND dvm_job.role = 'customer') AS jobs_posted_count,
+      (SELECT COALESCE(SUM(COALESCE(price_msats, bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.user_id = u.id AND dvm_job.role = 'customer' AND status IN ('completed','result_available')) AS spent_msats,
+      (SELECT CAST(strftime('%s', MAX(updated_at)) AS INTEGER) FROM dvm_job WHERE dvm_job.user_id = u.id) AS last_seen_at
+    FROM user u
+    WHERE u.nostr_pubkey IS NOT NULL
+      AND EXISTS (SELECT 1 FROM dvm_job WHERE dvm_job.user_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM dvm_service WHERE dvm_service.user_id = u.id AND dvm_service.active = 1)
+  `).all<{ id: string; username: string; display_name: string | null; avatar_url: string | null; bio: string | null; nostr_pubkey: string; lightning_address: string | null; jobs_posted_count: number; spent_msats: number; last_seen_at: number | null }>()
+  const customerRows = customerResult.results
+  console.log(`[Cache] customerRows=${customerRows.length}`)
+
+  const customerAgents = customerRows.map(row => {
+    const spentSats = Math.floor((row.spent_msats || 0) / 1000)
+    const jobsPosted = row.jobs_posted_count || 0
+    return {
+      source: 'local' as const,
+      username: row.username,
+      display_name: row.display_name,
+      avatar_url: row.avatar_url,
+      bio: row.bio,
+      nostr_pubkey: row.nostr_pubkey,
+      npub: row.nostr_pubkey ? pubkeyToNpub(row.nostr_pubkey) : null,
+      services: [],
+      models: [],
+      features: [],
+      skill_name: null,
+      completed_jobs_count: 0,
+      earned_sats: 0,
+      spent_sats: spentSats,
+      jobs_posted_count: jobsPosted,
+      notes_published: 0,
+      replies_sent: 0,
+      replies_received: 0,
+      zaps_received: 0,
+      likes_given: 0,
+      likes_received: 0,
+      last_seen_at: row.last_seen_at ? toUnixSecs(row.last_seen_at) : null,
+      avg_response_time_s: null,
+      total_zap_received_sats: 0,
+      direct_request_enabled: false,
+      report_count: 0,
+      flagged: false,
+      live: false,
+      online_status: 'unknown',
+      capacity: 0,
+      pricing: null,
+      p2p_stats: null,
+      reputation: { score: jobsPosted * 2, wot: { trusted_by: 0, trusted_by_your_follows: 0 }, zaps: { total_received_sats: 0 }, reviews: { avg_rating: 0, review_count: 0 }, platform: { jobs_completed: 0, jobs_rejected: 0, completion_rate: 0, avg_response_s: null, total_earned_sats: 0, last_job_at: null } },
+      _sort_ts: row.last_seen_at ? toUnixSecs(row.last_seen_at) : 0,
+    }
+  })
+
   // --- External agents (from external_dvm table) ---
+  // Exclude pubkeys already in localAgents or customerAgents to avoid duplicates
+  const localPubkeys = new Set([
+    ...localRows.map(r => r.nostrPubkey).filter(Boolean),
+    ...customerRows.map(r => r.nostr_pubkey).filter(Boolean),
+  ])
   const extRows = await db.select().from(externalDvms)
   const byPubkey = new Map<string, typeof extRows>()
   for (const row of extRows) {
+    if (localPubkeys.has(row.pubkey)) continue
     const existing = byPubkey.get(row.pubkey) || []
     existing.push(row)
     byPubkey.set(row.pubkey, existing)
@@ -214,11 +276,12 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     (a.live ? 1e15 : 0) + (a.reputation?.score || 0) * 1e6 + (a._sort_ts || 0)
 
   localAgents.sort((a, b) => agentSortKey(b) - agentSortKey(a))
+  customerAgents.sort((a, b) => agentSortKey(b) - agentSortKey(a))
   externalAgents.sort((a, b) => agentSortKey(b) - agentSortKey(a))
 
   const stripSort = (arr: any[]) => arr.map(({ _sort_ts, ...rest }) => rest)
-  const allClean = stripSort([...localAgents, ...externalAgents])
-  const localClean = stripSort(localAgents)
+  const allClean = stripSort([...localAgents, ...customerAgents, ...externalAgents])
+  const localClean = stripSort([...localAgents, ...customerAgents])
   const nostrClean = stripSort(externalAgents)
 
   // Write all three source variants to KV (TTL 300s safety net; Cron refreshes every 60s)
@@ -228,7 +291,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     env.KV.put('agents_cache_nostr', JSON.stringify(nostrClean), { expirationTtl: 300 }),
   ])
 
-  console.log(`[Cache] Agents refreshed: ${localClean.length} local, ${nostrClean.length} external`)
+  console.log(`[Cache] Agents refreshed: ${localAgents.length} providers, ${customerAgents.length} customers, ${nostrClean.length} external`)
 }
 
 /**

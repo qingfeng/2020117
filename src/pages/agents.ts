@@ -65,6 +65,17 @@ ${BASE_CSS}
 @keyframes livePulse{
   0%,100%{opacity:1}50%{opacity:.5}
 }
+.pagination{
+  display:flex;align-items:center;justify-content:center;gap:16px;
+  margin-top:24px;padding:16px 0;
+}
+.pagination button{
+  background:var(--c-surface);border:1px solid var(--c-border);
+  color:var(--c-text);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:14px;
+}
+.pagination button:disabled{opacity:0.3;cursor:default;}
+.pagination button:not(:disabled):hover{border-color:var(--c-accent);color:var(--c-accent);}
+.pagination span{color:var(--c-text-muted);font-size:13px;}
 .agent-bio{
   color:var(--c-text-dim);font-size:14px;
   margin-bottom:8px;
@@ -111,29 +122,31 @@ ${overlays()}
 </div>
 <script>
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-async function load(){
+let currentPage=1;
+async function load(page){
+  page=page||1;currentPage=page;
   try{
-    const r=await fetch('${baseUrl}/api/agents');
+    const r=await fetch('${baseUrl}/api/agents?limit=20&page='+page);
     const el=document.getElementById('agents');
-    if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load()">retry</button></div>';return}
+    if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load(1)">retry</button></div>';return}
     const data=await r.json();
     const agents=data.agents||data;
-    if(!agents.length){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
+    const meta=data.meta||{};
+    if(!agents.length&&page===1){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
     let html='';
     for(const a of agents){
-      const avatarSrc=a.avatar_url||'https://robohash.org/'+encodeURIComponent(a.username);
-      const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username)+' avatar" loading="lazy">';
+      const avatarSrc=a.avatar_url||(a.username?'https://robohash.org/'+encodeURIComponent(a.username):'https://robohash.org/'+encodeURIComponent(a.nostr_pubkey||'unknown'));
+      const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
       const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
       const bio=bioText?'<div class="agent-bio line-clamp-2">'+esc(bioText)+'</div>':'';
       let kinds='';
-      for(const s of a.services){
-        for(const label of s.kind_labels){
+      for(const s of (a.services||[])){
+        for(const label of (s.kind_labels||[])){
           kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
         }
       }
       const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/profile/'+esc(a.npub)+'" target="_blank" rel="noopener" class="npub-link" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
       const rep=a.reputation||{};
-      const wot=rep.wot||{};
       const zaps=rep.zaps||{};
       const plat=rep.platform||{};
       const completed=plat.jobs_completed||a.completed_jobs_count||0;
@@ -149,7 +162,6 @@ async function load(){
       const likesGiven=a.likes_given||0;
       const likesReceived=a.likes_received||0;
       const jobsPosted=a.jobs_posted_count||0;
-      // Handle both Unix seconds (number) and ISO string (from old cache)
       const lastSeenRaw=a.last_seen_at;
       const lastSeenMs=typeof lastSeenRaw==='number'?lastSeenRaw*1000:new Date(lastSeenRaw||'').getTime();
       const lastSeenDate=lastSeenMs&&!isNaN(lastSeenMs)?new Date(lastSeenMs):null;
@@ -171,23 +183,32 @@ async function load(){
         +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
         +'</div>';
       const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
-      const url='/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}';
-      html+='<div class="agent-card" style="cursor:pointer" onclick="if(!event.defaultPrevented)location.href=this.dataset.url" role="link" tabindex="0" onkeydown="if(event.key===\\'Enter\\')location.href=this.dataset.url" data-url="'+esc(url)+'">'
+      const url=a.username?'/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}':'#';
+      html+='<div class="agent-card"'+(a.username?' style="cursor:pointer" onclick="if(!event.defaultPrevented)location.href=this.dataset.url" role="link" tabindex="0" onkeydown="if(event.key===\\'Enter\\')location.href=this.dataset.url" data-url="'+esc(url)+'"':'')+' >'
         +'<div class="agent-header">'+avatar
-        +'<span class="agent-name">'+esc(a.display_name||a.username)+liveBadge+'</span></div>'
+        +'<span class="agent-name">'+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
         +bio
         +'<div class="agent-services">'+kinds+'</div>'
         +npub
         +stats
         +'</div>';
     }
+    const total=meta.total||0;
+    const lastPage=meta.last_page||1;
+    if(lastPage>1){
+      html+='<div class="pagination">'
+        +(page>1?'<button onclick="load('+(page-1)+')">&#8592; prev</button>':'<button disabled>&#8592; prev</button>')
+        +'<span>'+page+' / '+lastPage+' &nbsp;('+total+' agents)</span>'
+        +(page<lastPage?'<button onclick="load('+(page+1)+')">next &#8594;</button>':'<button disabled>next &#8594;</button>')
+        +'</div>';
+    }
     el.innerHTML=html;
   }catch(e){
     console.error(e);
-    document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load()">retry</button></div>';
+    document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load(1)">retry</button></div>';
   }
 }
-load();
+load(1);
 </script>
 </body>
 </html>`)
@@ -307,7 +328,7 @@ ${overlays()}
       ? db.select({
           completedCount: sqlOp<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
           earnedMsats: sqlOp<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
-        }).from(dvmJobs).where(andOp(eq(dvmJobs.providerPubkey, u.nostrPubkey), eq(dvmJobs.role, 'provider')))
+        }).from(dvmJobs).where(eq(dvmJobs.providerPubkey, u.nostrPubkey))
       : Promise.resolve([{ completedCount: 0, earnedMsats: 0 }]),
     // Customer spending
     db.select({

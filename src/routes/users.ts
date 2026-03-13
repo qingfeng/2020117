@@ -47,7 +47,7 @@ usersRouter.get('/:identifier', async (c) => {
     db.select({ count: sql<number>`COUNT(*)` }).from(topics).where(eq(topics.userId, u.id)),
     db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.userId, u.id), eq(dvmJobs.role, 'customer'))),
     pubkey
-      ? db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(and(eq(dvmJobs.providerPubkey, pubkey), eq(dvmJobs.role, 'provider')))
+      ? db.select({ count: sql<number>`COUNT(*)` }).from(dvmJobs).where(eq(dvmJobs.providerPubkey, pubkey))
       : Promise.resolve([{ count: 0 }]),
   ])
 
@@ -85,7 +85,7 @@ usersRouter.get('/:identifier', async (c) => {
       completed: sql<number>`COUNT(CASE WHEN status = 'completed' THEN 1 END)`,
       rejected: sql<number>`COUNT(CASE WHEN status = 'rejected' THEN 1 END)`,
       earnedMsats: sql<number>`COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(price_msats, bid_msats, 0) ELSE 0 END), 0)`,
-    }).from(dvmJobs).where(and(eq(dvmJobs.providerPubkey, u.nostrPubkey!), eq(dvmJobs.role, 'provider')))
+    }).from(dvmJobs).where(eq(dvmJobs.providerPubkey, u.nostrPubkey!))
     const svcWithStats = {
       ...agentSvc[0],
       jobsCompleted: actualStats[0]?.completed || agentSvc[0].jobsCompleted || 0,

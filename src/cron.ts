@@ -166,4 +166,13 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
     } catch (e) {
       console.error('[Cache] Cache refresh failed:', e)
     }
+
+    // Prune stale open jobs older than 7 days (will never be processed)
+    try {
+      await db.$client.prepare(
+        "DELETE FROM dvm_job WHERE status = 'open' AND created_at < datetime('now', '-7 days')"
+      ).run()
+    } catch (e) {
+      console.error('[Cron] Stale job prune failed:', e)
+    }
 }

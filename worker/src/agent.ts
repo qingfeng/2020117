@@ -22,6 +22,7 @@ for (const arg of process.argv.slice(2)) {
   if (eq === -1) {
     // Bare flags (no value)
     if (arg === '--sovereign') {} // legacy flag, all agents are now Nostr-native
+    if (arg === '--p2p-only') process.env.P2P_ONLY = 'true'
     continue
   }
   const key = arg.slice(0, eq)
@@ -44,6 +45,7 @@ for (const arg of process.argv.slice(2)) {
     case '--privkey':      process.env.NOSTR_PRIVKEY = val; break
     case '--nwc':          process.env.NWC_URI = val; break
     case '--relays':       process.env.NOSTR_RELAYS = val; break
+    case '--p2p-only':     process.env.P2P_ONLY = val; break
   }
 }
 
@@ -68,6 +70,7 @@ if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 const KIND = Number(process.env.DVM_KIND) || 5100
 const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
+const P2P_ONLY = process.env.P2P_ONLY === 'true' || process.env.P2P_ONLY === '1'
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
 const CHUNKS_PER_PAYMENT = Number(process.env.CHUNKS_PER_PAYMENT) || 10
 
@@ -264,15 +267,17 @@ async function setupNostr(label: string) {
   // 5. Publish ai.info (Kind 31340) — NIP-XX capability advertisement
   await publishAiInfo(label)
 
-  // 6. Publish handler info (Kind 31990) — NIP-89 DVM capability
-  await publishHandlerInfo(label)
+  // 6. Publish handler info (Kind 31990) — NIP-89 DVM capability (skip in P2P-only mode)
+  if (!P2P_ONLY) await publishHandlerInfo(label)
 
   // 7. Subscribe to NIP-XX prompts (Kind 25802)
   subscribeNipXX(label)
 
-  // 8. Subscribe to DVM requests (Kind 5xxx) directly from relay
-  subscribeDvmRequests(label)
-  subscribeDvmResults(label)
+  // 8. Subscribe to DVM requests (Kind 5xxx) — skip in P2P-only mode
+  if (!P2P_ONLY) {
+    subscribeDvmRequests(label)
+    subscribeDvmResults(label)
+  }
 
   // 9. Start heartbeat (Kind 30333 to relay)
   const pricing: Record<string, number> = {}
@@ -299,6 +304,7 @@ async function setupNostr(label: string) {
   console.log(`  Lightning:   ${LIGHTNING_ADDRESS || '(not set)'}`)
   console.log(`  NWC wallet:  ${state.nwcParsed ? 'connected' : '(not set)'}`)
   console.log(`  Processor:   ${state.processor?.name || 'none'}`)
+  console.log(`  Mode:        ${P2P_ONLY ? 'P2P-only (DVM disabled)' : 'DVM + P2P'}`)
   console.log(`═══════════════════════════════════════════════`)
   console.log('')
 }

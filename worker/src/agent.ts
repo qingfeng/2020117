@@ -267,17 +267,17 @@ async function setupNostr(label: string) {
   // 5. Publish ai.info (Kind 31340) — NIP-XX capability advertisement
   await publishAiInfo(label)
 
-  // 6. Publish handler info (Kind 31990) — NIP-89 DVM capability (skip in P2P-only mode)
-  if (!P2P_ONLY) await publishHandlerInfo(label)
+  // 6. Publish handler info (Kind 31990) — NIP-89 DVM capability (always, even P2P-only)
+  await publishHandlerInfo(label)
 
   // 7. Subscribe to NIP-XX prompts (Kind 25802)
   subscribeNipXX(label)
 
-  // 8. Subscribe to DVM requests (Kind 5xxx) — skip in P2P-only mode
-  if (!P2P_ONLY) {
-    subscribeDvmRequests(label)
-    subscribeDvmResults(label)
-  }
+  // 8. Subscribe to DVM requests (Kind 5xxx)
+  // P2P-only: still subscribes but handleDvmRequest will ignore broadcast jobs,
+  // only responding to direct requests (p tag = our pubkey)
+  subscribeDvmRequests(label)
+  subscribeDvmResults(label)
 
   // 9. Start heartbeat (Kind 30333 to relay)
   const pricing: Record<string, number> = {}
@@ -597,6 +597,12 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
   // Skip own events
   if (event.pubkey === state.sovereignKeys.pubkey) return
+
+  // P2P-only mode: only handle direct requests (p tag pointing to us)
+  if (P2P_ONLY) {
+    const isDirected = event.tags.some(t => t[0] === 'p' && t[1] === state.sovereignKeys!.pubkey)
+    if (!isDirected) return
+  }
 
   // Dedup: skip already-seen events
   if (!markSeen(event.id)) return

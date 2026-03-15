@@ -50,6 +50,7 @@ for (const arg of process.argv.slice(2)) {
 }
 
 import { randomBytes } from 'crypto'
+import { createConnection } from 'net'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
 import { generateInvoice } from './lnurl.js'
@@ -837,6 +838,75 @@ interface SessionState {
   billingTimer: ReturnType<typeof setInterval> | null
   timeoutTimer: ReturnType<typeof setTimeout> | null
   customerPubkey?: string
+  proxyMode: boolean    // HTTP backend — use raw TCP pipe instead of JSON messages
+  proxyStarted: boolean // true after TCP pipe is established
+}
+
+/**
+ * Inject think:false into Ollama chat/generate requests.
+ * Suppresses reasoning tokens on models like qwen3 that enable thinking by default.
+ */
+function injectThinkFalse(rawBytes: Buffer): Buffer {
+  const raw = rawBytes.toString()
+  const sep = raw.indexOf('\r\n\r\n')
+  if (sep === -1) return rawBytes
+  const header = raw.slice(0, sep + 4)
+  const body = raw.slice(sep + 4)
+  if (!header.includes('POST') || (!header.includes('/api/generate') && !header.includes('/api/chat'))) return rawBytes
+  try {
+    const json = JSON.parse(body)
+    if (json.think !== undefined) return rawBytes
+    json.think = false
+    const newBody = JSON.stringify(json)
+    const newHeader = header.replace(/Content-Length:\s*\d+/i, `Content-Length: ${Buffer.byteLength(newBody)}`)
+    return Buffer.from(newHeader + newBody)
+  } catch { return rawBytes }
+}
+
+/**
+ * After session payment, switch this socket to a raw TCP pipe to the HTTP backend.
+ * The customer then has direct HTTP API access (Ollama, SD-WebUI, etc.) with true streaming.
+ * This removes SwarmNode's JSON framing from the socket and replaces it with a bidirectional pipe.
+ */
+function startTcpProxy(session: SessionState, node: SwarmNode, processorUrl: string, label: string) {
+  let addr: { host: string; port: number }
+  try {
+    const u = new URL(processorUrl)
+    addr = { host: u.hostname, port: Number(u.port) || (u.protocol === 'https:' ? 443 : 80) }
+  } catch {
+    console.error(`[${label}] Session ${session.sessionId}: invalid backend URL ${processorUrl}`)
+    endSession(node, session, label)
+    return
+  }
+
+  session.proxyStarted = true
+  const socket = session.socket
+
+  const backend = createConnection(addr.port, addr.host)
+  backend.setKeepAlive(true)
+
+  // Remove SwarmNode's newline-delimited JSON listener so raw HTTP bytes flow through
+  socket.removeAllListeners('data')
+  socket.on('data', (chunk: Buffer) => backend.write(injectThinkFalse(chunk)))
+  backend.pipe(socket)
+
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return; cleaned = true
+    try { socket.destroy() } catch {}
+    try { backend.destroy() } catch {}
+    endSession(node, session, label)
+  }
+
+  socket.on('close', cleanup)
+  socket.on('error', () => cleanup())
+  backend.on('close', cleanup)
+  backend.on('error', (e: Error) => {
+    console.log(`[${label}] Session ${session.sessionId}: backend error: ${e.message}`)
+    cleanup()
+  })
+
+  console.log(`[${label}] Session ${session.sessionId}: TCP proxy → ${addr.host}:${addr.port}`)
 }
 
 const activeSessions = new Map<string, SessionState>()
@@ -905,7 +975,10 @@ async function startSwarmListener(label: string) {
     // --- Session protocol ---
 
     if (msg.type === 'session_start') {
-      if (!LIGHTNING_ADDRESS) {
+      const processorUrl = process.env.PROCESSOR || ''
+      const proxyMode = processorUrl.startsWith('http://') || processorUrl.startsWith('https://')
+
+      if (!proxyMode && !LIGHTNING_ADDRESS) {
         node.send(socket, { type: 'error', id: msg.id, message: 'Provider Lightning Address not configured' })
         return
       }
@@ -921,7 +994,8 @@ async function startSwarmListener(label: string) {
       const billingAmount = satsPerMinute * BILLING_INTERVAL_MIN
 
       const sessionId = randomBytes(8).toString('hex')
-      console.log(`[${label}] Session ${sessionId} from ${tag}: ${satsPerMinute} sats/min, payment=${paymentMethod}, billing every ${BILLING_INTERVAL_MIN}min (${billingAmount} sats)`)
+      const modeLabel = proxyMode ? `proxy→${processorUrl}` : `${satsPerMinute} sats/min`
+      console.log(`[${label}] Session ${sessionId} from ${tag}: ${modeLabel}`)
 
       const session: SessionState = {
         socket,
@@ -935,6 +1009,8 @@ async function startSwarmListener(label: string) {
         billingTimer: null,
         timeoutTimer: null,
         customerPubkey: msg.pubkey || undefined,
+        proxyMode,
+        proxyStarted: false,
       }
 
       activeSessions.set(sessionId, session)
@@ -948,13 +1024,21 @@ async function startSwarmListener(label: string) {
         pubkey: state.sovereignKeys?.pubkey,
       })
 
-      // Send first billing tick
-      await sendBillingTick(node, session, billingAmount, label)
-
-      // Recurring billing every 10 minutes
-      session.billingTimer = setInterval(() => {
-        sendBillingTick(node, session, billingAmount, label)
-      }, BILLING_INTERVAL_MIN * 60_000)
+      if (proxyMode) {
+        if (billingAmount <= 0 || !LIGHTNING_ADDRESS) {
+          // Free proxy — open TCP pipe immediately
+          startTcpProxy(session, node, processorUrl, label)
+        } else {
+          // Paid proxy — one-time session fee, TCP pipe starts on payment (session_tick_ack)
+          await sendBillingTick(node, session, billingAmount, label)
+        }
+      } else {
+        // Per-minute billing for structured request/result sessions
+        await sendBillingTick(node, session, billingAmount, label)
+        session.billingTimer = setInterval(() => {
+          sendBillingTick(node, session, billingAmount, label)
+        }, BILLING_INTERVAL_MIN * 60_000)
+      }
 
       return
     }
@@ -969,6 +1053,11 @@ async function startSwarmListener(label: string) {
         session.totalEarned += amount
         session.lastPaidAt = Date.now()
         console.log(`[${label}] Session ${session.sessionId}: invoice payment received (+${amount}, total: ${session.totalEarned} sats)`)
+      }
+
+      // Proxy mode: switch to raw TCP pipe after first payment confirmed
+      if (session.proxyMode && !session.proxyStarted) {
+        startTcpProxy(session, node, process.env.PROCESSOR || '', label)
       }
 
       return

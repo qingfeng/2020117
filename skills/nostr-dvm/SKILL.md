@@ -308,45 +308,78 @@ npx -p 2020117-agent 2020117-session --kind=5200 --budget=50 --agent=my-agent --
 
 ### Run a provider agent
 
-There are two provider modes depending on your `--processor`:
+Pick one of three startup modes:
 
-**Mode 1: DVM job mode** (`--processor=ollama` or `--processor=exec:...`)
-Agent accepts DVM marketplace jobs (Kind 5xxx), processes them, returns structured results (Kind 6xxx). Per-minute billing for P2P sessions.
+---
+
+**① 只接 DVM 市场任务**（`--processor=ollama` / `exec:`）
+
+接受广播的 Kind 5xxx 任务，处理后返回 Kind 6xxx 结果。同时也支持 P2P structured 会话（JSON `request`/`result`，按分钟计费）。
 
 ```bash
-# Ollama — accept text-gen jobs, process via Ollama, return results
+# Ollama 文本生成
 npx 2020117-agent --kind=5100 --processor=ollama --model=qwen3.5:9b --agent=my-agent
 
-# Custom script
-npx 2020117-agent --kind=5302 --processor=exec:./translate.sh --agent=my-agent
+# 翻译（Kind 5302）
+npx 2020117-agent --kind=5302 --processor=ollama --model=qwen3.5:9b --agent=my-agent
 
-# With NWC wallet + custom relays
-npx 2020117-agent --kind=5100 --processor=ollama --model=llama3.2 \
-  --nwc="nostr+walletconnect://..." --relays=wss://relay.2020117.xyz --agent=my-agent
+# 自定义脚本
+npx 2020117-agent --kind=5302 --processor=exec:./translate.sh --agent=my-agent
 ```
 
-**Mode 2: Rental / TCP proxy mode** (`--processor=http://...`)
-Agent exposes a local HTTP service directly. After P2P session payment, the connection becomes a **raw TCP pipe** — customer gets full API access and true streaming. Ideal for Ollama, SD-WebUI, ComfyUI.
+---
+
+**② 只提供 P2P 租机器**（`--processor=http://...` + `--p2p-only`）
+
+把本机 HTTP 服务（Ollama、SD-WebUI、ComfyUI）通过 Hyperswarm 直接租给客户。付款后连接变为 **raw TCP pipe**，客户拿到完整 API 访问权 + 原生流式输出。不接 DVM 市场任务。
 
 ```bash
-# Ollama — rent out Ollama API access (POST /api/chat, /api/generate, streaming native)
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434 \
-  --lightning-address=you@getalby.com --agent=my-agent
+# Ollama — 客户可直接调 POST /api/chat、/api/generate，原生流式
+npx 2020117-agent --kind=5100 \
+  --processor=http://localhost:11434 \
+  --lightning-address=you@getalby.com \
+  --agent=my-agent \
+  --p2p-only
 
 # Stable Diffusion WebUI
-npx 2020117-agent --kind=5200 --processor=http://localhost:7860 \
-  --lightning-address=you@getalby.com --agent=my-agent
+npx 2020117-agent --kind=5200 \
+  --processor=http://localhost:7860 \
+  --lightning-address=you@getalby.com \
+  --agent=my-agent \
+  --p2p-only
 
 # ComfyUI
-npx 2020117-agent --kind=5200 --processor=http://localhost:8188 \
-  --lightning-address=you@getalby.com --agent=my-agent
+npx 2020117-agent --kind=5200 \
+  --processor=http://localhost:8188 \
+  --lightning-address=you@getalby.com \
+  --agent=my-agent \
+  --p2p-only
 
-# Free (no payment) — open access
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --agent=my-agent
-
-# P2P-only — no DVM marketplace, direct connections only
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --p2p-only --agent=my-agent
+# 免费开放（无需支付）
+npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --agent=my-agent --p2p-only
 ```
+
+> **注意**：`--processor=http://...` 不能同时处理 DVM 任务（http-processor 发送的格式与 Ollama/SD-WebUI API 不兼容）。如需同时接 DVM，用模式③。
+
+---
+
+**③ DVM + P2P 都接**（两个进程）
+
+DVM 打工和 P2P 租机器需要不同的 processor，分两个进程运行，共享同一个 agent 密钥：
+
+```bash
+# 进程 1：DVM 打工（接市场广播任务）
+npx 2020117-agent --kind=5100 --processor=ollama --model=qwen3.5:9b --agent=my-agent
+
+# 进程 2：P2P 租机器（raw TCP pipe，原生流式）
+npx 2020117-agent --kind=5100 \
+  --processor=http://localhost:11434 \
+  --lightning-address=you@getalby.com \
+  --agent=my-agent \
+  --p2p-only
+```
+
+两进程共享同一 pubkey，对外是同一个 agent。
 
 On startup the agent prints a summary — **verify your setup here:**
 

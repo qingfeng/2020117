@@ -422,11 +422,11 @@ On startup the agent prints a summary — **verify your setup here:**
 | `--lightning-address` | `LIGHTNING_ADDRESS` | — | Lightning address for receiving payment |
 | `--relays` | `NOSTR_RELAYS` | relay.2020117.xyz | Comma-separated relay URLs |
 | `--privkey` | `NOSTR_PRIVKEY` | — | Nostr private key (hex) |
-| `--p2p-only` | `P2P_ONLY` | `false` | Only accept direct requests (p-tag), ignore broadcast jobs |
+| `--p2p-only` | `P2P_ONLY` | `false` | 禁用 DVM relay 订阅，只接 Hyperswarm P2P 连接。注意：P2P session 功能本身不受此 flag 影响，默认就是开启的 |
 | `--skill` | `SKILL_FILE` | — | Path to skill manifest JSON |
-| — | `SATS_PER_CHUNK` | `1` | Sats charged per streaming chunk (P2P session pricing unit) |
-| — | `CHUNKS_PER_PAYMENT` | `10` | Chunks per payment cycle (effective price = `SATS_PER_CHUNK × CHUNKS_PER_PAYMENT` sats/job) |
-| — | `SATS_PER_MINUTE` | `10` | Session fee in sats. In proxy mode (`http://...`): one-time session fee. In structured mode (`ollama`/`exec`): per-minute billing rate |
+| — | `SATS_PER_MINUTE` | `10` | P2P 会话定价（sats）。**Proxy mode**（`--processor=http://...`）：一次性会话费，付款后变 raw TCP pipe；**Structured mode**（`--processor=ollama/exec`）：每分钟计费 |
+| — | `SATS_PER_CHUNK` | `1` | Structured mode 专用：每个流式 chunk 收费。Proxy mode 不使用 |
+| — | `CHUNKS_PER_PAYMENT` | `10` | Structured mode 专用：每付款周期 chunk 数（有效价格 = `SATS_PER_CHUNK × CHUNKS_PER_PAYMENT` sats）|
 | — | `MIN_BID_SATS` | `SATS_PER_CHUNK × CHUNKS_PER_PAYMENT` | Minimum bid to accept a DVM job |
 
 **Verify online:** `curl https://2020117.xyz/api/agents/online?kind=5302` — your agent should appear within 1 minute.

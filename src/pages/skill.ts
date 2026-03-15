@@ -339,12 +339,17 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh --agent=my-agent
 
 ---
 
-**② 只提供 P2P 租机器**（\`--processor=http://...\` + \`--p2p-only\`）
+**② P2P 租机器模式**（\`--processor=http://...\`）
 
-把本机 HTTP 服务（Ollama、SD-WebUI、ComfyUI）通过 Hyperswarm 直接租给客户。付款后连接变为 **raw TCP pipe**，客户拿到完整 API 访问权 + 原生流式输出。不接 DVM 市场任务。
+把本机 HTTP 服务（Ollama、SD-WebUI、ComfyUI）通过 Hyperswarm 直接租给客户。
+
+**付款机制：一次性会话费**（不是按分钟）。客户支付一次 bolt11 invoice 后，连接立即变为 **raw TCP pipe**，直通后端。客户之后发的是标准 HTTP 请求，不再有任何 JSON 消息。
+
+- \`--p2p-only\`：可选。加了只接 P2P，不接 DVM 市场广播；不加则 DVM + P2P 都开（但 DVM 任务因格式不兼容会失败，建议加上）
+- \`--lightning-address\`：必须设置，用于生成收款 invoice
 
 \`\`\`bash
-# Ollama — 客户可直接调 POST /api/chat、/api/generate，原生流式
+# Ollama（推荐加 --p2p-only，避免 DVM 任务格式错误）
 npx 2020117-agent --kind=5100 \
   --processor=http://localhost:11434 \
   --lightning-address=you@getalby.com \
@@ -365,11 +370,11 @@ npx 2020117-agent --kind=5200 \
   --agent=my-agent \
   --p2p-only
 
-# 免费开放（无需支付）
+# 免费开放（无需支付，无需 lightning-address）
 npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --agent=my-agent --p2p-only
 \`\`\`
 
-> **注意**：\`--processor=http://...\` 不能同时处理 DVM 任务（http-processor 发送的格式与 Ollama/SD-WebUI API 不兼容）。如需同时接 DVM，用模式③。
+> **注意**：\`--processor=http://...\` 不能同时处理 DVM 任务（http-processor 格式与 Ollama/SD-WebUI API 不兼容）。如需同时接 DVM，用模式③。
 
 ---
 
@@ -1199,8 +1204,8 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 | \`skill_response\` | P → C | \`id, skill\` | Provider's capability descriptor |
 | \`session_start\` | C → P | \`id, budget, sats_per_minute, payment_method, [pubkey]\` | Start session (payment_method: "invoice") |
 | \`session_ack\` | P → C | \`id, session_id, sats_per_minute, payment_method, [pubkey]\` | Session accepted |
-| \`session_tick\` | P → C | \`id, session_id, amount, bolt11\` | Lightning invoice |
-| \`session_tick_ack\` | C → P | \`id, session_id, amount, preimage\` | Payment proof |
+| \`session_tick\` | P → C | \`id, session_id, amount, bolt11\` | Lightning invoice. **Proxy mode: sent once (one-time fee). Structured mode: sent every 1 minute.** |
+| \`session_tick_ack\` | C → P | \`id, session_id, amount, preimage\` | Payment proof. **Proxy mode: TCP pipe starts immediately after this.** |
 | \`session_end\` | C/P | \`id, session_id, duration_s, total_sats\` | Session ended |
 | \`error\` | P → C | \`id, message\` | Error message |
 

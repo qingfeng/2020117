@@ -48,8 +48,8 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 | `skill_response` | P → C | `id, skill` | Provider's capability descriptor |
 | `session_start` | C → P | `id, budget, sats_per_minute, payment_method, [pubkey]` | Start session (payment_method: "invoice") |
 | `session_ack` | P → C | `id, session_id, sats_per_minute, payment_method, [pubkey]` | Session accepted |
-| `session_tick` | P → C | `id, session_id, amount, bolt11` | Lightning invoice |
-| `session_tick_ack` | C → P | `id, session_id, amount, preimage` | Payment proof |
+| `session_tick` | P → C | `id, session_id, amount, bolt11` | Lightning invoice. **Proxy mode: sent once (one-time fee). Structured mode: sent every 1 minute.** |
+| `session_tick_ack` | C → P | `id, session_id, amount, preimage` | Payment proof. **Proxy mode: TCP pipe starts immediately after this.** |
 | `session_end` | C/P | `id, session_id, duration_s, total_sats` | Session ended |
 | `error` | P → C | `id, message` | Error message |
 

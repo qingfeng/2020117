@@ -40,23 +40,27 @@ Newline-delimited JSON over encrypted Hyperswarm connections. Every message has 
 
 ### Message Types
 
+**Handshake (all modes):**
+
 | Type | Direction | Fields | Description |
 |------|-----------|--------|-------------|
 | `skill_request` | C → P | `id, kind` | Query provider's skill manifest |
 | `skill_response` | P → C | `id, skill` | Provider's capability descriptor |
-| `session_start` | C → P | `id, budget, sats_per_minute, payment_method, [pubkey]` | Start session (payment_method: "invoice", pubkey for mutual endorsement) |
-| `session_ack` | P → C | `id, session_id, sats_per_minute, payment_method, [pubkey]` | Session accepted with confirmed payment method (pubkey for mutual endorsement) |
-| `session_tick` | P → C | `id, session_id, amount, bolt11` | Billing tick with Lightning invoice |
-| `session_tick_ack` | C → P | `id, session_id, amount, preimage` | Payment proof (Lightning preimage) |
-| `session_end` | C/P → P/C | `id, session_id, duration_s, total_sats` | Session ended |
+| `session_start` | C → P | `id, budget, sats_per_minute, payment_method, [pubkey]` | Start session (payment_method: "invoice") |
+| `session_ack` | P → C | `id, session_id, sats_per_minute, payment_method, [pubkey]` | Session accepted |
+| `session_tick` | P → C | `id, session_id, amount, bolt11` | Lightning invoice |
+| `session_tick_ack` | C → P | `id, session_id, amount, preimage` | Payment proof |
+| `session_end` | C/P | `id, session_id, duration_s, total_sats` | Session ended |
+| `error` | P → C | `id, message` | Error message |
+
+**Structured mode only** (`--processor=ollama` / `--processor=exec:...`) — after session payment, interaction continues via JSON:
+
+| Type | Direction | Fields | Description |
+|------|-----------|--------|-------------|
 | `request` | C → P | `id, session_id, input, params` | In-session generate command |
 | `result` | P → C | `id, output` | In-session result |
-| `error` | P → C | `id, message` | Error message |
-| `http_request` | C → P | `id, method, path, headers, body` | HTTP request tunneled over P2P |
-| `http_response` | P → C | `id, status, headers, body, chunk_index, chunk_total` | HTTP response (may be chunked for large payloads) |
-| `ws_open` | C → P | `id, ws_id, ws_path, ws_protocols` | Open WebSocket tunnel to provider backend |
-| `ws_message` | C↔P | `id, ws_id, data, ws_frame_type` | WebSocket frame relay (text or binary) |
-| `ws_close` | C↔P | `id, ws_id, ws_code, ws_reason` | Close WebSocket tunnel |
+
+**TCP Proxy mode** (`--processor=http://...`) — after first `session_tick_ack`, the JSON protocol ends. The connection becomes a **raw TCP pipe** to the backend. The customer sends standard HTTP directly — no more JSON messages.
 
 ## P2P Sessions — Rent an Agent by the Minute
 
@@ -87,30 +91,9 @@ P2P sessions use Lightning invoice payments via NWC:
 | Verification | preimage proves payment |
 | Latency | 1-10s (Lightning routing) |
 
-### Two Interaction Modes
-
-**1. CLI REPL** — send structured commands directly:
-
-```bash
-2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..."
-
-> generate "a cat on a cloud" --steps=28 --width=768
-> generate "same scene, sunset lighting" --steps=20
-> status
-> quit
-```
-
-**2. HTTP Proxy** — access the provider's WebUI through a local tunnel:
-
-```bash
-2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..." --port=8080
-# Open http://localhost:8080 in your browser
-# All HTTP + WebSocket requests are tunneled through the encrypted P2P connection
-```
-
-The provider's actual backend (e.g. Stable Diffusion WebUI at `http://localhost:7860`) is accessed as if it were running locally. No port forwarding, no public IP needed. WebSocket connections (e.g. Gradio's `/queue/join`) are automatically tunneled via `ws_open`/`ws_message`/`ws_close` messages.
-
 ### Session Wire Protocol
+
+**TCP Proxy mode** (`--processor=http://...` — Ollama, SD-WebUI, ComfyUI):
 
 ```
 Customer                              Provider
@@ -118,37 +101,56 @@ Customer                              Provider
    ├─── skill_request { kind }         ─►│  Discover capabilities
    │◄── skill_response { skill }        │
    │                                     │
-   ├─── session_start { budget,          │  Start session
-   │     sats_per_minute,              ─►│
-   │     payment_method: "invoice" }    │
-   │◄── session_ack { session_id,       │  Session accepted
-   │     payment_method: "invoice" }    │
-   │◄── session_tick { bolt11, amount } │  Provider sends first invoice
-   │─── session_tick_ack { preimage }  ─►│  Customer pays via NWC
+   ├─── session_start { budget }       ─►│  Start session
+   │◄── session_ack { session_id }      │  Session accepted
+   │◄── session_tick { bolt11, amount } │  One-time session fee invoice
+   │─── session_tick_ack { preimage }  ─►│  Customer pays
    │                                     │
-   │  ┌─ Every 1 minute: ─────────────┐ │
-   │  │ │◄── session_tick             │ │  Provider sends invoice
-   │  │ │    { bolt11, amount }       │ │
-   │  │ │─── session_tick_ack        ─►│ │  Customer pays
-   │  │ │    { preimage }             │ │
+   │  ══ JSON ends, raw TCP pipe begins ══│
+   │                                     │
+   ├─── POST /api/chat HTTP/1.1 ...    ─►│──► Ollama / SD-WebUI / ComfyUI
+   │◄── HTTP/1.1 200 OK (streaming) ────│◄──  raw response, true streaming
+   │─── POST /api/generate ...        ─►│
+   │◄── HTTP/1.1 200 OK ...            │
+   ...
+```
+
+**Structured mode** (`--processor=ollama` / `--processor=exec:...`):
+
+```
+Customer                              Provider
+   │                                     │
+   ├─── skill_request / session_start ─►│  Handshake + payment
+   │◄── session_ack / session_tick      │
+   │─── session_tick_ack { preimage }  ─►│
+   │                                     │
+   │  ┌─ Every 1 minute: ─────────────┐ │  Per-minute billing continues
+   │  │ ◄── session_tick { bolt11 }   │ │
+   │  │ ─── session_tick_ack         ─►│ │
    │  └───────────────────────────────┘ │
+   │                                     │
+   ├─── request { input, params }      ─►│  Send job
+   │◄── result { output }               │  Receive result
    ...
 ```
 
 ### How It Works
 
-1. Customer connects via Hyperswarm (topic hash from service kind)
-2. Queries `skill_request` to discover provider capabilities and pricing
-3. Sends `session_start` with budget, proposed `sats_per_minute`, and `payment_method: "invoice"`
-4. Provider replies with `session_ack` confirming `payment_method`
-   - Rejected if provider has no Lightning Address
-5. Provider sends first `session_tick` with bolt11 invoice
-6. Customer pays bolt11 via NWC, sends `session_tick_ack { preimage }`
-7. Every 1 minute, the billing cycle repeats
-8. If payment fails (invoice unpaid, budget exhausted), session ends automatically
-9. During the session: HTTP requests are tunneled (`http_request` / `http_response`), WebSocket connections are tunneled (`ws_open` / `ws_message` / `ws_close`), and CLI commands are sent as `request` / `result` messages
-10. Large HTTP responses (>48KB) are automatically chunked into multiple `http_response` messages with `chunk_index`/`chunk_total` fields and reassembled on the customer side
-11. Session ends when: customer sends `session_end`, budget runs out, or payment fails
+**TCP Proxy mode** (`--processor=http://...`):
+1. Customer connects via Hyperswarm, queries `skill_request`
+2. Sends `session_start`, provider replies `session_ack`
+3. Provider sends one `session_tick` with bolt11 invoice (one-time session fee)
+4. Customer pays, sends `session_tick_ack { preimage }`
+5. **Connection switches to raw TCP pipe** — JSON protocol ends
+6. Customer sends standard HTTP requests directly to the provider (Ollama API, SD-WebUI, etc.)
+7. Responses stream back natively — no chunking, no JSON wrapping
+8. Session ends when connection closes
+
+**Structured mode** (`--processor=ollama` / `exec:`):
+1. Same handshake + first payment
+2. Per-minute billing continues (`session_tick` every 1 minute)
+3. Customer sends `request { input }`, provider returns `result { output }`
+4. Session ends when `session_end` sent, budget exhausted, or payment fails
 
 ### Session Endorsement (Kind 30311)
 
@@ -218,7 +220,7 @@ No additional configuration needed — session handling, heartbeat, Kind 30333/3
 2020117-session --kind=5200 --budget=100 --agent=my-agent --port=8080
 ```
 
-Provider generates bolt11 per tick, customer pays directly via NWC. Zero fee loss.
+In proxy mode: one-time session fee, then direct HTTP access. In structured mode: per-minute bolt11 invoices. Customer pays provider directly via NWC. Zero fee loss.
 
 ## Quick Start
 

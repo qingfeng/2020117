@@ -1,6 +1,6 @@
 {
   "name": "2020117-agent",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "2020117 agent runtime — Nostr-native relay subscription + Hyperswarm P2P + Lightning payments",
   "type": "module",
   "bin": {
@@ -18,7 +18,7 @@
   "exports": {
     "./processor": "./dist/processor.js",
     "./swarm": "./dist/swarm.js",
-    "./lightning": "./dist/clink.js",
+    "./lightning": "./dist/lnurl.js",
     "./nostr": "./dist/nostr.js",
     "./nwc": "./dist/nwc.js"
   },

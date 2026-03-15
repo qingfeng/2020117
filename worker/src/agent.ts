@@ -52,7 +52,7 @@ for (const arg of process.argv.slice(2)) {
 import { randomBytes } from 'crypto'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
-import { generateInvoice } from './clink.js'
+import { generateInvoice } from './lnurl.js'
 import {
   generateKeypair, loadSovereignKeys, saveSovereignKeys, loadAgentName,
   signEvent, signEventWithPow, nip44Encrypt, nip44Decrypt, pubkeyFromPrivkey,

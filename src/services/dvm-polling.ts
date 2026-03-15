@@ -20,6 +20,7 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
       requestEventId: dvmJobs.requestEventId,
       kind: dvmJobs.kind,
       status: dvmJobs.status,
+      providerPubkey: dvmJobs.providerPubkey,
     })
     .from(dvmJobs)
     .where(and(
@@ -97,10 +98,17 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
               .where(eq(dvmJobs.id, job.id))
             console.log(`[DVM] Job ${job.id} → completed (Kind 7000 success)`)
           } else if (feedbackStatus === 'error') {
-            await db.update(dvmJobs)
-              .set({ status: 'error', result: event.content || 'Error', updatedAt: new Date() })
-              .where(eq(dvmJobs.id, job.id))
-            console.log(`[DVM] Job ${job.id} → error`)
+            // Only mark as error if the feedback is from the provider (not a customer quality rejection)
+            const isFromProvider = !job.providerPubkey || event.pubkey === job.providerPubkey
+            if (isFromProvider) {
+              await db.update(dvmJobs)
+                .set({ status: 'error', result: event.content || 'Error', updatedAt: new Date() })
+                .where(eq(dvmJobs.id, job.id))
+              console.log(`[DVM] Job ${job.id} → error`)
+            } else {
+              // Customer rejected this result — keep job open for better responses
+              console.log(`[DVM] Job ${job.id} — customer rejected result from ${event.pubkey.slice(0,12)}, keeping open`)
+            }
           }
         } else if (event.kind >= 6000 && event.kind <= 6999) {
           // Result event — extract bolt11 from amount tag
@@ -203,8 +211,9 @@ async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string
   await db.insert(users).values({
     id: userId,
     username: finalUsername,
-    displayName: `nostr:${shortPub}...`,
+    displayName: null,
     nostrPubkey: pubkey,
+    nostrSyncEnabled: 1,
     createdAt: new Date(),
     updatedAt: new Date(),
   })

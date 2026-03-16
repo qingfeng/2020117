@@ -77,6 +77,7 @@ router.get('/jobs/:id', async (c) => {
     kind: dvmJobs.kind,
     status: dvmJobs.status,
     input: dvmJobs.input,
+    inputType: dvmJobs.inputType,
     result: dvmJobs.result,
     params: dvmJobs.params,
     bidMsats: dvmJobs.bidMsats,
@@ -114,12 +115,14 @@ router.get('/jobs/:id', async (c) => {
       const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+      const isEncrypted = tags.encrypted === '1'
+
       // Fetch full event from relay to get complete input/content
-      let fullInput: string | null = tags.input || re.contentPreview || null
+      let fullInput: string | null = isEncrypted ? null : (tags.input || re.contentPreview || null)
       let resultPreview: string | null = null
       let resultProviderName: string | null = null
 
-      try {
+      if (!isEncrypted) try {
         const { fetchEventsFromRelay } = await import('../services/relay-io')
         const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
         const fullEventRes = await fetchEventsFromRelay(relayUrl, { ids: [re.eventId] })
@@ -130,8 +133,8 @@ router.get('/jobs/:id', async (c) => {
         }
       } catch { /* use cached fallback */ }
 
-      // For DVM request events (5xxx), look up the corresponding 6xxx result
-      if (re.kind >= 5000 && re.kind <= 5999) {
+      // For DVM request events (5xxx), look up the corresponding 6xxx result (skip if encrypted)
+      if (!isEncrypted && re.kind >= 5000 && re.kind <= 5999) {
         try {
           const { fetchEventsFromRelay } = await import('../services/relay-io')
           const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
@@ -206,6 +209,7 @@ router.get('/jobs/:id', async (c) => {
       }
 
       const inputText = fullInput
+      const encryptedBadge = isEncrypted ? `<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px;margin-bottom:20px">🔒 Encrypted — content visible only to the parties involved</div>` : ''
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
 ${headMeta(baseUrl)}
 <style>${BASE_CSS}
@@ -225,8 +229,9 @@ ${overlays()}
 <span class="kind">kind ${re.kind}</span>
 <div class="label">from</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
 <div class="label">time</div><div class="val">${timeStr}</div>
-${inputText ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText))}</div>` : ''}
-${resultPreview ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
+${encryptedBadge}
+${(!isEncrypted && inputText) ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText))}</div>` : ''}
+${(!isEncrypted && resultPreview) ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
 ${activityHtml}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
 <div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
@@ -383,14 +388,18 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
 
   // Build result section
   // If dvmJobs.result is null (external agent not tracked by platform),
+  const jobIsEncrypted = j.inputType === 'encrypted'
+
   // fall back to the 6xxx result event content from relayEvents
-  const resultText = j.result || (() => {
+  const resultText = jobIsEncrypted ? null : (j.result || (() => {
     const resultEvent = jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)
     return resultEvent?.contentPreview || null
-  })()
+  })())
 
   let resultHtml = ''
-  if (resultText) {
+  if (jobIsEncrypted) {
+    resultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 Encrypted — content visible only to the parties involved</div></div>`
+  } else if (resultText) {
     const j_result_compat = resultText
     let imgSrc = ''
     if (j_result_compat.startsWith('data:image/')) {
@@ -600,7 +609,7 @@ ${overlays()}
     <div class="customer">by ${j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)}</div>
     ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>`}</div>` : ''}
 
-    ${j.input ? `<div class="section">
+    ${(!jobIsEncrypted && j.input) ? `<div class="section">
       <div class="section-label">input</div>
       <div class="input-content">${esc(j.input)}</div>
     </div>` : ''}

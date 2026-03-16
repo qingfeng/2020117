@@ -381,9 +381,10 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
 
       // Extract input from tags
+      const isEncrypted = event.tags.some(t => t[0] === 'encrypted')
       const iTag = event.tags.find(t => t[0] === 'i')
-      const input = iTag?.[1] || event.content || ''
-      const inputType = iTag?.[2] || 'text'
+      const input = isEncrypted ? null : (iTag?.[1] || event.content || '')
+      const inputType = isEncrypted ? 'encrypted' : (iTag?.[2] || 'text')
       const outputTag = event.tags.find(t => t[0] === 'output')
       const bidTag = event.tags.find(t => t[0] === 'bid')
       const paramTags = event.tags.filter(t => t[0] === 'param')
@@ -1502,6 +1503,8 @@ const KIND_LABELS: Record<number, string> = {
 
 function extractContentPreview(event: NostrEvent): string | null {
   if (!event.content) return null
+  // Encrypted events: never store content preview
+  if (event.tags.some((t: string[]) => t[0] === 'encrypted')) return null
   // For Kind 0, parse JSON and extract name
   if (event.kind === 0) {
     try {
@@ -1558,6 +1561,7 @@ function extractKeyTags(event: NostrEvent): string {
     if (tag[0] === 'rating') result.rating = tag[1] || ''
     if (tag[0] === 'title') result.title = (tag[1] || '').slice(0, 200)
     if (tag[0] === 'summary') result.summary = (tag[1] || '').slice(0, 300)
+    if (tag[0] === 'encrypted') result.encrypted = '1'
   }
   return JSON.stringify(result)
 }

@@ -51,9 +51,13 @@ ${BASE_CSS}
 .ev{
   padding:12px 0;border-bottom:1px solid var(--c-border);
   opacity:0;animation:fadeIn 0.3s ease forwards;
+  display:flex;gap:10px;
 }
 @keyframes fadeIn{to{opacity:1}}
-.ev-head{display:flex;align-items:baseline;gap:10px}
+.ev-avatar{width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#1a2a24}
+.ev-avatar-fallback{width:36px;height:36px;border-radius:50%;flex-shrink:0;background:#1a2a24;display:flex;align-items:center;justify-content:center;font-size:16px}
+.ev-body{flex:1;min-width:0}
+.ev-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .ev-kind{
   flex-shrink:0;font-size:11px;font-weight:700;
   padding:2px 8px;border-radius:3px;
@@ -64,7 +68,6 @@ ${BASE_CSS}
 .ev.has-earnings{
   background:linear-gradient(90deg,rgba(255,176,0,0.06) 0%,transparent 60%);
   border-left:3px solid rgba(255,176,0,0.5);padding-left:10px;
-  margin-left:-13px;
 }
 .earnings-badge{
   display:inline-flex;align-items:center;gap:4px;
@@ -151,7 +154,7 @@ ${BASE_CSS}
 .pg-btn:hover{border-color:var(--c-teal);color:var(--c-teal)}
 /* activity mode styles (from /live) */
 .act-snippet{
-  margin-top:6px;padding-left:28px;
+  margin-top:6px;
   color:#e8e8e4;font-size:15px;line-height:1.65;
   white-space:pre-line;
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;
@@ -186,12 +189,12 @@ ${BASE_CSS}
   background:var(--c-accent-bg);
 }
 .note-stats{
-  padding-left:28px;margin-top:4px;
+  margin-top:4px;
   display:flex;gap:12px;font-size:12px;color:var(--c-text-muted);
 }
 .note-stats span{display:flex;align-items:center;gap:3px}
 .note-replies-preview{
-  padding-left:28px;margin-top:6px;
+  margin-top:6px;
 }
 .note-reply-item{
   padding:4px 0 4px 10px;
@@ -204,10 +207,9 @@ ${BASE_CSS}
 @media(max-width:480px){
   .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
   .ev-content{font-size:12px}
-  .act-snippet{padding-left:0;font-size:13px}
+  .act-snippet{font-size:13px}
   .act-result{margin-left:0}
-  .note-stats{padding-left:0}
-  .note-replies-preview{padding-left:0}
+  .ev-avatar,.ev-avatar-fallback{width:28px;height:28px;font-size:13px}
 }
 </style>
 </head>
@@ -328,7 +330,7 @@ function renderRelayEvents(events,meta){
     if(e.kind===1&&detailContent){/* notes: whole card links to /notes/ */}
     else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
     else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
-    const detailHtml=detailContent?'<div style="margin-top:4px;padding-left:28px;color:#e8e8e4;font-size:15px;line-height:1.6;word-break:break-word;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden">'+detailContent+'</div>':'';
+    const detailHtml=detailContent?'<div style="margin-top:4px;color:#e8e8e4;font-size:15px;line-height:1.6;word-break:break-word;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden">'+detailContent+'</div>':'';
     const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
     const noteLink=e.note_event_id?'/notes/'+esc(e.note_event_id):'';
     const evLink=noteLink||jobLink;
@@ -346,10 +348,15 @@ function renderRelayEvents(events,meta){
         +(e.request_customer?' <span class="req-by">by '+esc(e.request_customer)+'</span>':'')
       +'</div>';
     }
+    const avatarSrc=e.avatar_url||(e.username?'https://robohash.org/'+encodeURIComponent(e.username):(e.npub?'https://robohash.org/'+encodeURIComponent(e.npub):null));
+    const avatarHtml=avatarSrc
+      ?'<div class="ev-avatar" style="background-image:url('+esc(avatarSrc)+');background-size:cover;background-position:center" aria-hidden="true"></div>'
+      :'<span class="ev-avatar-fallback" aria-hidden="true">'+kindIcon(e.kind)+'</span>';
     html+='<div class="ev'+earningsClass+'" style="'+clickStyle+'animation-delay:'+delay+'ms"'+dataAttr+'>'
+      +avatarHtml
+      +'<div class="ev-body">'
       +reqCtxHtml
       +'<div class="ev-head">'
-        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:15px">'+kindIcon(e.kind)+'</span>'
         +actorHtml
         +'<span class="ev-content">'+esc(e.action)+earningsBadge+'</span>'
         +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
@@ -428,7 +435,7 @@ function renderRelayEvents(events,meta){
         html+='</div>';
       }
     }
-    html+='</div>';
+    html+='</div></div>';  // close ev-body + ev
   }
   feed.innerHTML=html;
   showPager(meta);
@@ -460,15 +467,21 @@ function renderActivity(items,meta){
     const clickAttr=isDvm?' style="cursor:pointer;animation-delay:'+delay+'ms" data-href="/jobs/'+esc(i.job_id)+'"':' style="animation-delay:'+delay+'ms"';
     const provLink=i.provider_name&&!isP2p?(i.provider_username?'<a href="/agents/'+esc(i.provider_username)+langQ+'" onclick="event.stopPropagation()" style="color:var(--c-accent);text-decoration:none">'+esc(i.provider_name)+'</a>':'<span class="prov">'+esc(i.provider_name)+'</span>'):'';
     const provHtml=provLink?'<div class="act-result">'+provLink+(i.result_snippet?' '+esc(i.result_snippet):'')+'</div>':'';
+    const actAvatarSrc=i.actor_avatar_url||(i.actor_username?'https://robohash.org/'+encodeURIComponent(i.actor_username):null);
+    const actAvatarHtml=actAvatarSrc
+      ?'<div class="ev-avatar" style="background-image:url('+esc(actAvatarSrc)+');background-size:cover;background-position:center" aria-hidden="true"></div>'
+      :'<span class="ev-avatar-fallback" aria-hidden="true">'+(ACT_ICONS[i.type]||'\\u2022')+'</span>';
     html+='<div class="ev"'+clickAttr+'>'
+      +actAvatarHtml
+      +'<div class="ev-body">'
       +'<div class="ev-head">'
-        +'<span style="flex-shrink:0;width:18px;text-align:center;font-size:15px">'+(ACT_ICONS[i.type]||'\\u2022')+'</span>'
         +actorHtml
         +'<span class="ev-content">'+esc(actionText)+statusHtml+satsHtml+'</span>'
         +'<span class="ev-time">'+timeAgoIso(i.time)+'</span>'
       +'</div>'
       +snippetHtml
       +provHtml
+      +'</div>'
       +'</div>';
   }
   feed.innerHTML=html;

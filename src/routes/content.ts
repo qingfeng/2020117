@@ -537,14 +537,14 @@ content.get('/activity', async (c) => {
       : or(eq(dvmJobs.role, 'customer'), and(eq(dvmJobs.role, 'provider'), inArray(dvmJobs.paymentMethod, ['p2p', 'clink'])))
 
   const [recentTopics, recentJobs, recentLikes, recentReposts] = await Promise.all([
-    db.select({ id: topics.id, content: topics.content, title: topics.title, createdAt: topics.createdAt, authorUsername: users.username, authorDisplayName: users.displayName })
+    db.select({ id: topics.id, content: topics.content, title: topics.title, createdAt: topics.createdAt, authorUsername: users.username, authorDisplayName: users.displayName, authorAvatarUrl: users.avatarUrl })
       .from(topics).leftJoin(users, eq(topics.userId, users.id)).orderBy(desc(topics.createdAt)).limit(fetchLimit),
     db.select({
       id: dvmJobs.id, kind: dvmJobs.kind, status: dvmJobs.status, role: dvmJobs.role, input: dvmJobs.input,
       output: dvmJobs.output, result: dvmJobs.result, providerPubkey: dvmJobs.providerPubkey,
       bidMsats: dvmJobs.bidMsats, priceMsats: dvmJobs.priceMsats, paidMsats: dvmJobs.paidMsats,
       params: dvmJobs.params, createdAt: dvmJobs.createdAt, updatedAt: dvmJobs.updatedAt,
-      authorUsername: users.username, authorDisplayName: users.displayName,
+      authorUsername: users.username, authorDisplayName: users.displayName, authorAvatarUrl: users.avatarUrl,
     }).from(dvmJobs).leftJoin(users, eq(dvmJobs.userId, users.id))
       .where(jobCondition)
       .orderBy(desc(dvmJobs.updatedAt)).limit(fetchLimit),
@@ -568,11 +568,11 @@ content.get('/activity', async (c) => {
     return clean.length > max ? clean.slice(0, max) + '...' : clean || null
   }
 
-  const activities: { type: string; actor: string; actor_username: string | null; action: string; snippet: string | null; provider_name?: string | null; provider_username?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; job_status?: string | null; minor?: boolean; action_key?: string; action_params?: Record<string, string>; time: Date }[] = []
+  const activities: { type: string; actor: string; actor_username: string | null; actor_avatar_url?: string | null; action: string; snippet: string | null; provider_name?: string | null; provider_username?: string | null; result_snippet?: string | null; amount_sats?: number | null; job_id?: string | null; job_status?: string | null; minor?: boolean; action_key?: string; action_params?: Record<string, string>; time: Date }[] = []
 
   for (const t of recentTopics) {
     const text = t.title ? `${t.title} — ${stripHtmlLocal(t.content || '')}` : (t.content || '')
-    activities.push({ type: 'post', actor: t.authorDisplayName || t.authorUsername || 'unknown', actor_username: t.authorUsername || null, action: 'posted a note', action_key: 'actPosted', action_params: {}, snippet: snippet(text), time: t.createdAt })
+    activities.push({ type: 'post', actor: t.authorDisplayName || t.authorUsername || 'unknown', actor_username: t.authorUsername || null, actor_avatar_url: t.authorAvatarUrl || null, action: 'posted a note', action_key: 'actPosted', action_params: {}, snippet: snippet(text), time: t.createdAt })
   }
 
   // Provider name lookup
@@ -592,7 +592,7 @@ content.get('/activity', async (c) => {
       const durationMin = Math.ceil((params.duration_s || 0) / 60)
       const sats = j.paidMsats ? Math.round(j.paidMsats / 1000) : (params.total_sats || 0)
       const provInfo = j.providerPubkey ? providerMap[j.providerPubkey] : null
-      activities.push({ type: 'p2p_session', actor: j.authorDisplayName || j.authorUsername || 'unknown', actor_username: j.authorUsername || null, action: `completed a P2P session (${kindLabel})`, action_key: 'actP2p', action_params: { kind: kindLabel }, snippet: `${durationMin}min, ${sats} sats`, provider_name: provInfo?.displayName || provInfo?.username || null, provider_username: provInfo?.username || null, amount_sats: sats, job_id: j.id, job_status: 'completed', time: j.updatedAt })
+      activities.push({ type: 'p2p_session', actor: j.authorDisplayName || j.authorUsername || 'unknown', actor_username: j.authorUsername || null, actor_avatar_url: j.authorAvatarUrl || null, action: `completed a P2P session (${kindLabel})`, action_key: 'actP2p', action_params: { kind: kindLabel }, snippet: `${durationMin}min, ${sats} sats`, provider_name: provInfo?.displayName || provInfo?.username || null, provider_username: provInfo?.username || null, amount_sats: sats, job_id: j.id, job_status: 'completed', time: j.updatedAt })
       continue
     }
 
@@ -601,7 +601,7 @@ content.get('/activity', async (c) => {
     const msats = j.priceMsats || j.bidMsats
     const amountSats = (msats && j.status === 'completed') ? Math.round(msats / 1000) : null
 
-    activities.push({ type: 'dvm_job', actor: j.authorDisplayName || j.authorUsername || 'unknown', actor_username: j.authorUsername || null, action: `requested ${kindLabel}`, action_key: 'actRequested', action_params: { kind: kindLabel }, snippet: snippet(j.input), provider_name: providerInfo?.displayName || providerInfo?.username || null, provider_username: providerInfo?.username || null, result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null, amount_sats: amountSats, job_id: j.id, job_status: j.status, time: j.updatedAt })
+    activities.push({ type: 'dvm_job', actor: j.authorDisplayName || j.authorUsername || 'unknown', actor_username: j.authorUsername || null, actor_avatar_url: j.authorAvatarUrl || null, action: `requested ${kindLabel}`, action_key: 'actRequested', action_params: { kind: kindLabel }, snippet: snippet(j.input), provider_name: providerInfo?.displayName || providerInfo?.username || null, provider_username: providerInfo?.username || null, result_snippet: (resultText && ['completed', 'result_available'].includes(j.status)) ? snippet(resultText) : null, amount_sats: amountSats, job_id: j.id, job_status: j.status, time: j.updatedAt })
   }
 
   // Group likes

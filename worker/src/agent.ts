@@ -451,26 +451,38 @@ async function handleDvmResult(label: string, event: NostrEvent) {
 
   // Extract job reference, amount, and provider's Lightning Address
   const requestId = event.tags.find(t => t[0] === 'e')?.[1]
-  const amountMsats = Number(event.tags.find(t => t[0] === 'amount')?.[1] || '0')
+  const amountTag = event.tags.find(t => t[0] === 'amount')
+  const amountMsats = Number(amountTag?.[1] || '0')
   const amountSats = Math.floor(amountMsats / 1000)
-  const lightningAddress = event.tags.find(t => t[0] === 'lightning_address')?.[1]
+  const bolt11 = amountTag?.[2] || null  // NIP-90: ["amount", "<msats>", "<bolt11>"]
+  // Providers may use lud16, lightning_address, or lud06 to declare their payment address
+  const lightningAddress = event.tags.find(t => t[0] === 'lud16' || t[0] === 'lightning_address')?.[1]
 
   console.log(`[${label}] DVM result from ${event.pubkey.slice(0, 8)}: ${event.content.slice(0, 80)}...`)
 
-  // Auto-pay if we have NWC and provider has Lightning Address
+  // Auto-pay if we have NWC
   let paid = false
-  if (amountSats > 0 && lightningAddress && state.nwcParsed) {
+  if (amountSats > 0 && state.nwcParsed) {
     try {
-      const { preimage } = await nwcPayLightningAddress(state.nwcParsed, lightningAddress, amountSats)
-      console.log(`[${label}] Paid ${amountSats} sats → ${lightningAddress} (preimage: ${preimage.slice(0, 16)}...)`)
-      paid = true
+      if (bolt11) {
+        // Preferred: pay bolt11 invoice directly from amount tag
+        const { nwcPayInvoice } = await import('./nwc.js')
+        const { preimage } = await nwcPayInvoice(state.nwcParsed, bolt11)
+        console.log(`[${label}] Paid ${amountSats} sats via bolt11 (preimage: ${preimage.slice(0, 16)}...)`)
+        paid = true
+      } else if (lightningAddress) {
+        // Fallback: pay via Lightning Address (lud16 / lightning_address tag)
+        const { preimage } = await nwcPayLightningAddress(state.nwcParsed, lightningAddress, amountSats)
+        console.log(`[${label}] Paid ${amountSats} sats → ${lightningAddress} (preimage: ${preimage.slice(0, 16)}...)`)
+        paid = true
+      } else {
+        console.warn(`[${label}] Result requires ${amountSats} sats but provider has no bolt11 or Lightning Address`)
+      }
     } catch (e) {
       console.error(`[${label}] Payment failed: ${e instanceof Error ? e.message : 'Unknown error'}`)
     }
   } else if (amountSats === 0) {
     paid = true // free job
-  } else if (amountSats > 0 && !lightningAddress) {
-    console.warn(`[${label}] Result requires ${amountSats} sats but provider has no Lightning Address`)
   } else if (amountSats > 0 && !state.nwcParsed) {
     console.warn(`[${label}] Result requires ${amountSats} sats but no NWC wallet configured`)
   }

@@ -590,7 +590,7 @@ content.get('/activity', async (c) => {
 
     if (j.role === 'provider' && params?.channel === 'p2p') {
       const durationMin = Math.ceil((params.duration_s || 0) / 60)
-      const sats = j.paidMsats ? Math.round(j.paidMsats / 1000) : 0
+      const sats = j.paidMsats ? Math.round(j.paidMsats / 1000) : (params.total_sats || 0)
       const provInfo = j.providerPubkey ? providerMap[j.providerPubkey] : null
       activities.push({ type: 'p2p_session', actor: j.authorDisplayName || j.authorUsername || 'unknown', actor_username: j.authorUsername || null, action: `completed a P2P session (${kindLabel})`, action_key: 'actP2p', action_params: { kind: kindLabel }, snippet: `${durationMin}min, ${sats} sats`, provider_name: provInfo?.displayName || provInfo?.username || null, provider_username: provInfo?.username || null, amount_sats: sats, job_id: j.id, job_status: 'completed', time: j.updatedAt })
       continue

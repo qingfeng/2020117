@@ -148,6 +148,14 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] Relay event poll failed:', e)
     }
 
+    // Index external provider jobs (6xxx results + 30311 P2P sessions)
+    try {
+      const { indexExternalProviderJobs } = await import('./services/dvm')
+      await indexExternalProviderJobs(env, db)
+    } catch (e) {
+      console.error('[Cron] External provider job indexing failed:', e)
+    }
+
     // Sync user events from public relays (notes, articles, reactions posted elsewhere)
     try {
       const { pollPublicRelayForUsers } = await import('./services/dvm')

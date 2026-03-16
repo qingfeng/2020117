@@ -1687,3 +1687,173 @@ export async function pollPublicRelayForUsers(env: Bindings, db: Database): Prom
     console.log(`[PublicSync] Synced ${inserted} events for ${pubkeys.length} users (since ${since})`)
   }
 }
+
+// --- Index External Provider Jobs ---
+// Part A: 6xxx result events in relay_event → create provider dvm_job records for external providers
+// Part B: 30311 endorsements from relay → create P2P session dvm_job records
+
+export async function indexExternalProviderJobs(env: Bindings, db: Database): Promise<void> {
+  const kv = env.KV
+  const relayUrl = env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+
+  // --- Part A: 6xxx results → external provider dvm_jobs ---
+  {
+    const sinceKey = 'ext_provider_results_last_sync'
+    const sinceTs = await kv.get(sinceKey)
+    const since = sinceTs ? parseInt(sinceTs) : 0
+
+    let maxTs = since
+    let indexed = 0
+
+    try {
+      const resultRows = await db.select({
+        eventId: relayEvents.eventId,
+        kind: relayEvents.kind,
+        pubkey: relayEvents.pubkey,
+        tags: relayEvents.tags,
+        contentPreview: relayEvents.contentPreview,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents)
+        .where(and(
+          sql`kind >= 6000 AND kind <= 6999`,
+          sql`event_created_at > ${since}`,
+        ))
+        .orderBy(relayEvents.eventCreatedAt)
+        .limit(200)
+
+      for (const re of resultRows) {
+        if (re.eventCreatedAt > maxTs) maxTs = re.eventCreatedAt
+
+        let tags: Record<string, string> = {}
+        try { tags = JSON.parse(re.tags || '{}') } catch {}
+        const requestEventId = tags.e
+        if (!requestEventId) continue
+
+        // Skip if provider dvm_job already exists for this result event
+        const existing = await db.select({ id: dvmJobs.id })
+          .from(dvmJobs)
+          .where(and(eq(dvmJobs.resultEventId, re.eventId), eq(dvmJobs.role, 'provider')))
+          .limit(1)
+        if (existing.length > 0) continue
+
+        // Look up customer job for context (input, customerPubkey)
+        const customerJob = await db.select({
+          input: dvmJobs.input,
+          inputType: dvmJobs.inputType,
+          customerPubkey: dvmJobs.customerPubkey,
+        }).from(dvmJobs)
+          .where(and(eq(dvmJobs.requestEventId, requestEventId), eq(dvmJobs.role, 'customer')))
+          .limit(1)
+
+        try {
+          const userId = await ensureUserForPubkey(db, re.pubkey)
+          const requestKind = re.kind - 1000  // 6100 → 5100
+          const priceMsats = tags.amount ? parseInt(tags.amount) : null
+
+          await db.insert(dvmJobs).values({
+            id: generateId(),
+            userId,
+            role: 'provider',
+            kind: requestKind,
+            status: 'completed',
+            input: customerJob[0]?.input || null,
+            inputType: customerJob[0]?.inputType || 'text',
+            result: re.contentPreview,
+            customerPubkey: customerJob[0]?.customerPubkey || null,
+            providerPubkey: re.pubkey,
+            requestEventId,
+            resultEventId: re.eventId,
+            priceMsats,
+            createdAt: new Date(re.eventCreatedAt * 1000),
+            updatedAt: new Date(re.eventCreatedAt * 1000),
+          })
+          indexed++
+          console.log(`[ExtProvider] Indexed provider job for ${re.pubkey.slice(0, 8)}... result ${re.eventId.slice(0, 8)}...`)
+        } catch (e) {
+          console.error(`[ExtProvider] Failed to index provider job for ${re.eventId.slice(0, 8)}...:`, e)
+        }
+      }
+    } catch (e) {
+      console.error('[ExtProvider] Part A failed:', e)
+    }
+
+    if (maxTs > since) await kv.put(sinceKey, String(maxTs))
+    if (indexed > 0) console.log(`[ExtProvider] Indexed ${indexed} external provider jobs`)
+  }
+
+  // --- Part B: 30311 endorsements → P2P session dvm_jobs ---
+  {
+    const sinceKey = 'ext_p2p_sessions_last_sync'
+    const sinceTs = await kv.get(sinceKey)
+    const since = sinceTs ? parseInt(sinceTs) : Math.floor(Date.now() / 1000) - 86400 * 30  // 30 days lookback on first run
+
+    let maxTs = since
+    let indexed = 0
+
+    try {
+      const { events } = await fetchEventsFromRelay(relayUrl, {
+        kinds: [30311],
+        since,
+      })
+
+      for (const event of events) {
+        if (!verifyEvent(event)) continue
+        if (event.created_at > maxTs) maxTs = event.created_at
+
+        // Only process endorsements with P2P session context
+        let ctx: { session_duration_s?: number; total_sats?: number; kinds?: number[] } | null = null
+        try {
+          const parsed = JSON.parse(event.content)
+          if (parsed.context?.session_duration_s !== undefined) {
+            ctx = parsed.context
+          }
+        } catch {}
+        if (!ctx) continue
+
+        const customerPubkey = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
+        if (!customerPubkey) continue
+
+        // Dedup: use endorsement event ID as requestEventId (unique per session)
+        const existing = await db.select({ id: dvmJobs.id })
+          .from(dvmJobs)
+          .where(eq(dvmJobs.requestEventId, event.id))
+          .limit(1)
+        if (existing.length > 0) continue
+
+        try {
+          const userId = await ensureUserForPubkey(db, event.pubkey)
+          const kind = ctx.kinds?.[0] || 5000
+          const params = JSON.stringify({
+            channel: 'p2p',
+            duration_s: ctx.session_duration_s || 0,
+            total_sats: ctx.total_sats || 0,
+          })
+
+          await db.insert(dvmJobs).values({
+            id: generateId(),
+            userId,
+            role: 'provider',
+            kind,
+            status: 'completed',
+            customerPubkey,
+            providerPubkey: event.pubkey,
+            requestEventId: event.id,
+            params,
+            paymentMethod: 'p2p',
+            createdAt: new Date(event.created_at * 1000),
+            updatedAt: new Date(event.created_at * 1000),
+          })
+          indexed++
+          console.log(`[ExtProvider] Indexed P2P session for ${event.pubkey.slice(0, 8)}... duration=${ctx.session_duration_s}s sats=${ctx.total_sats}`)
+        } catch (e) {
+          console.error(`[ExtProvider] Failed to index P2P session for ${event.id.slice(0, 8)}...:`, e)
+        }
+      }
+    } catch (e) {
+      console.error('[ExtProvider] Part B failed:', e)
+    }
+
+    if (maxTs > since) await kv.put(sinceKey, String(maxTs))
+    if (indexed > 0) console.log(`[ExtProvider] Indexed ${indexed} P2P sessions`)
+  }
+}

@@ -55,6 +55,7 @@ export interface SwarmMessage {
   duration_s?: number         // session_end: total session duration in seconds
   payment_method?: 'invoice'            // session_start/ack: payment method (invoice only)
   pubkey?: string                       // session_start/ack: Nostr pubkey for mutual endorsement
+  proxy_mode?: boolean                  // session_ack: true = TCP pipe mode after payment
   bolt11?: string             // session_tick (invoice mode): Lightning invoice
   preimage?: string           // session_tick_ack (invoice mode): payment proof
   // HTTP proxy fields

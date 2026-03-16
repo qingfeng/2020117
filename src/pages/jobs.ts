@@ -287,14 +287,22 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   const localTime = (iso: string) => `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace('T', ' '))}</time>`
 
   // Build result section
+  // If dvmJobs.result is null (external agent not tracked by platform),
+  // fall back to the 6xxx result event content from relayEvents
+  const resultText = j.result || (() => {
+    const resultEvent = jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)
+    return resultEvent?.contentPreview || null
+  })()
+
   let resultHtml = ''
-  if (j.result) {
+  if (resultText) {
+    const j_result_compat = resultText
     let imgSrc = ''
-    if (j.result.startsWith('data:image/')) {
-      imgSrc = j.result
+    if (j_result_compat.startsWith('data:image/')) {
+      imgSrc = j_result_compat
     } else {
       try {
-        const parsed = JSON.parse(j.result)
+        const parsed = JSON.parse(j_result_compat)
         if (parsed.type === 'image' && parsed.data) {
           const fmt = parsed.format || 'png'
           imgSrc = `data:image/${fmt};base64,${parsed.data}`
@@ -303,7 +311,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }
     const resultBody = imgSrc
       ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
-      : `<div class="result-content">${esc(j.result)}</div>`
+      : `<div class="result-content">${esc(j_result_compat)}</div>`
     resultHtml = `
     <div class="section">
       <div class="section-label">result${providerName ? ` \u2014 by <span style="color:var(--c-accent)">${esc(providerName)}</span>` : ''}</div>

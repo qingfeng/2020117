@@ -49,18 +49,17 @@ for (const arg of process.argv.slice(2)) {
   }
 }
 
-import { randomBytes } from 'crypto'
+import { randomBytes, createHash } from 'crypto'
 import { createConnection } from 'net'
 import { SwarmNode, topicFromKind, SwarmMessage } from './swarm.js'
 import { createProcessor, Processor } from './processor.js'
-import { generateInvoice } from './lnurl.js'
 import {
   generateKeypair, loadSovereignKeys, saveSovereignKeys, loadAgentName,
   signEvent, signEventWithPow, nip44Encrypt, nip44Decrypt, pubkeyFromPrivkey,
   RelayPool,
 } from './nostr.js'
 import type { NostrEvent, SovereignKeys } from './nostr.js'
-import { parseNwcUri, nwcGetBalance, nwcPayLightningAddress } from './nwc.js'
+import { parseNwcUri, nwcGetBalance, nwcPayLightningAddress, nwcMakeInvoice } from './nwc.js'
 import type { NwcParsed } from './nwc.js'
 import { readFileSync } from 'fs'
 import WebSocket from 'ws'
@@ -275,10 +274,11 @@ async function setupNostr(label: string) {
   subscribeNipXX(label)
 
   // 8. Subscribe to DVM requests (Kind 5xxx)
-  // P2P-only: still subscribes but handleDvmRequest will ignore broadcast jobs,
-  // only responding to direct requests (p tag = our pubkey)
-  subscribeDvmRequests(label)
-  subscribeDvmResults(label)
+  // P2P-only: skip relay subscription entirely — only serve P2P customers
+  if (!P2P_ONLY) {
+    subscribeDvmRequests(label)
+    subscribeDvmResults(label)
+  }
 
   // 9. Start heartbeat (Kind 30333 to relay)
   const pricing: Record<string, number> = {}
@@ -599,12 +599,6 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
   // Skip own events
   if (event.pubkey === state.sovereignKeys.pubkey) return
 
-  // P2P-only mode: only handle direct requests (p tag pointing to us)
-  if (P2P_ONLY) {
-    const isDirected = event.tags.some(t => t[0] === 'p' && t[1] === state.sovereignKeys!.pubkey)
-    if (!isDirected) return
-  }
-
   // Dedup: skip already-seen events
   if (!markSeen(event.id)) return
 
@@ -840,6 +834,7 @@ interface SessionState {
   customerPubkey?: string
   proxyMode: boolean    // HTTP backend — use raw TCP pipe instead of JSON messages
   proxyStarted: boolean // true after TCP pipe is established
+  pendingPaymentHash?: string  // expected payment_hash for current session_tick; verified on ack
 }
 
 /**
@@ -924,16 +919,31 @@ function markSeen(eventId: string): boolean {
   return true
 }
 
-/** Send a billing tick to the customer — generate Lightning invoice */
+/** Verify Lightning payment preimage: SHA256(preimage_hex) should equal payment_hash_hex */
+function verifyPreimage(preimageHex: string, paymentHashHex: string): boolean {
+  try {
+    const preimageBytes = Buffer.from(preimageHex, 'hex')
+    const computed = createHash('sha256').update(preimageBytes).digest('hex')
+    return computed === paymentHashHex.toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+/** Send a billing tick to the customer — generate Lightning invoice via NWC make_invoice. */
 async function sendBillingTick(node: SwarmNode, session: SessionState, amount: number, label: string) {
   const tickId = randomBytes(4).toString('hex')
   try {
-    const bolt11 = await generateInvoice(LIGHTNING_ADDRESS, amount)
+    if (!state.nwcParsed) {
+      throw new Error('NWC wallet not configured — cannot generate invoice')
+    }
+    const result = await nwcMakeInvoice(state.nwcParsed, amount * 1000, `2020117 session ${session.sessionId}`)
+    session.pendingPaymentHash = result.payment_hash
     node.send(session.socket, {
       type: 'session_tick',
       id: tickId,
       session_id: session.sessionId,
-      bolt11,
+      bolt11: result.bolt11,
       amount,
     })
     console.log(`[${label}] Session ${session.sessionId}: sent invoice (${amount} sats)`)
@@ -978,8 +988,8 @@ async function startSwarmListener(label: string) {
       const processorUrl = process.env.PROCESSOR || ''
       const proxyMode = processorUrl.startsWith('http://') || processorUrl.startsWith('https://')
 
-      if (!proxyMode && !LIGHTNING_ADDRESS) {
-        node.send(socket, { type: 'error', id: msg.id, message: 'Provider Lightning Address not configured' })
+      if (!proxyMode && !state.nwcParsed) {
+        node.send(socket, { type: 'error', id: msg.id, message: 'Provider payment not configured (need --nwc)' })
         return
       }
       const paymentMethod: 'invoice' = 'invoice'
@@ -1022,10 +1032,11 @@ async function startSwarmListener(label: string) {
         sats_per_minute: satsPerMinute,
         payment_method: paymentMethod,
         pubkey: state.sovereignKeys?.pubkey,
+        proxy_mode: proxyMode,
       })
 
       if (proxyMode) {
-        if (billingAmount <= 0 || !LIGHTNING_ADDRESS) {
+        if (billingAmount <= 0 || !state.nwcParsed) {
           // Free proxy — open TCP pipe immediately
           startTcpProxy(session, node, processorUrl, label)
         } else {
@@ -1049,10 +1060,31 @@ async function startSwarmListener(label: string) {
       if (!session) return
 
       if (msg.preimage) {
+        // Verify preimage: SHA256(preimage) must equal the invoice's payment_hash.
+        // If payment_hash is missing (bolt11 decode failed), reject — fail secure.
+        if (!session.pendingPaymentHash) {
+          console.log(`[${label}] Session ${session.sessionId}: cannot verify payment (no payment_hash) — ending session`)
+          node.send(session.socket, { type: 'error', id: msg.id, message: 'Provider cannot verify payment' })
+          endSession(node, session, label)
+          return
+        }
+        if (!verifyPreimage(msg.preimage, session.pendingPaymentHash)) {
+          console.log(`[${label}] Session ${session.sessionId}: invalid preimage — ending session`)
+          node.send(session.socket, { type: 'error', id: msg.id, message: 'Invalid payment preimage' })
+          endSession(node, session, label)
+          return
+        }
+        session.pendingPaymentHash = undefined
         const amount = msg.amount || 0
         session.totalEarned += amount
         session.lastPaidAt = Date.now()
-        console.log(`[${label}] Session ${session.sessionId}: invoice payment received (+${amount}, total: ${session.totalEarned} sats)`)
+        console.log(`[${label}] Session ${session.sessionId}: payment verified (+${amount}, total: ${session.totalEarned} sats)`)
+      } else {
+        // No preimage provided — reject
+        console.log(`[${label}] Session ${session.sessionId}: session_tick_ack missing preimage — ending session`)
+        node.send(session.socket, { type: 'error', id: msg.id, message: 'Payment preimage required' })
+        endSession(node, session, label)
+        return
       }
 
       // Proxy mode: switch to raw TCP pipe after first payment confirmed

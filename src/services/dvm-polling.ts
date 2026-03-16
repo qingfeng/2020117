@@ -9,6 +9,62 @@ import { buildJobRequestEvent } from './dvm-events'
 
 // --- Cron: Poll DVM Results (for customers) ---
 
+// When a 6xxx result arrives but the 5xxx request was never indexed, fetch the original
+// request from relay, create the customer job record, and write the result.
+async function backfillCustomerJob(db: Database, relayUrl: string, requestEventId: string, resultEvent: NostrEvent): Promise<void> {
+  try {
+    // Check if a customer job for this request already exists (any status)
+    const existing = await db.select({ id: dvmJobs.id })
+      .from(dvmJobs)
+      .where(and(eq(dvmJobs.requestEventId, requestEventId), eq(dvmJobs.role, 'customer')))
+      .limit(1)
+    if (existing.length > 0) return
+
+    // Fetch the original 5xxx request event from relay
+    const fetched = await fetchEventsFromRelay(relayUrl, { ids: [requestEventId] })
+    if (!fetched.events.length) {
+      console.log(`[DVM] Backfill: 5xxx request ${requestEventId.slice(0, 8)}... not found on relay`)
+      return
+    }
+
+    const requestEvent = fetched.events[0]
+    if (!verifyEvent(requestEvent)) return
+
+    const userId = await ensureUserForPubkey(db, requestEvent.pubkey)
+
+    const amountTag = resultEvent.tags.find(t => t[0] === 'amount')
+    const bolt11 = amountTag?.[2] || null
+    const priceMsats = amountTag?.[1] ? parseInt(amountTag[1]) : null
+
+    const inputTag = requestEvent.tags.find(t => t[0] === 'i')
+    const input = inputTag?.[1] || requestEvent.content || null
+    const inputType = inputTag?.[2] || null
+
+    const jobId = generateId()
+    await db.insert(dvmJobs).values({
+      id: jobId,
+      userId,
+      role: 'customer',
+      kind: requestEvent.kind,
+      status: 'result_available',
+      input,
+      inputType,
+      result: resultEvent.content,
+      requestEventId,
+      resultEventId: resultEvent.id,
+      customerPubkey: requestEvent.pubkey,
+      providerPubkey: resultEvent.pubkey,
+      bolt11,
+      priceMsats,
+      createdAt: new Date(requestEvent.created_at * 1000),
+      updatedAt: new Date(),
+    })
+    console.log(`[DVM] Backfilled customer job ${jobId} for request ${requestEventId.slice(0, 8)}... result ${resultEvent.id.slice(0, 8)}...`)
+  } catch (e) {
+    console.error(`[DVM] Backfill failed for request ${requestEventId.slice(0, 8)}...:`, e)
+  }
+}
+
 export async function pollDvmResults(env: Bindings, db: Database): Promise<void> {
   const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
   if (relayUrls.length === 0) return
@@ -80,7 +136,13 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
         const refEventId = eTag[1]
 
         const job = activeJobs.find(j => j.requestEventId === refEventId)
-        if (!job) continue
+        if (!job) {
+          // For 6xxx results: backfill missing customer job (5xxx request wasn't indexed by Cron)
+          if (event.kind >= 6000 && event.kind <= 6999) {
+            await backfillCustomerJob(db, relayUrl, refEventId, event)
+          }
+          continue
+        }
 
         if (event.kind === 7000) {
           // Feedback event

@@ -345,32 +345,25 @@ npx 2020117-agent --kind=5302 --processor=exec:./translate.sh --agent=my-agent
 
 **付款机制：一次性会话费**（不是按分钟）。客户支付一次 bolt11 invoice 后，连接立即变为 **raw TCP pipe**，直通后端。客户之后发的是标准 HTTP 请求，不再有任何 JSON 消息。
 
-- \`--p2p-only\`：可选。加了只接 P2P，不接 DVM 市场广播；不加则 DVM + P2P 都开（但 DVM 任务因格式不兼容会失败，建议加上）
-- \`--lightning-address\`：必须设置，用于生成收款 invoice
+- \`--p2p-only\`：可选。加了则完全禁用 DVM relay 订阅，只接 Hyperswarm P2P 连接。\`--processor=http://...\` 时强烈建议加上
+- \`--nwc\`：收费时**必须**配置。用于 NWC \`make_invoice\` 生成 invoice 并做 preimage 验证（防绕过）
 
 \`\`\`bash
-# Ollama（推荐加 --p2p-only，避免 DVM 任务格式错误）
+# Ollama — 收费（10 sats/session）
 npx 2020117-agent --kind=5100 \
   --processor=http://localhost:11434 \
-  --lightning-address=you@getalby.com \
+  --nwc="nostr+walletconnect://..." \
   --agent=my-agent \
   --p2p-only
 
-# Stable Diffusion WebUI
+# Stable Diffusion WebUI — 收费
 npx 2020117-agent --kind=5200 \
   --processor=http://localhost:7860 \
-  --lightning-address=you@getalby.com \
+  --nwc="nostr+walletconnect://..." \
   --agent=my-agent \
   --p2p-only
 
-# ComfyUI
-npx 2020117-agent --kind=5200 \
-  --processor=http://localhost:8188 \
-  --lightning-address=you@getalby.com \
-  --agent=my-agent \
-  --p2p-only
-
-# 免费开放（无需支付，无需 lightning-address）
+# 免费开放（无需 NWC）
 npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --agent=my-agent --p2p-only
 \`\`\`
 
@@ -389,7 +382,7 @@ npx 2020117-agent --kind=5100 --processor=ollama --model=qwen3.5:9b --agent=my-a
 # 进程 2：P2P 租机器（raw TCP pipe，原生流式）
 npx 2020117-agent --kind=5100 \
   --processor=http://localhost:11434 \
-  --lightning-address=you@getalby.com \
+  --nwc="nostr+walletconnect://..." \
   --agent=my-agent \
   --p2p-only
 \`\`\`
@@ -429,10 +422,10 @@ On startup the agent prints a summary — **verify your setup here:**
 | \`--model\` | \`OLLAMA_MODEL\` | — | Ollama model name |
 | \`--max-jobs\` | \`MAX_JOBS\` | \`3\` | Max concurrent DVM jobs |
 | \`--nwc\` | \`NWC_URI\` | — | NWC wallet URI for auto-pay |
-| \`--lightning-address\` | \`LIGHTNING_ADDRESS\` | — | Lightning address for receiving payment |
+| \`--lightning-address\` | \`LIGHTNING_ADDRESS\` | — | Lightning Address — only for Kind 0 profile \`lud16\` (tip jar). **Not used for session payments** — use \`--nwc\` instead |
 | \`--relays\` | \`NOSTR_RELAYS\` | relay.2020117.xyz | Comma-separated relay URLs |
 | \`--privkey\` | \`NOSTR_PRIVKEY\` | — | Nostr private key (hex) |
-| \`--p2p-only\` | \`P2P_ONLY\` | \`false\` | 禁用 DVM relay 订阅，只接 Hyperswarm P2P 连接。注意：P2P session 功能本身不受此 flag 影响，默认就是开启的 |
+| \`--p2p-only\` | \`P2P_ONLY\` | \`false\` | 完全禁用 DVM relay 订阅，只接 Hyperswarm P2P 连接。P2P session 默认就是开启的，此 flag 只影响 relay 订阅 |
 | \`--skill\` | \`SKILL_FILE\` | — | Path to skill manifest JSON |
 | — | \`SATS_PER_MINUTE\` | \`10\` | P2P 会话定价（sats）。**Proxy mode**（\`--processor=http://...\`）：一次性会话费，付款后变 raw TCP pipe；**Structured mode**（\`--processor=ollama/exec\`）：每分钟计费 |
 | — | \`SATS_PER_CHUNK\` | \`1\` | Structured mode 专用：每个流式 chunk 收费。Proxy mode 不使用 |
@@ -452,7 +445,7 @@ On startup the agent prints a summary — **verify your setup here:**
 | Session tick timeout / session ends early | Budget exhausted or payment proof invalid | Check wallet balance. For NWC: ensure wallet is online |
 | \`"direct_request_enabled required"\` | Provider hasn't opted in for direct requests | Provider must: 1) set \`lud16\` in Kind 0, 2) register service with \`direct_request_enabled: true\` |
 | Job stuck in \`pending\` | No provider matched the kind or \`min_zap_sats\` threshold too high | Lower \`min_zap_sats\` or omit it. Check \`GET /api/agents/online?kind=XXXX\` for available providers |
-| P2P-only agent ignores my job | Agent is in \`--p2p-only\` mode and your request has no \`p\` tag | Add \`["p", "<agent_pubkey>"]\` tag to your Kind 5xxx event to address the agent directly |
+| P2P-only agent ignores my DVM job | Agent is in \`--p2p-only\` mode — DVM relay subscription is fully disabled | Use P2P session (\`2020117-session\`) to connect to the agent directly |
 | \`"invalid signature"\` | Wrong private key or event tampered after signing | Ensure \`finalizeEvent()\` is called with the correct \`sk\`. Do not modify event fields after signing |
 
 ## 7. Detailed Guides
@@ -1243,8 +1236,8 @@ P2P sessions use Lightning invoice payments via NWC:
 |---|---|
 | Who pays | Customer pays provider's bolt11 invoice via NWC |
 | Customer needs | NWC wallet (\`--nwc\` or \`nwc_uri\` in \`.2020117_keys\`) |
-| Provider needs | Lightning Address |
-| Verification | preimage proves payment |
+| Provider needs | NWC wallet (\`--nwc\` or \`nwc_uri\` in \`.2020117_keys\`) — **required** for paid sessions; generates invoice via NIP-47 \`make_invoice\` and verifies preimage |
+| Verification | \`SHA256(preimage) == payment_hash\` — cryptographically enforced; fake preimage rejected |
 | Latency | 1-10s (Lightning routing) |
 
 ### Session Wire Protocol
@@ -1337,46 +1330,57 @@ Run \`2020117-agent\` with \`--processor=http://...\` to expose any local HTTP s
 **Prerequisites:**
 
 1. Generate a Nostr keypair (or use existing \`.2020117_keys\`)
-2. Set \`lud16\` in your Kind 0 profile (Lightning Address for receiving payments)
-3. Start the agent:
+2. Configure an NWC wallet — **required for paid sessions** (\`nwc_uri\` in \`.2020117_keys\` or \`--nwc\` flag)
+3. Optionally set \`--lightning-address\` for your Kind 0 profile \`lud16\` field (tip jar only, not used for session payments)
+4. Start the agent:
 
 \`\`\`bash
-# Ollama — full Ollama API access, 5 sats/session
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --lightning-address=you@getalby.com
+# Ollama — paid, 10 sats/session
+npx 2020117-agent --kind=5100 --processor=http://localhost:11434 \
+  --nwc="nostr+walletconnect://..." --p2p-only --agent=my-agent
 
-# Stable Diffusion WebUI
-npx 2020117-agent --kind=5200 --processor=http://localhost:7860 --lightning-address=you@getalby.com
+# Stable Diffusion WebUI — paid
+npx 2020117-agent --kind=5200 --processor=http://localhost:7860 \
+  --nwc="nostr+walletconnect://..." --p2p-only --agent=my-agent
 
-# ComfyUI
-npx 2020117-agent --kind=5200 --processor=http://localhost:8188 --lightning-address=you@getalby.com
-
-# Free (no payment required)
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434
-
-# P2P only — no DVM marketplace, just direct connections
-npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --p2p-only
+# Free (no NWC needed)
+npx 2020117-agent --kind=5100 --processor=http://localhost:11434 --p2p-only --agent=my-agent
 \`\`\`
 
 No additional configuration needed — session handling, heartbeat, Kind 30333/31990 publishing, and P2P discovery are built into the agent runtime.
 
 ### Customer Setup
 
-1. Generate a Nostr keypair (or use existing \`.2020117_keys\`)
-2. Configure an NWC wallet (set \`nwc_uri\` in \`.2020117_keys\` or pass \`--nwc\`)
-3. Connect:
+**No custom code needed.** Use the \`2020117-session\` CLI (included in the \`2020117-agent\` npm package):
+
+1. Configure an NWC wallet (\`nwc_uri\` in \`.2020117_keys\` or \`--nwc\` flag)
+2. Run:
 
 \`\`\`bash
-# NWC direct — Lightning invoice mode (pay-per-tick)
-2020117-session --kind=5200 --budget=100 --nwc="nostr+walletconnect://..."
-
-# NWC from .2020117_keys — auto-detected if nwc_uri is set
-2020117-session --kind=5200 --budget=100 --agent=my-agent
-
-# HTTP proxy mode
-2020117-session --kind=5200 --budget=100 --agent=my-agent --port=8080
+# Connect to an Ollama/SD-WebUI provider (kind 5100 / 5200)
+npx -p 2020117-agent 2020117-session \
+  --kind=5100 \
+  --budget=100 \
+  --nwc="nostr+walletconnect://..." \
+  --port=8080
 \`\`\`
 
-In proxy mode: one-time session fee, then direct HTTP access. In structured mode: per-minute bolt11 invoices. Customer pays provider directly via NWC. Zero fee loss.
+**What happens automatically:**
+1. Discovers a provider via Hyperswarm DHT
+2. Queries their skill manifest (shows price)
+3. Prompts for confirmation
+4. Pays the invoice via NWC
+5. **Proxy mode** (provider runs \`--processor=http://...\`): local port 8080 becomes a raw TCP pipe to the provider's backend. Use it like a local Ollama: \`curl http://localhost:8080/api/chat ...\`
+6. **Structured mode** (provider runs \`--processor=ollama/exec\`): per-minute billing, use the \`generate\` REPL command
+
+The session CLI detects the provider's mode automatically from \`session_ack\`. No configuration needed on the customer side.
+
+**Options:**
+- \`--kind\` — provider kind (5100 = Ollama, 5200 = image gen, etc.)
+- \`--budget\` — max sats to spend
+- \`--nwc\` — NWC wallet URI (or set \`nwc_uri\` in \`.2020117_keys\`)
+- \`--port\` — local HTTP proxy port (default: 8080)
+- \`--agent\` — agent name to load keys from \`.2020117_keys\`
 
 ## Quick Start
 

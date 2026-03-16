@@ -38,6 +38,7 @@ import { randomBytes } from 'crypto'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { createInterface } from 'readline'
 import { mkdirSync, writeFileSync } from 'fs'
+import * as net from 'net'
 import { Socket } from 'net'
 import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 
@@ -83,8 +84,10 @@ interface SessionClientState {
   totalSpent: number          // tracked from provider's debit notifications
   pendingAmount: number       // accumulates fractional sats until >= 1
   startedAt: number
-  httpServer: ReturnType<typeof createServer> | null
+  httpServer: ReturnType<typeof createServer> | net.Server | null
   shuttingDown: boolean
+  isProxyMode: boolean        // true = TCP pipe mode after payment
+  proxyReady: (() => void) | null  // resolves when TCP pipe is active
   // Pending request/response maps keyed by message id
   pendingRequests: Map<string, { resolve: (msg: SwarmMessage) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>
   // Chunked response reassembly buffers keyed by message id
@@ -106,6 +109,8 @@ const state: SessionClientState = {
   startedAt: 0,
   httpServer: null,
   shuttingDown: false,
+  isProxyMode: false,
+  proxyReady: null,
   pendingRequests: new Map(),
   chunkBuffers: new Map(),
   activeWebSockets: new Map(),
@@ -230,7 +235,11 @@ function setupMessageHandler() {
           try {
             const { preimage } = await nwcPayInvoice(nwcParsed, msg.bolt11)
             state.totalSpent += amount
-            log(`Paid ${amount} sats via NWC (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
+            if (state.isProxyMode) {
+              log(`Paid ${amount} sats — activating TCP proxy...`)
+            } else {
+              log(`Paid ${amount} sats via NWC (total: ${state.totalSpent}, ~${estimatedMinutesLeft()} min left)`)
+            }
             state.node!.send(state.socket, {
               type: 'session_tick_ack',
               id: msg.id,
@@ -238,6 +247,11 @@ function setupMessageHandler() {
               preimage,
               amount,
             })
+            // Proxy mode: payment done, signal TCP pipe is ready
+            if (state.isProxyMode && state.proxyReady) {
+              state.proxyReady()
+              state.proxyReady = null
+            }
           } catch (e: any) {
             warn(`NWC invoice payment failed: ${e.message} — ending session`)
             endSession()
@@ -388,6 +402,64 @@ function startHttpProxy(): Promise<void> {
       } else {
         warn(`HTTP proxy error: ${err.message}`)
       }
+    })
+
+    server.listen(PORT, () => {
+      state.httpServer = server
+      resolve()
+    })
+  })
+}
+
+// --- 4a. TCP proxy (proxy mode) ---
+// After payment, the Hyperswarm socket becomes a raw TCP pipe to provider's backend.
+// We start a local TCP server and forward bytes between local clients and the provider socket.
+
+function startTcpProxy(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const rawSocket = state.socket
+
+    // Remove SwarmNode's JSON framing — from here on it's raw bytes
+    rawSocket.removeAllListeners('data')
+
+    let currentClient: net.Socket | null = null
+
+    // Forward provider data to whatever client is currently connected
+    rawSocket.on('data', (chunk: Buffer) => {
+      if (currentClient && !currentClient.destroyed) {
+        currentClient.write(chunk)
+      }
+    })
+
+    rawSocket.on('end', () => {
+      if (currentClient && !currentClient.destroyed) currentClient.end()
+    })
+
+    rawSocket.on('error', (err: Error) => {
+      warn(`Provider socket error: ${err.message}`)
+      if (currentClient && !currentClient.destroyed) currentClient.destroy()
+      cleanup()
+    })
+
+    const server = net.createServer((clientSocket) => {
+      if (currentClient && !currentClient.destroyed) {
+        // Only one connection at a time — reject new ones
+        clientSocket.destroy()
+        return
+      }
+      currentClient = clientSocket
+
+      clientSocket.on('data', (chunk: Buffer) => {
+        if (!rawSocket.destroyed) rawSocket.write(chunk)
+      })
+
+      clientSocket.on('close', () => { currentClient = null })
+      clientSocket.on('error', () => { currentClient = null })
+    })
+
+    server.on('error', (err: Error) => {
+      if (!state.httpServer) reject(err)
+      else warn(`TCP proxy error: ${err.message}`)
     })
 
     server.listen(PORT, () => {
@@ -857,6 +929,7 @@ async function main() {
   state.sessionId = ackResp.session_id
   state.startedAt = Date.now()
   providerPubkey = ackResp.pubkey || null
+  state.isProxyMode = !!ackResp.proxy_mode
 
   // If the provider dictated a different rate, use it
   if (ackResp.sats_per_minute && ackResp.sats_per_minute !== satsPerMinute) {
@@ -865,15 +938,33 @@ async function main() {
   }
 
   log(`Session started: ${state.sessionId}`)
-  log(`Billing: ${state.satsPerMinute} sats/min via ${paymentMethod}`)
+  if (state.isProxyMode) {
+    log(`Mode: TCP proxy (one-time fee, raw HTTP passthrough)`)
+  } else {
+    log(`Billing: ${state.satsPerMinute} sats/min via ${paymentMethod}`)
+  }
 
-  // 6. Start HTTP proxy
-  try {
-    await startHttpProxy()
-    log(`Web proxy ready at http://localhost:${PORT}`)
-  } catch (e: any) {
-    warn(`Failed to start HTTP proxy on port ${PORT}: ${e.message}`)
-    warn('Continuing without HTTP proxy')
+  // 6. Start proxy
+  if (state.isProxyMode) {
+    // Proxy mode: wait for payment, then switch socket to raw TCP pipe
+    const proxyReadyPromise = new Promise<void>(resolve => { state.proxyReady = resolve })
+    log('Waiting for invoice from provider...')
+    try {
+      await proxyReadyPromise
+      await startTcpProxy()
+      log(`TCP proxy ready at http://localhost:${PORT}`)
+    } catch (e: any) {
+      warn(`Failed to start TCP proxy on port ${PORT}: ${e.message}`)
+      warn('Continuing without proxy')
+    }
+  } else {
+    try {
+      await startHttpProxy()
+      log(`Web proxy ready at http://localhost:${PORT}`)
+    } catch (e: any) {
+      warn(`Failed to start HTTP proxy on port ${PORT}: ${e.message}`)
+      warn('Continuing without HTTP proxy')
+    }
   }
 
   // 7. Show ready message and start REPL

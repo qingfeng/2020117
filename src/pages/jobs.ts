@@ -305,6 +305,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   // Source 2: relay_events Kind 31117 (fallback when reviewer not in users table)
   if (!reviewInfo && requestEventId) {
     const relayReview = await db.select({
+      eventId: relayEvents.eventId,
       pubkey: relayEvents.pubkey,
       contentPreview: relayEvents.contentPreview,
       tags: relayEvents.tags,
@@ -317,9 +318,16 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
       const tags = re.tags ? JSON.parse(re.tags) : {}
       const rating = tags.rating ? parseInt(tags.rating) : 5
       const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
+      // Fetch full review text from relay (contentPreview is truncated to 200 chars)
+      let reviewContent: string | null = re.contentPreview || null
+      try {
+        const { fetchEventsFromRelay } = await import('../services/relay-io')
+        const { events: rvEvents } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [re.eventId], limit: 1 })
+        if (rvEvents.length > 0) reviewContent = rvEvents[0].content || null
+      } catch { /* keep preview */ }
       reviewInfo = {
         rating: Math.min(5, Math.max(1, rating)),
-        content: re.contentPreview || null,
+        content: reviewContent,
         role: tags.role || 'customer',
         reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
         createdAt: new Date(re.eventCreatedAt * 1000),

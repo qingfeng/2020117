@@ -160,7 +160,7 @@ router.get('/notes/:eventId', async (c) => {
             } catch { /* already exists */ }
 
             if (ev.kind === 1 && localReplies.length === 0) {
-              (replies as any[]).push({ eventId: ev.id, pubkey: ev.pubkey, contentPreview: ev.content?.slice(0, 200) || '', eventCreatedAt: ev.created_at })
+              (replies as any[]).push({ eventId: ev.id, pubkey: ev.pubkey, contentPreview: ev.content || '', eventCreatedAt: ev.created_at })
             } else if (ev.kind === 7) {
               (reactions as any[]).push({ pubkey: ev.pubkey, contentPreview: ev.content || '+', eventCreatedAt: ev.created_at })
             } else if (ev.kind === 6) {

@@ -198,6 +198,14 @@ async function nwcPayInvoice(nwc, bolt11) {
   return await nwcRequest(nwc, { method: 'pay_invoice', params: { invoice: bolt11 } })
 }
 
+async function nwcMakeInvoice(nwc, amountSats, description = 'DVM job payment') {
+  const result = await nwcRequest(nwc, {
+    method: 'make_invoice',
+    params: { amount: amountSats * 1000, description },
+  })
+  return result?.invoice || null
+}
+
 async function nwcRequest(nwc, requestBody) {
   const secretBytes = hexToBytes(nwc.secret)
   const senderPubkey = getPublicKey(secretBytes)
@@ -1334,28 +1342,40 @@ async function main() {
     else if (evaluation.rating === 3) paySats = Math.ceil(bidSats * 0.7)
     else paySats = Math.ceil(bidSats * 0.5)
 
-    // Prefer lud16 tag in result event (most reliable), fallback to Kind 0 profile lookup
+    // Prefer bolt11 tag (NWC make_invoice, no LNURL needed), then lud16, then profile lookup
+    const resultBolt11 = event.tags.find(t => t[0] === 'bolt11')?.[1]
     const resultLud16 = event.tags.find(t => t[0] === 'lud16' || t[0] === 'lightning_address')?.[1]
-    const providerLnAddress = resultLud16 || await resolveProviderLnAddress(opts.relay, providerPubkey)
     let paid = false
-    if (providerLnAddress && paySats >= 1) {
-      console.log(`  Paying ${paySats} sats to ${providerLnAddress}...`)
+    if (resultBolt11 && paySats >= 1) {
+      console.log(`  Paying ${paySats} sats via bolt11 (NWC direct)...`)
       try {
-        const pr = await nwcPayLightningAddress(nwc, providerLnAddress, paySats)
+        const pr = await nwcPayInvoice(nwc, resultBolt11)
         console.log(`  Payment OK! preimage: ${pr?.preimage?.slice(0,16) || 'n/a'}...`)
         paid = true
-      } catch (e) { console.error(`  Payment FAILED: ${e.message}`) }
-    } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address' : 'amount too low'}`) }
+      } catch (e) { console.error(`  Payment FAILED (bolt11): ${e.message}`) }
+    } else {
+      const providerLnAddress = resultLud16 || await resolveProviderLnAddress(opts.relay, providerPubkey)
+      if (providerLnAddress && paySats >= 1) {
+        console.log(`  Paying ${paySats} sats to ${providerLnAddress} (LNURL)...`)
+        try {
+          const pr = await nwcPayLightningAddress(nwc, providerLnAddress, paySats)
+          console.log(`  Payment OK! preimage: ${pr?.preimage?.slice(0,16) || 'n/a'}...`)
+          paid = true
+        } catch (e) { console.error(`  Payment FAILED (LNURL): ${e.message}`) }
+      } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address or bolt11' : 'amount too low'}`) }
+    }
 
     const r = await ensureRelay()
     if (r && !paid) {
+      // Un-settle so other providers can still win this job
+      settledJobs.delete(requestId)
       const fe = signWithPow({ kind: 7000, pubkey: identity.pubkey,
         content: 'Job processed but payment failed (no Lightning Address or NWC error).',
         tags: [['status','error'],['e',requestId],['p',providerPubkey]],
         created_at: Math.floor(Date.now()/1000),
       }, identity.sk)
       await publishEvent(r, fe)
-      console.log(`  Payment failed — sent Kind 7000 error`)
+      console.log(`  Payment failed — un-settled job, sent Kind 7000 error`)
     }
     if (r && paid) {
       // Kind 31117 — review
@@ -1524,7 +1544,21 @@ async function main() {
     ]
     if (opts.providerPrice > 0) {
       resultTags.push(['amount', String(opts.providerPrice * 1000)])  // msats
-      if (identity.lightningAddress) resultTags.push(['lud16', identity.lightningAddress])
+      // Try NWC make_invoice first (no LNURL dependency), fallback to lud16
+      if (nwc) {
+        try {
+          const invoice = await nwcMakeInvoice(nwc, opts.providerPrice, `DVM job ${event.id.slice(0,8)}`)
+          if (invoice) {
+            resultTags.push(['bolt11', invoice])
+            console.log(`  Invoice generated via NWC: ${invoice.slice(0,30)}...`)
+          }
+        } catch (e) {
+          console.error(`  NWC make_invoice failed: ${e.message}, falling back to lud16`)
+          if (identity.lightningAddress) resultTags.push(['lud16', identity.lightningAddress])
+        }
+      } else if (identity.lightningAddress) {
+        resultTags.push(['lud16', identity.lightningAddress])
+      }
     }
     const resultEvent = signWithPow({
       kind: resultKind, pubkey: identity.pubkey,

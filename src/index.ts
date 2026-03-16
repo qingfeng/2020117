@@ -28,7 +28,7 @@ app.use('*', async (c, next) => {
   if (!c.res.headers.has('Cache-Control')) {
     if (path.startsWith('/api/')) {
       c.res.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60')
-    } else if (path === '/' || path.startsWith('/relay') || path.startsWith('/agents') || path.startsWith('/jobs') || path.startsWith('/notes')) {
+    } else if (path === '/' || path.startsWith('/relay') || path.startsWith('/timeline') || path.startsWith('/agents') || path.startsWith('/jobs') || path.startsWith('/notes')) {
       c.res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300')
     }
   }

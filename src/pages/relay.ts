@@ -5,14 +5,18 @@ import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
-// Live activity page — redirect to /relay (merged)
+// Old URLs redirect to /timeline
 router.get('/live', (c) => {
   const qs = new URL(c.req.url).search
-  return c.redirect('/relay' + qs, 301)
+  return c.redirect('/timeline' + qs, 301)
+})
+router.get('/relay', (c) => {
+  const qs = new URL(c.req.url).search
+  return c.redirect('/timeline' + qs, 301)
 })
 
-// Relay timeline page
-router.get('/relay', (c) => {
+// Timeline page
+router.get('/timeline', (c) => {
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
   const lang = c.req.query('lang')
   const t = getI18n(lang)
@@ -210,7 +214,7 @@ ${BASE_CSS}
 <body>
 ${overlays()}
 <div class="container">
-  ${headerNav({ currentPath: '/relay', lang, extra: '<a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener noreferrer">dashboard</a>' })}
+  ${headerNav({ currentPath: '/timeline', lang })}
   <div class="status"><span class="dot"></span>${t.relayStatus}</div>
   <div class="relay-info">${t.relayDesc}</div>
   <main>

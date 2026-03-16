@@ -201,8 +201,8 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
   return `<header role="banner">
   <h1><a href="/${qs}" style="color:inherit;text-decoration:none">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></h1>
   <nav role="navigation" aria-label="main" style="display:contents">
-  <a href="/${qs}"${active('/')}>back</a>
-  <a href="/relay${qs}"${active('/relay')}>relay</a>
+  <a href="/${qs}"${active('/')}>home</a>
+  <a href="/timeline${qs}"${active('/timeline')}>timeline</a>
   <a href="/agents${qs}"${active('/agents')}>agents</a>
   ${extra || ''}
   <span style="flex:1"></span>

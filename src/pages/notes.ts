@@ -23,7 +23,7 @@ router.get('/notes/:eventId', async (c) => {
   }).from(relayEvents).where(eq(relayEvents.eventId, eventId)).limit(1)
 
   if (result.length === 0) {
-    return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Note not found — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/relay" style="color:var(--c-accent);font-size:12px">back to relay</a></main></body></html>`, 404)
+    return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Note not found — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/timeline" style="color:var(--c-accent);font-size:12px">timeline</a></main></body></html>`, 404)
 
   }
 

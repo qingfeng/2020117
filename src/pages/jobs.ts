@@ -224,7 +224,7 @@ a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
 h1{color:#fdf6e3;font-size:20px;margin:0 0 20px}</style></head><body>
 ${overlays()}
 <main class="c">
-<div style="margin-bottom:20px"><a href="/relay">&larr; back to relay</a></div>
+<div style="margin-bottom:20px"><a href="/timeline">&larr; timeline</a></div>
 <h1>${esc(kindLabel)}</h1>
 <span class="kind">kind ${re.kind}</span>
 <div class="label">from</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>

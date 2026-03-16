@@ -99,9 +99,9 @@ ${BASE_CSS}
 .article-card .art-title{color:#c4b5fd;font-size:14px;font-weight:700;margin-bottom:4px}
 .article-card .art-summary{color:var(--c-text-dim);font-size:12px;line-height:1.5}
 .article-card .art-read{color:var(--c-purple);font-size:11px;margin-top:6px;display:inline-block}
-.ev-actor{color:var(--c-accent);font-weight:700;font-size:14px;white-space:nowrap;text-decoration:none;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.ev-actor:hover{opacity:0.7}
-.ev-content{color:#93a1a1;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-actor{color:var(--c-accent);font-weight:700;font-size:13px;white-space:nowrap;text-decoration:none;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.ev-actor:hover{opacity:0.8}
+.ev-content{color:#586e75;font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ev-pow{color:#f0a500;font-size:10px;white-space:nowrap;font-family:monospace;background:rgba(240,165,0,0.12);padding:1px 5px;border-radius:3px;border:1px solid rgba(240,165,0,0.3)}
 .ev-time{color:var(--c-text-muted);font-size:12px;white-space:nowrap;margin-left:auto}
 .ev-detail{
@@ -148,7 +148,7 @@ ${BASE_CSS}
 /* activity mode styles (from /live) */
 .act-snippet{
   margin-top:6px;padding-left:28px;
-  color:#93a1a1;font-size:14px;line-height:1.6;
+  color:#e8e8e4;font-size:15px;line-height:1.65;
   white-space:pre-line;
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;
 }
@@ -192,11 +192,11 @@ ${BASE_CSS}
 .note-reply-item{
   padding:4px 0 4px 10px;
   border-left:2px solid var(--c-border);
-  font-size:13px;color:var(--c-text-dim);
+  font-size:13px;color:#909090;
   margin-bottom:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.note-reply-item .rp-author{color:var(--c-accent);font-weight:700;font-size:12px}
+.note-reply-item .rp-author{color:#a0b0a8;font-weight:700;font-size:12px}
 @media(max-width:480px){
   .ev-actor{max-width:100px;overflow:hidden;text-overflow:ellipsis}
   .ev-content{font-size:12px}
@@ -324,7 +324,7 @@ function renderRelayEvents(events,meta){
     if(e.kind===1&&detailContent){/* notes: whole card links to /notes/ */}
     else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
     else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
-    const detailHtml=detailContent?'<div style="margin-top:3px;padding-left:28px;color:var(--c-text-dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+detailContent+'</div>':'';
+    const detailHtml=detailContent?'<div style="margin-top:4px;padding-left:28px;color:#e8e8e4;font-size:15px;line-height:1.6;word-break:break-word;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden">'+detailContent+'</div>':'';
     const jobLink=e.job_event_id?'/jobs/'+esc(e.job_event_id):'';
     const noteLink=e.note_event_id?'/notes/'+esc(e.note_event_id):'';
     const evLink=noteLink||jobLink;

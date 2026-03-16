@@ -1586,9 +1586,20 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
       limit: 200,
     })
 
+    // Cache known user pubkeys for social-kind filtering (avoid N+1 queries)
+    const knownPubkeys = new Set<string>()
+    const knownRows = await db.select({ nostrPubkey: users.nostrPubkey }).from(users).where(isNotNull(users.nostrPubkey))
+    for (const row of knownRows) { if (row.nostrPubkey) knownPubkeys.add(row.nostrPubkey) }
+
+    // Social kinds: only index from pubkeys with a user record (registered or shadow DVM users)
+    const SOCIAL_KINDS = new Set([1, 6, 7, 30023])
+
     for (const event of events) {
       if (!verifyEvent(event)) continue
       if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+
+      // Skip social content from unknown pubkeys — DVM/protocol events always pass
+      if (SOCIAL_KINDS.has(event.kind) && !knownPubkeys.has(event.pubkey)) continue
 
       // Upsert (skip if exists)
       try {
@@ -1816,6 +1827,14 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
 
         const customerPubkey = event.tags.find((t: string[]) => t[0] === 'd')?.[1]
         if (!customerPubkey) continue
+
+        // Only create P2P records for providers that have actual DVM result activity (6xxx in relay_event)
+        // This prevents test tools (e.g. nak) that only publish 30311 from entering the platform
+        const hasDvmResults = await db.select({ id: relayEvents.id })
+          .from(relayEvents)
+          .where(and(eq(relayEvents.pubkey, event.pubkey), sql`kind >= 6000 AND kind <= 6999`))
+          .limit(1)
+        if (hasDvmResults.length === 0) continue
 
         // Dedup: use endorsement event ID as requestEventId (unique per session)
         const existing = await db.select({ id: dvmJobs.id })

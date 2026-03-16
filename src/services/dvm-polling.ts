@@ -275,7 +275,7 @@ async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string
     username: finalUsername,
     displayName: null,
     nostrPubkey: pubkey,
-    nostrSyncEnabled: 1,
+    nostrSyncEnabled: 0,  // shadow users don't get public relay sync
     createdAt: new Date(),
     updatedAt: new Date(),
   })

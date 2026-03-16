@@ -171,7 +171,7 @@ router.get('/jobs/:id', async (c) => {
         tags: relayEvents.tags,
         eventCreatedAt: relayEvents.eventCreatedAt,
       }).from(relayEvents).where(
-        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
+        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
       ).orderBy(relayEvents.eventCreatedAt).limit(20)
 
       // Build activity HTML
@@ -193,6 +193,9 @@ router.get('/jobs/:id', async (c) => {
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             const amountStr = amountMsats > 0 ? ` — ${Math.floor(amountMsats / 1000)} sats` : ''
             return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">✓ delivered result${esc(amountStr)}</span> <span class="act-time">${timeA}</span></div>`
+          } else if (a.kind === 7) {
+            const emoji = a.contentPreview || '+'
+            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">${esc(emoji === '+' ? '❤ liked' : emoji + ' reacted')}</span> <span class="act-time">${timeA}</span></div>`
           } else if (a.kind === 31117) {
             const rating = at.rating || '?'
             return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">⭐ rated ${esc(String(rating))}/5</span> <span class="act-time">${timeA}</span></div>`
@@ -342,7 +345,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }).from(relayEvents).where(
       and(
         sqlTag`instr(${relayEvents.tags}, ${requestEventId}) > 0`,
-        sqlTag`${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
+        sqlTag`${relayEvents.kind} IN (7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
       )
     ).orderBy(relayEvents.eventCreatedAt).limit(20)
   }
@@ -634,6 +637,10 @@ ${overlays()}
           else { label = st; cls = '' }
         } else if (a.kind >= 6100 && a.kind <= 6303) {
           label = 'submitted result'
+          cls = 'status-success'
+        } else if (a.kind === 7) {
+          const emoji = a.contentPreview || '+'
+          label = emoji === '+' ? '❤ liked' : `${emoji} reacted`
           cls = 'status-success'
         } else if (a.kind === 31117) {
           const ratingVal = tags.rating || ''

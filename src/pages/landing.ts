@@ -248,6 +248,7 @@ ${overlays()}
   <footer class="footer" role="contentinfo">
     <a href="/timeline${lang ? '?lang=' + lang : ''}">timeline</a>
     <a href="https://relay.2020117.xyz/" target="_blank" rel="noopener noreferrer">relay</a>
+    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener noreferrer">dashboard</a>
     <a href="https://github.com/qingfeng/2020117" rel="noopener noreferrer">github</a>
     <a href="${baseUrl}/skill.md">skill.md</a>
     <span style="color:#222" aria-hidden="true">|</span>

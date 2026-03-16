@@ -11,6 +11,7 @@ import { encrypt as nip04Encrypt, decrypt as nip04Decrypt } from 'nostr-tools/ni
 import crypto from 'crypto'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
+import { spawn } from 'child_process'
 import Hyperswarm from 'hyperswarm'
 import b4a from 'b4a'
 
@@ -364,11 +365,14 @@ async function ollamaGenerate(baseUrl, model, prompt, systemPrompt) {
   }
   if (systemPrompt) body.system = systemPrompt
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 180000)
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Connection': 'close' },
     body: JSON.stringify(body),
-  })
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout))
 
   if (!res.ok) {
     const text = await res.text()
@@ -938,220 +942,104 @@ async function processJobWithOllama(ollamaUrl, model, input, kind) {
   return await ollamaGenerate(ollamaUrl, model, input, systemPrompt)
 }
 
-// Connect to a provider via Hyperswarm P2P and run a single job
-// Protocol: transparent Ollama HTTP proxy over Hyperswarm socket
-// Connect to topic SHA256("2020117-dvm-kind-{kind}"), then send raw HTTP to Ollama API
-async function processJobViaP2P(nwc, input, kind, timeoutSecs, budget = 50) {
-  const topicStr = `2020117-dvm-kind-${kind}`
-  const topic = b4a.from(crypto.createHash('sha256').update(topicStr).digest())
+// ── P2P Session Manager ───────────────────────────────────────────────────────
+// Maintains a persistent 2020117-session subprocess as a local HTTP proxy.
+// Restarts automatically if the session drops.
+const p2pSession = { proc: null, proxyUrl: null, ready: false, starting: false, providerPubkey: null }
+
+async function ensureP2PSession(nwcUri, kind, budget = 100) {
+  if (p2pSession.ready && p2pSession.proxyUrl) return p2pSession.proxyUrl
+
+  if (p2pSession.starting) {
+    // Wait up to 30s for another caller to finish starting
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      if (p2pSession.ready) return p2pSession.proxyUrl
+    }
+    throw new Error('P2P session startup timeout')
+  }
+
+  p2pSession.starting = true
+  p2pSession.ready = false
+  p2pSession.proxyUrl = null
+  if (p2pSession.proc) { try { p2pSession.proc.kill() } catch {} }
+
+  const port = 18080 + Math.floor(Math.random() * 1000)
+  console.log(`  P2P: starting 2020117-session on port ${port}...`)
+
+  const args = [
+    `--kind=${kind}`,
+    `--budget=${budget}`,
+    `--nwc=${nwcUri}`,
+    `--port=${port}`,
+  ]
+
+  const proc = spawn('2020117-session', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  p2pSession.proc = proc
+
+  proc.on('exit', () => {
+    console.log('  P2P: session subprocess exited')
+    p2pSession.ready = false
+    p2pSession.proxyUrl = null
+    p2pSession.proc = null
+    p2pSession.starting = false
+  })
 
   return new Promise((resolve, reject) => {
-    const swarm = new Hyperswarm()
-    let settled = false
-    let activeConn = null
+    const timeout = setTimeout(() => {
+      p2pSession.starting = false
+      reject(new Error('P2P session startup timeout (30s)'))
+    }, 30000)
 
-    const done = (err, val) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeoutHandle)
-      if (activeConn) { try { activeConn.destroy() } catch {} }
-      swarm.destroy().catch(() => {})
-      if (err) reject(err); else resolve(val)
+    const onData = (data) => {
+      const text = data.toString()
+      process.stdout.write(`  [session] ${text}`)
+      // "TCP proxy ready at http://localhost:PORT"
+      const m = text.match(/TCP proxy ready at (http:\/\/localhost:\d+)/)
+      if (m) {
+        clearTimeout(timeout)
+        p2pSession.proxyUrl = m[1]
+        p2pSession.ready = true
+        p2pSession.starting = false
+        resolve(m[1])
+      }
+      // "Published endorsement for provider XXXXXXXX" — capture pubkey prefix, resolve full pubkey from API
+      const ep = text.match(/endorsement for provider ([0-9a-f]{8,})/)
+      if (ep && !p2pSession.providerPubkey) {
+        const prefix = ep[1]
+        fetch(`https://2020117.xyz/api/agents/online?kind=${kind}&limit=20`)
+          .then(r => r.json())
+          .then(data => {
+            const match = (data.agents || []).find(a => a.nostr_pubkey?.startsWith(prefix))
+            if (match) {
+              p2pSession.providerPubkey = match.nostr_pubkey
+              console.log(`  P2P: provider pubkey resolved: ${p2pSession.providerPubkey.slice(0,16)}...`)
+            }
+          }).catch(() => {})
+      }
+      if (text.includes('Fatal') || text.includes('Session ended')) {
+        clearTimeout(timeout)
+        p2pSession.starting = false
+        reject(new Error(`P2P session failed: ${text.trim()}`))
+      }
     }
 
-    const timeoutHandle = setTimeout(() => done(new Error(`P2P timeout (${timeoutSecs}s)`)), timeoutSecs * 1000)
-
-    console.log(`  P2P: joining topic ${topicStr}`)
-    swarm.join(topic, { client: true, server: false })
-
-    swarm.on('connection', (conn, info) => {
-      if (settled) { conn.destroy(); return }
-      if (activeConn) { conn.destroy(); return }
-      activeConn = conn
-      try { conn.setTimeout(0) } catch {}
-
-      console.log(`  P2P: peer connected, starting handshake`)
-
-      // ── Phase 1: JSON handshake ──────────────────────────────────────────
-      // Messages are newline-delimited JSON until `accepted`, then HTTP proxy
-      let jsonBuf = ''
-      let httpMode = false
-
-      // HTTP proxy state (reused after accepted)
-      let httpBuf = ''
-      let headersDone = false
-      let isChunked = false
-      let bodyBuf = ''
-      const tokens = []
-
-      const sendMsg = (msg) => {
-        try { conn.write(JSON.stringify(msg) + '\n') } catch (e) { done(e) }
-      }
-
-      const handleAccepted = () => {
-        // Switch to HTTP proxy mode
-        httpMode = true
-        console.log(`  P2P: accepted — sending Ollama HTTP request`)
-
-        const ollamaBody = JSON.stringify({
-          model: 'qwen3.5:9b',
-          prompt: input,
-          stream: true,
-          options: { num_predict: 1024 },
-        })
-        const httpReq = [
-          'POST /api/generate HTTP/1.1',
-          'Host: localhost',
-          'Content-Type: application/json',
-          `Content-Length: ${Buffer.byteLength(ollamaBody)}`,
-          'Connection: close',
-          '',
-          ollamaBody,
-        ].join('\r\n')
-
-        try { conn.write(httpReq) } catch (e) { done(e) }
-      }
-
-      const processHttpData = (chunk) => {
-        httpBuf += chunk
-
-        if (!headersDone) {
-          const headerEnd = httpBuf.indexOf('\r\n\r\n')
-          if (headerEnd === -1) return
-          const headers = httpBuf.slice(0, headerEnd)
-          const statusLine = headers.split('\r\n')[0]
-          if (!statusLine.includes('200')) {
-            done(new Error(`P2P HTTP error: ${statusLine}`))
-            return
-          }
-          isChunked = headers.toLowerCase().includes('transfer-encoding: chunked')
-          httpBuf = httpBuf.slice(headerEnd + 4)
-          headersDone = true
-          console.log(`  P2P: HTTP 200, streaming Ollama tokens...`)
-        }
-
-        if (isChunked) {
-          let remaining = httpBuf
-          httpBuf = ''
-          while (remaining.length > 0) {
-            const crlfIdx = remaining.indexOf('\r\n')
-            if (crlfIdx === -1) { httpBuf = remaining; break }
-            const sizeLine = remaining.slice(0, crlfIdx).trim()
-            if (!/^[0-9a-f]+$/i.test(sizeLine)) {
-              bodyBuf += sizeLine + '\n'
-              remaining = remaining.slice(crlfIdx + 2)
-              continue
-            }
-            const size = parseInt(sizeLine, 16)
-            if (size === 0) { remaining = ''; break }
-            const dataStart = crlfIdx + 2
-            const dataEnd = dataStart + size
-            if (remaining.length < dataEnd) { httpBuf = remaining; break }
-            bodyBuf += remaining.slice(dataStart, dataEnd)
-            remaining = remaining.slice(dataEnd + 2)
-          }
-        } else {
-          bodyBuf += httpBuf
-          httpBuf = ''
-        }
-
-        const parseLines = () => {
-          const lines = bodyBuf.split('\n')
-          bodyBuf = lines.pop() ?? ''
-          for (const line of lines) {
-            if (!line.trim()) continue
-            try {
-              const obj = JSON.parse(line)
-              if (obj.response) tokens.push(obj.response)
-              if (obj.done === true) {
-                const text = tokens.join('')
-                console.log(`  P2P: done (${text.length} chars, ${tokens.length} tokens)`)
-                done(null, text)
-                return
-              }
-            } catch {}
-          }
-        }
-
-        if (tokens.length > 0 && tokens.length % 50 === 0) {
-          console.log(`  P2P: ${tokens.length} tokens received...`)
-        }
-        parseLines()
-      }
-
-      // Start handshake
-      const skillJobId = crypto.randomUUID()
-      sendMsg({ type: 'skill_request', id: skillJobId, kind })
-
-      conn.on('data', (data) => {
-        if (httpMode) {
-          processHttpData(data.toString())
-          return
-        }
-
-        // JSON message mode
-        jsonBuf += data.toString()
-        const lines = jsonBuf.split('\n')
-        jsonBuf = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          let msg
-          try { msg = JSON.parse(line) } catch { continue }
-
-          console.log(`  P2P: << ${msg.type}`)
-
-          if (msg.type === 'skill_response') {
-            // Send session_start
-            const sessionId = crypto.randomUUID()
-            conn._sessionId = sessionId
-            sendMsg({ type: 'session_start', id: crypto.randomUUID(), session_id: sessionId, budget, sats_per_minute: 1, payment_method: 'invoice' })
-
-          } else if (msg.type === 'offer') {
-            // Pay the invoice
-            conn._sessionId = conn._sessionId || msg.session_id
-            const invoice = msg.invoice
-            if (!invoice) { done(new Error('P2P: offer has no invoice')); return }
-            if (!nwc) { done(new Error('P2P: no NWC wallet to pay offer')); return }
-            console.log(`  P2P: paying offer invoice (${msg.amount || '?'} msats)...`)
-            nwcPayInvoice(nwc, invoice).then((result) => {
-              console.log(`  P2P: invoice paid`)
-              // accepted will arrive shortly
-            }).catch((e) => {
-              done(new Error(`P2P: payment failed: ${e.message}`))
-            })
-
-          } else if (msg.type === 'accepted') {
-            handleAccepted()
-
-          } else if (msg.type === 'error') {
-            done(new Error(`P2P provider error: ${msg.message || JSON.stringify(msg)}`))
-          }
-        }
-      })
-
-      conn.on('error', (e) => done(e))
-      conn.on('close', () => {
-        if (!settled) {
-          if (httpMode) {
-            // Parse any remaining HTTP body
-            const lines = bodyBuf.split('\n')
-            for (const line of lines) {
-              try { const obj = JSON.parse(line); if (obj.response) tokens.push(obj.response) } catch {}
-            }
-            const text = tokens.join('')
-            console.log(`  P2P: connection closed (${text.length} chars, ${tokens.length} tokens)`)
-            if (text.length > 0) done(null, text)
-            else done(new Error('P2P connection closed before response'))
-          } else {
-            done(new Error('P2P connection closed during handshake'))
-          }
-        }
-      })
+    proc.stdout.on('data', onData)
+    proc.stderr.on('data', onData)
+    proc.on('exit', () => {
+      clearTimeout(timeout)
+      p2pSession.starting = false
+      reject(new Error('P2P session process exited unexpectedly'))
     })
-
-    swarm.on('error', (e) => done(e))
   })
+}
+
+async function processJobViaP2P(nwcUri, input, kind, timeoutSecs, budget = 100, model = 'qwen3.5:9b') {
+  if (!nwcUri) throw new Error('P2P: no NWC URI configured')
+
+  const proxyUrl = await ensureP2PSession(nwcUri, kind, budget)
+  console.log(`  P2P: proxy at ${proxyUrl}, calling Ollama...`)
+  return await processJobWithOllama(proxyUrl, model, input, kind)
 }
 
 // ============================================================
@@ -1446,8 +1334,7 @@ async function main() {
     else if (evaluation.rating === 3) paySats = Math.ceil(bidSats * 0.7)
     else paySats = Math.ceil(bidSats * 0.5)
 
-    // Resolve provider Lightning Address — prefer lud16 tag in result event (most reliable),
-    // then fall back to Kind 0 profile lookup
+    // Prefer lud16 tag in result event (most reliable), fallback to Kind 0 profile lookup
     const resultLud16 = event.tags.find(t => t[0] === 'lud16' || t[0] === 'lightning_address')?.[1]
     const providerLnAddress = resultLud16 || await resolveProviderLnAddress(opts.relay, providerPubkey)
     let paid = false
@@ -1461,15 +1348,14 @@ async function main() {
     } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address' : 'amount too low'}`) }
 
     const r = await ensureRelay()
-    // If payment failed but job was processed, still close it to avoid duplicate fulfillment
     if (r && !paid) {
-      const failMsg = `Job processed but payment failed (no Lightning Address or NWC error). Closing job.`
-      const fe = signWithPow({ kind: 7000, pubkey: identity.pubkey, content: failMsg,
+      const fe = signWithPow({ kind: 7000, pubkey: identity.pubkey,
+        content: 'Job processed but payment failed (no Lightning Address or NWC error).',
         tags: [['status','error'],['e',requestId],['p',providerPubkey]],
         created_at: Math.floor(Date.now()/1000),
       }, identity.sk)
       await publishEvent(r, fe)
-      console.log(`  Payment failed — sent Kind 7000 error to close job`)
+      console.log(`  Payment failed — sent Kind 7000 error`)
     }
     if (r && paid) {
       // Kind 31117 — review
@@ -1606,7 +1492,7 @@ async function main() {
     try {
       if (opts.dvmBackend) {
         console.log(`  Connecting via P2P (Hyperswarm) to process job...`)
-        result = await processJobViaP2P(nwc, input, opts.provide, opts.dvmBackendTimeout)
+        result = await processJobViaP2P(identity.nwcUri, input, opts.provide, opts.dvmBackendTimeout, 100, opts.ollamaModel || 'qwen3.5:9b')
       } else {
         console.log(`  Calling Ollama (${ollamaModel})...`)
         result = await processJobWithOllama(opts.ollamaUrl, ollamaModel, input, opts.provide)
@@ -1647,6 +1533,47 @@ async function main() {
       created_at: Math.floor(Date.now() / 1000),
     }, identity.sk)
     await publishEvent(r, resultEvent)
+
+    // 4. Review customer (Kind 31117, role=provider) + like job request (Kind 7)
+    try {
+      // Kind 31117 — provider reviews customer
+      const re = signWithPow({ kind: 31117, pubkey: identity.pubkey,
+        content: 'Clear task requirements, good collaboration.',
+        tags: [['e', event.id], ['p', customerPubkey], ['rating', '5'], ['role', 'provider'], ['k', String(event.kind)]],
+        created_at: Math.floor(Date.now()/1000),
+      }, identity.sk)
+      await publishEvent(r, re)
+
+      // Kind 7 — like the job request event
+      const like = signWithPow({ kind: 7, pubkey: identity.pubkey,
+        content: '+',
+        tags: [['e', event.id], ['p', customerPubkey]],
+        created_at: Math.floor(Date.now()/1000),
+      }, identity.sk)
+      await publishEvent(r, like)
+      console.log(`  Reviewed customer + liked job request`)
+    } catch (e) { console.error(`  Review/like failed: ${e.message}`) }
+
+    // 5. If used P2P backend, review the upstream provider (Kind 31117 + Kind 30311)
+    if (opts.dvmBackend && p2pSession.providerPubkey) {
+      const provPubkey = p2pSession.providerPubkey
+      try {
+        const re = signWithPow({ kind: 31117, pubkey: identity.pubkey,
+          content: 'Fast and reliable P2P Ollama provider. Delivered quality results.',
+          tags: [['e',event.id],['p',provPubkey],['rating','5'],['role','customer'],['k',String(event.kind)]],
+          created_at: Math.floor(Date.now()/1000),
+        }, identity.sk)
+        await publishEvent(r, re)
+        const ee = signWithPow({ kind: 30311, pubkey: identity.pubkey,
+          content: JSON.stringify({ rating: 5, comment: 'Reliable P2P provider', trusted: true,
+            context: { kinds: [event.kind], last_job_at: Math.floor(Date.now()/1000) } }),
+          tags: [['d',provPubkey],['p',provPubkey],['rating','5']],
+          created_at: Math.floor(Date.now()/1000),
+        }, identity.sk)
+        await publishEvent(r, ee)
+        console.log(`  Reviewed upstream provider ${provPubkey.slice(0,12)}... (5/5)`)
+      } catch (e) { console.error(`  Provider review failed: ${e.message}`) }
+    }
 
     activeProviderJobs.delete(event.id)
     console.log(`  Job done! (${activeProviderJobs.size}/${opts.maxJobs} active)`)

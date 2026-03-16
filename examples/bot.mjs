@@ -1446,7 +1446,10 @@ async function main() {
     else if (evaluation.rating === 3) paySats = Math.ceil(bidSats * 0.7)
     else paySats = Math.ceil(bidSats * 0.5)
 
-    const providerLnAddress = await resolveProviderLnAddress(opts.relay, providerPubkey)
+    // Resolve provider Lightning Address — prefer lud16 tag in result event (most reliable),
+    // then fall back to Kind 0 profile lookup
+    const resultLud16 = event.tags.find(t => t[0] === 'lud16' || t[0] === 'lightning_address')?.[1]
+    const providerLnAddress = resultLud16 || await resolveProviderLnAddress(opts.relay, providerPubkey)
     let paid = false
     if (providerLnAddress && paySats >= 1) {
       console.log(`  Paying ${paySats} sats to ${providerLnAddress}...`)
@@ -1458,7 +1461,17 @@ async function main() {
     } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address' : 'amount too low'}`) }
 
     const r = await ensureRelay()
-    if (r) {
+    // If payment failed but job was processed, still close it to avoid duplicate fulfillment
+    if (r && !paid) {
+      const failMsg = `Job processed but payment failed (no Lightning Address or NWC error). Closing job.`
+      const fe = signWithPow({ kind: 7000, pubkey: identity.pubkey, content: failMsg,
+        tags: [['status','error'],['e',requestId],['p',providerPubkey]],
+        created_at: Math.floor(Date.now()/1000),
+      }, identity.sk)
+      await publishEvent(r, fe)
+      console.log(`  Payment failed — sent Kind 7000 error to close job`)
+    }
+    if (r && paid) {
       // Kind 31117 — review
       const reviewPool = REVIEW_TEMPLATES[evaluation.quality] || REVIEW_TEMPLATES.good
       const reviewContent = pick(Math.random() < 0.8 ? reviewPool.en : reviewPool.zh)

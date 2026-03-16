@@ -1,7 +1,7 @@
-import { eq, and, sql, isNotNull } from 'drizzle-orm'
+import { eq, and, sql, isNotNull, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { users, topics, nostrFollows, externalDvms } from '../db/schema'
+import { users, topics, nostrFollows, externalDvms, relayEvents } from '../db/schema'
 import type { User } from '../db/schema'
 import {
   type NostrEvent,
@@ -452,6 +452,22 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       for (const [pubkey, event] of latestByPubkey) {
         try {
           if (!verifyEvent(event)) continue
+
+          // Only create user records for DVM participants (agents with actual job activity).
+          // 2020117.xyz domain users are already in the DB from registration — no need to create them here.
+          // This prevents random bots/external agents from getting auto-registered and bypassing POW.
+          const hasDvmActivity = await db.select({ id: relayEvents.id })
+            .from(relayEvents)
+            .where(and(
+              eq(relayEvents.pubkey, pubkey),
+              sql`(${relayEvents.kind} >= 5000 AND ${relayEvents.kind} <= 5999) OR
+                  (${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999) OR
+                  ${relayEvents.kind} IN (7000, 30333, 31990)`,
+            ))
+            .limit(1)
+          if (hasDvmActivity.length === 0) {
+            continue  // Not a DVM participant — skip
+          }
 
           let meta: { name?: string; about?: string; picture?: string; lud16?: string }
           try {

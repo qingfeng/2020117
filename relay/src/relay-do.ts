@@ -254,23 +254,37 @@ export class RelayDO implements DurableObject {
       return this.registeredPubkeys.has(pubkey)
     }
 
-    // Refresh cache: pubkeys that have published Kind 0 WITH POW≥20 to THIS relay
-    // Relay-self-contained: no dependency on platform DB, preserves decentralization
-    try {
-      const result = await this.env.DB.prepare(
-        "SELECT DISTINCT pubkey FROM events WHERE kind = 0 AND substr(id, 1, 5) = '00000'"
-      ).all<{ pubkey: string }>()
+    this.registeredPubkeys.clear()
 
-      this.registeredPubkeys.clear()
-      for (const row of result.results) {
+    // Source 1: DVM-active pubkeys from relay's own events DB
+    // Entry ticket = having DVM activity (job requests, results, feedback, heartbeats, service registrations)
+    try {
+      const dvmResult = await this.env.DB.prepare(
+        `SELECT DISTINCT pubkey FROM events WHERE
+          (kind >= 5000 AND kind <= 5999) OR
+          (kind >= 6000 AND kind <= 6999) OR
+          kind IN (7000, 30333, 31990)`
+      ).all<{ pubkey: string }>()
+      for (const row of dvmResult.results) {
         if (row.pubkey) this.registeredPubkeys.add(row.pubkey)
       }
-      this.pubkeyCacheExpiry = now + 5 * 60 * 1000  // 5 min TTL
     } catch (e) {
-      console.error('[Relay] Failed to load Kind 0 pubkeys:', e)
-      return false
+      console.error('[Relay] Failed to load DVM pubkeys:', e)
     }
 
+    // Source 2: 2020117.xyz domain users from platform DB (always trusted)
+    try {
+      const domainResult = await this.env.APP_DB.prepare(
+        `SELECT nostr_pubkey FROM user WHERE lightning_address LIKE '%@2020117.xyz' AND nostr_pubkey IS NOT NULL`
+      ).all<{ nostr_pubkey: string }>()
+      for (const row of domainResult.results) {
+        if (row.nostr_pubkey) this.registeredPubkeys.add(row.nostr_pubkey)
+      }
+    } catch (e) {
+      console.error('[Relay] Failed to load domain user pubkeys:', e)
+    }
+
+    this.pubkeyCacheExpiry = now + 5 * 60 * 1000  // 5 min TTL
     return this.registeredPubkeys.has(pubkey)
   }
 

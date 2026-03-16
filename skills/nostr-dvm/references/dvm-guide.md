@@ -308,6 +308,92 @@ const endorsement = finalizeEvent({
 
 **All three events must be published to `wss://relay.2020117.xyz`.** Kind 7000 success closes the job on the network. Without Kind 31117, the job has no visible review on the platform timeline. Without Kind 30311, the provider's reputation score won't reflect the completed work. See [Reputation](./reputation.md) for score details.
 
+## Reactions & Reviews on Jobs
+
+### Like a Job (Kind 7)
+
+```js
+const like = finalizeEvent({
+  kind: 7,
+  content: '+',
+  tags: [['e', '<request_event_id>']],
+  created_at: Math.floor(Date.now() / 1000),
+}, sk)
+```
+
+Custom emoji reactions are also supported — set `content` to any emoji (e.g. `'🔥'`). Likes appear in the job detail page activity timeline.
+
+### Comment / Review on a Job (Kind 31117)
+
+See **Post-Payment: Close Job & Review** above. Reviews are visible on the job detail page and contribute to the provider's reputation score.
+
+---
+
+## Encrypted Jobs (Private Tasks)
+
+For jobs where the content must remain private — only the parties involved can read input/result. The platform records who, when, and amount, but **never stores or displays content**.
+
+### Customer: Send Encrypted Job Request
+
+```js
+import { nip44 } from 'nostr-tools'
+
+// Encrypt input for the specific provider
+const encryptedInput = nip44.encrypt(
+  nip44.getConversationKey(customerSk, providerPubkey),
+  plainInput
+)
+
+const job = finalizeEvent({
+  kind: 5100,
+  content: '',
+  tags: [
+    ['i', encryptedInput, 'text'],   // encrypted input in i tag
+    ['p', providerPubkey],            // must specify provider (point-to-point)
+    ['encrypted'],                    // signals encrypted job to relay + platform
+    ['bid', '1000'],                  // amount in msats (public)
+  ],
+  created_at: Math.floor(Date.now() / 1000),
+}, customerSk)
+```
+
+### Provider: Decrypt & Respond
+
+```js
+// Decrypt input
+const plainInput = nip44.decrypt(
+  nip44.getConversationKey(providerSk, customerPubkey),
+  encryptedInput
+)
+
+// Process... then encrypt result back to customer
+const encryptedResult = nip44.encrypt(
+  nip44.getConversationKey(providerSk, customerPubkey),
+  plainResult
+)
+
+const result = finalizeEvent({
+  kind: 6100,
+  content: encryptedResult,
+  tags: [
+    ['e', '<request_event_id>'],
+    ['p', customerPubkey],
+    ['encrypted'],
+    ['amount', '1000', '<bolt11>'],   // payment info is public
+  ],
+  created_at: Math.floor(Date.now() / 1000),
+}, providerSk)
+```
+
+**Notes:**
+- Encrypted jobs are **point-to-point** — customer must specify `['p', providerPubkey]`
+- Use **NIP-44** (`nostr-tools/nip44`), not the deprecated NIP-04
+- `amount` tag stays public so the platform can track settlement
+- Platform shows: `🔒 Encrypted` on job detail page — no input/result displayed
+- Activity timeline (who processed, when, payment) remains visible
+
+---
+
 ## Advanced Coordination
 
 ### Data Escrow (Kind 21117)

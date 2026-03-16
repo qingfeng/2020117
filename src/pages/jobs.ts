@@ -114,27 +114,54 @@ router.get('/jobs/:id', async (c) => {
       const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-      // For DVM request events (5xxx), look up the corresponding 6xxx result
+      // Fetch full event from relay to get complete input/content
+      let fullInput: string | null = tags.input || re.contentPreview || null
       let resultPreview: string | null = null
       let resultProviderName: string | null = null
+
+      try {
+        const { fetchEventsFromRelay } = await import('../services/relay-io')
+        const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+        const fullEventRes = await fetchEventsFromRelay(relayUrl, { ids: [re.eventId] })
+        if (fullEventRes.events.length > 0) {
+          const ev = fullEventRes.events[0]
+          const iTag = ev.tags.find((t: string[]) => t[0] === 'i')
+          fullInput = iTag?.[1] || ev.content || fullInput
+        }
+      } catch { /* use cached fallback */ }
+
+      // For DVM request events (5xxx), look up the corresponding 6xxx result
       if (re.kind >= 5000 && re.kind <= 5999) {
-        const { and: andOp, sql: sqlOp } = await import('drizzle-orm')
-        const resultRow = await db.select({
-          contentPreview: relayEvents.contentPreview,
-          pubkey: relayEvents.pubkey,
-        }).from(relayEvents).where(
-          andOp(
-            sqlOp`${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999`,
-            sqlOp`instr(${relayEvents.tags}, ${re.eventId}) > 0`,
-          )
-        ).limit(1)
-        if (resultRow.length > 0 && resultRow[0].contentPreview) {
-          resultPreview = resultRow[0].contentPreview.slice(0, 1000)
-          resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey)
+        try {
+          const { fetchEventsFromRelay } = await import('../services/relay-io')
+          const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+          const resultKind = re.kind + 1000
+          const resultRes = await fetchEventsFromRelay(relayUrl, { kinds: [resultKind], '#e': [re.eventId], limit: 1 })
+          if (resultRes.events.length > 0) {
+            const rv = resultRes.events[0]
+            resultPreview = rv.content || null
+            resultProviderName = await resolveDisplayName(db, c.env, rv.pubkey)
+          }
+        } catch {
+          // Fallback to relay_event cache
+          const { and: andOp, sql: sqlOp } = await import('drizzle-orm')
+          const resultRow = await db.select({
+            contentPreview: relayEvents.contentPreview,
+            pubkey: relayEvents.pubkey,
+          }).from(relayEvents).where(
+            andOp(
+              sqlOp`${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999`,
+              sqlOp`instr(${relayEvents.tags}, ${re.eventId}) > 0`,
+            )
+          ).limit(1)
+          if (resultRow.length > 0 && resultRow[0].contentPreview) {
+            resultPreview = resultRow[0].contentPreview
+            resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey)
+          }
         }
       }
 
-      const inputText = tags.input || re.contentPreview || null
+      const inputText = fullInput
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
 ${headMeta(baseUrl)}
 <style>${BASE_CSS}
@@ -152,7 +179,7 @@ ${overlays()}
 <span class="kind">kind ${re.kind}</span>
 <div class="label">from</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
 <div class="label">time</div><div class="val">${timeStr}</div>
-${inputText ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText).slice(0, 500))}</div>` : ''}
+${inputText ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText))}</div>` : ''}
 ${resultPreview ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
 <div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>

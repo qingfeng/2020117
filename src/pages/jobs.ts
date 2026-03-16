@@ -112,8 +112,29 @@ router.get('/jobs/:id', async (c) => {
       const nevent = eventIdToNevent(re.eventId, ['wss://relay.2020117.xyz'], re.pubkey)
       const timeIso = new Date(re.eventCreatedAt * 1000).toISOString()
       const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
-      const preview = re.contentPreview ? re.contentPreview.slice(0, 500) : '(no content)'
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+      // For DVM request events (5xxx), look up the corresponding 6xxx result
+      let resultPreview: string | null = null
+      let resultProviderName: string | null = null
+      if (re.kind >= 5000 && re.kind <= 5999) {
+        const { and: andOp, sql: sqlOp } = await import('drizzle-orm')
+        const resultRow = await db.select({
+          contentPreview: relayEvents.contentPreview,
+          pubkey: relayEvents.pubkey,
+        }).from(relayEvents).where(
+          andOp(
+            sqlOp`${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999`,
+            sqlOp`instr(${relayEvents.tags}, ${re.eventId}) > 0`,
+          )
+        ).limit(1)
+        if (resultRow.length > 0 && resultRow[0].contentPreview) {
+          resultPreview = resultRow[0].contentPreview.slice(0, 1000)
+          resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey)
+        }
+      }
+
+      const inputText = tags.input || re.contentPreview || null
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
 ${headMeta(baseUrl)}
 <style>${BASE_CSS}
@@ -121,18 +142,18 @@ ${headMeta(baseUrl)}
 .val{color:#93a1a1;font-size:15px;margin-bottom:20px;word-break:break-all}
 .kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:700;text-transform:uppercase;
 background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue);margin-bottom:20px}
+.result-box{background:rgba(42,161,152,0.08);border:1px solid rgba(42,161,152,0.25);border-radius:6px;padding:16px;margin-bottom:20px;white-space:pre-wrap;color:#93a1a1;font-size:14px;line-height:1.6}
 a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
 h1{color:#fdf6e3;font-size:20px;margin:0 0 20px}</style></head><body>
 ${overlays()}
 <main class="c">
 <div style="margin-bottom:20px"><a href="/relay">&larr; back to relay</a></div>
-<h1>relay event</h1>
-<span class="kind">${esc(kindLabel)}</span>
-<div class="label">event id</div><div class="val" style="font-size:13px">${esc(re.eventId)}</div>
-<div class="label">pubkey</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
-<div class="label">time</div><div class="val">${esc(timeStr)}</div>
-<div class="label">content</div><div class="val" style="white-space:pre-wrap">${esc(preview)}</div>
-${tags.input ? `<div class="label">input</div><div class="val">${esc(String(tags.input).slice(0, 500))}</div>` : ''}
+<h1>${esc(kindLabel)}</h1>
+<span class="kind">kind ${re.kind}</span>
+<div class="label">from</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
+<div class="label">time</div><div class="val">${timeStr}</div>
+${inputText ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText).slice(0, 500))}</div>` : ''}
+${resultPreview ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
 <div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
 </main></body></html>`)

@@ -236,48 +236,66 @@ content.get('/relay/events', async (c) => {
 
   // Enrich Kind 1 notes with reply/reaction/repost counts + preview replies
   const noteEventIds = events.filter(e => e.kind === 1).map(e => e.event_id)
-  const noteStats = new Map<string, { reply_count: number; reaction_count: number; repost_count: number; replies_preview: Array<{ actor_name: string; username: string | null; content: string; created_at: number }> }>()
+  const noteStats = new Map<string, { reply_count: number; reaction_count: number; repost_count: number; last_activity_at: number; replies_preview: Array<{ actor_name: string; username: string | null; content: string; created_at: number }> }>()
 
   if (noteEventIds.length > 0) {
+    // Batch: 3 queries instead of N×(3-4)
+    const noteIdsSql = sql.join(noteEventIds.map(id => sql`${id}`), sql`, `)
+    const [reactionCounts, repostCounts, replyRows] = await Promise.all([
+      db.select({
+        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
+        count: sql<number>`COUNT(*)`,
+        latest: sql<number>`MAX(${relayEvents.eventCreatedAt})`,
+      }).from(relayEvents)
+        .where(and(eq(relayEvents.kind, 7), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
+        .groupBy(sql`json_extract(${relayEvents.tags}, '$.e')`),
+      db.select({
+        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
+        count: sql<number>`COUNT(*)`,
+        latest: sql<number>`MAX(${relayEvents.eventCreatedAt})`,
+      }).from(relayEvents)
+        .where(and(eq(relayEvents.kind, 6), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
+        .groupBy(sql`json_extract(${relayEvents.tags}, '$.e')`),
+      db.select({
+        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
+        pubkey: relayEvents.pubkey,
+        contentPreview: relayEvents.contentPreview,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents)
+        .where(and(eq(relayEvents.kind, 1), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
+        .orderBy(desc(relayEvents.eventCreatedAt)).limit(noteEventIds.length * 3),
+    ])
+
+    const reactionMap = new Map(reactionCounts.map(r => [r.refId, r]))
+    const repostMap = new Map(repostCounts.map(r => [r.refId, r]))
+    const replyCountMap: Record<string, number> = {}
+    const replyPreviewMap: Record<string, typeof replyRows> = {}
+    for (const r of replyRows) {
+      if (!r.refId) continue
+      replyCountMap[r.refId] = (replyCountMap[r.refId] || 0) + 1
+      if (!replyPreviewMap[r.refId]) replyPreviewMap[r.refId] = []
+      if (replyPreviewMap[r.refId].length < 3) replyPreviewMap[r.refId].push(r)
+    }
+
     for (const noteId of noteEventIds) {
-      // Get reply previews + latest interaction timestamps in parallel
-      const [replyRows, reactionRows, repostRows] = await Promise.all([
-        db.select({ eventId: relayEvents.eventId, pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview, eventCreatedAt: relayEvents.eventCreatedAt })
-          .from(relayEvents).where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
-          .orderBy(desc(relayEvents.eventCreatedAt)).limit(3),
-        db.select({ count: sql<number>`COUNT(*)`, latest: sql<number>`MAX(${relayEvents.eventCreatedAt})` }).from(relayEvents)
-          .where(and(eq(relayEvents.kind, 7), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
-        db.select({ count: sql<number>`COUNT(*)`, latest: sql<number>`MAX(${relayEvents.eventCreatedAt})` }).from(relayEvents)
-          .where(and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${noteId}) > 0`)),
-      ])
-
-      const replyCountResult = replyRows.length < 3 ? [{ count: replyRows.length }]
-        : await db.select({ count: sql<number>`COUNT(*)` }).from(relayEvents)
-          .where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${noteId}) > 0`))
-
-      const repliesPreview = replyRows.reverse().map(r => {
-        const rUser = pubkeyNames.get(r.pubkey)
-        return {
-          actor_name: rUser?.displayName || rUser?.username || pubkeyToNpub(r.pubkey).slice(0, 16) + '...',
-          username: rUser?.username || null,
-          content: (r.contentPreview || '').slice(0, 120),
-          created_at: r.eventCreatedAt,
-        }
-      })
-
-      // last_activity_at = max of note creation, latest reply, latest reaction, latest repost
-      const latestReply = replyRows[0]?.eventCreatedAt || 0
-      const latestReaction = reactionRows[0]?.latest || 0
-      const latestRepost = repostRows[0]?.latest || 0
+      const reactions = reactionMap.get(noteId)
+      const reposts = repostMap.get(noteId)
+      const previews = (replyPreviewMap[noteId] || []).slice().reverse()
       const noteCreatedAt = events.find(e => e.event_id === noteId)?.created_at || 0
-      const lastActivityAt = Math.max(noteCreatedAt, latestReply, latestReaction, latestRepost)
-
       noteStats.set(noteId, {
-        reply_count: replyCountResult[0]?.count || 0,
-        reaction_count: reactionRows[0]?.count || 0,
-        repost_count: repostRows[0]?.count || 0,
-        replies_preview: repliesPreview,
-        last_activity_at: lastActivityAt,
+        reply_count: replyCountMap[noteId] || 0,
+        reaction_count: reactions?.count || 0,
+        repost_count: reposts?.count || 0,
+        last_activity_at: Math.max(noteCreatedAt, previews[previews.length - 1]?.eventCreatedAt || 0, reactions?.latest || 0, reposts?.latest || 0),
+        replies_preview: previews.map(r => {
+          const rUser = pubkeyNames.get(r.pubkey)
+          return {
+            actor_name: rUser?.displayName || rUser?.username || pubkeyToNpub(r.pubkey).slice(0, 16) + '...',
+            username: rUser?.username || null,
+            content: (r.contentPreview || '').slice(0, 120),
+            created_at: r.eventCreatedAt,
+          }
+        }),
       })
     }
   }
@@ -616,7 +634,7 @@ content.get('/activity', async (c) => {
 
   activities.sort((a, b) => b.time.getTime() - a.time.getTime())
 
-  const filtered = typeFilter === 'p2p' ? activities.filter(a => a.type === 'p2p_session') : typeFilter === 'dvm' ? activities.filter(a => a.type !== 'p2p_session') : activities
+  const filtered = typeFilter === 'p2p' ? activities.filter(a => a.type === 'p2p_session') : typeFilter === 'dvm' ? activities.filter(a => a.type === 'dvm_job') : activities
 
   const total = filtered.length
   const start = (page - 1) * limit

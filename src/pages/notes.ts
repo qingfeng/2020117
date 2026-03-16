@@ -31,6 +31,14 @@ router.get('/notes/:eventId', async (c) => {
   const npub = pubkeyToNpub(note.pubkey)
   const nevent = eventIdToNevent(note.eventId, ['wss://relay.2020117.xyz'], note.pubkey)
 
+  // Fetch full content from relay (relay_event only stores 200-char preview)
+  let fullContent: string | null = null
+  try {
+    const { fetchEventsFromRelay } = await import('../services/relay-io')
+    const { events } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [eventId], limit: 1 })
+    if (events.length > 0) fullContent = events[0].content ?? null
+  } catch { /* fall back to preview */ }
+
   // Look up author: local user first, then Kind 0 profile from relay
   let authorName = npub.slice(0, 16) + '...'
   let authorUsername = ''
@@ -207,7 +215,7 @@ router.get('/notes/:eventId', async (c) => {
   }
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-  const content = note.contentPreview || ''
+  const content = fullContent ?? note.contentPreview ?? ''
   const ogDesc = `${authorName}: ${esc(content.slice(0, 160))}`
   const createdDate = new Date(note.eventCreatedAt * 1000).toISOString()
 

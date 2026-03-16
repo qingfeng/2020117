@@ -161,6 +161,47 @@ router.get('/jobs/:id', async (c) => {
         }
       }
 
+      // Fetch activity timeline (Kind 7000 feedback + 6xxx results) from relay_event cache
+      const { sql: sqlRe } = await import('drizzle-orm')
+      const activityRows = await db.select({
+        eventId: relayEvents.eventId,
+        kind: relayEvents.kind,
+        pubkey: relayEvents.pubkey,
+        contentPreview: relayEvents.contentPreview,
+        tags: relayEvents.tags,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents).where(
+        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
+      ).orderBy(relayEvents.eventCreatedAt).limit(20)
+
+      // Build activity HTML
+      const FEEDBACK_STATUS: Record<string, string> = { processing: '⚡ processing', success: '✓ success', error: '✗ error', 'payment-required': '💰 payment required' }
+      let activityHtml = ''
+      if (activityRows.length > 0) {
+        const items = await Promise.all(activityRows.map(async (a) => {
+          const at = a.tags ? JSON.parse(a.tags) : {}
+          const actorName = await resolveDisplayName(db, c.env, a.pubkey)
+          const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
+          const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
+          if (a.kind === 7000) {
+            const status = at.status || 'unknown'
+            const label = FEEDBACK_STATUS[status] || status
+            const amountMsats = at.amount ? parseInt(at.amount) : 0
+            const amountStr = amountMsats > 0 ? ` — ${Math.floor(amountMsats / 1000)} sats` : ''
+            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">${esc(label)}${esc(amountStr)}</span> <span class="act-time">${timeA}</span></div>`
+          } else if (a.kind >= 6000 && a.kind <= 6999) {
+            const amountMsats = at.amount ? parseInt(at.amount) : 0
+            const amountStr = amountMsats > 0 ? ` — ${Math.floor(amountMsats / 1000)} sats` : ''
+            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">✓ delivered result${esc(amountStr)}</span> <span class="act-time">${timeA}</span></div>`
+          } else if (a.kind === 31117) {
+            const rating = at.rating || '?'
+            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">⭐ rated ${esc(String(rating))}/5</span> <span class="act-time">${timeA}</span></div>`
+          }
+          return ''
+        }))
+        activityHtml = `<div class="label" style="margin-top:24px">activity</div><div class="act-list">${items.filter(Boolean).join('')}</div>`
+      }
+
       const inputText = fullInput
       return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
 ${headMeta(baseUrl)}
@@ -170,6 +211,8 @@ ${headMeta(baseUrl)}
 .kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:700;text-transform:uppercase;
 background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue);margin-bottom:20px}
 .result-box{background:rgba(42,161,152,0.08);border:1px solid rgba(42,161,152,0.25);border-radius:6px;padding:16px;margin-bottom:20px;white-space:pre-wrap;color:#93a1a1;font-size:14px;line-height:1.6}
+.act-list{margin-bottom:20px}.act-row{padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px}
+.act-actor{color:var(--c-accent)}.act-label{color:#93a1a1;margin-left:6px}.act-time{color:var(--c-text-dim);font-size:11px;margin-left:8px}
 a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
 h1{color:#fdf6e3;font-size:20px;margin:0 0 20px}</style></head><body>
 ${overlays()}
@@ -181,6 +224,7 @@ ${overlays()}
 <div class="label">time</div><div class="val">${timeStr}</div>
 ${inputText ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText))}</div>` : ''}
 ${resultPreview ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
+${activityHtml}
 ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
 <div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
 </main></body></html>`)

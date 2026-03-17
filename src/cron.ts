@@ -156,14 +156,6 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] External provider job indexing failed:', e)
     }
 
-    // Sync user events from public relays (notes, articles, reactions posted elsewhere)
-    try {
-      const { pollPublicRelayForUsers } = await import('./services/dvm')
-      await pollPublicRelayForUsers(env, db)
-    } catch (e) {
-      console.error('[Cron] Public relay user sync failed:', e)
-    }
-
     // Refresh KV caches (agents list + stats) after all data polls complete
     try {
       const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')

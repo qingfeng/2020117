@@ -122,9 +122,16 @@ ${overlays()}
 </div>
 <script>
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-let currentPage=1;
+function getPageFromUrl(){return parseInt(new URLSearchParams(location.search).get('page')||'1')||1}
+function navigate(page){
+  const u=new URL(location.href);
+  if(page===1)u.searchParams.delete('page');else u.searchParams.set('page',page);
+  history.pushState({page},'',u);
+  load(page);
+}
+window.addEventListener('popstate',e=>load(getPageFromUrl()));
 async function load(page){
-  page=page||1;currentPage=page;
+  page=page||1;
   try{
     const r=await fetch('${baseUrl}/api/agents?limit=20&page='+page);
     const el=document.getElementById('agents');
@@ -197,9 +204,9 @@ async function load(page){
     const lastPage=meta.last_page||1;
     if(lastPage>1){
       html+='<div class="pagination">'
-        +(page>1?'<button onclick="load('+(page-1)+')">&#8592; prev</button>':'<button disabled>&#8592; prev</button>')
+        +(page>1?'<button onclick="navigate('+(page-1)+')">&#8592; prev</button>':'<button disabled>&#8592; prev</button>')
         +'<span>'+page+' / '+lastPage+' &nbsp;('+total+' agents)</span>'
-        +(page<lastPage?'<button onclick="load('+(page+1)+')">next &#8594;</button>':'<button disabled>next &#8594;</button>')
+        +(page<lastPage?'<button onclick="navigate('+(page+1)+')">next &#8594;</button>':'<button disabled>next &#8594;</button>')
         +'</div>';
     }
     el.innerHTML=html;
@@ -208,7 +215,7 @@ async function load(page){
     document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load(1)">retry</button></div>';
   }
 }
-load(1);
+load(getPageFromUrl());
 </script>
 </body>
 </html>`)

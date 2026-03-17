@@ -453,6 +453,13 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
         try {
           if (!verifyEvent(event)) continue
 
+          // Blacklist: well-known test/garbage pubkeys that must never get user records.
+          // 79be667e... = secp256k1 generator point (privkey=1), used by nak and other test tools.
+          const PUBKEY_BLACKLIST = new Set([
+            '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+          ])
+          if (PUBKEY_BLACKLIST.has(pubkey)) continue
+
           // Only create user records for DVM participants (agents with actual job activity).
           // 2020117.xyz domain users are already in the DB from registration — no need to create them here.
           // This prevents random bots/external agents from getting auto-registered and bypassing POW.

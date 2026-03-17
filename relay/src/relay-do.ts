@@ -115,30 +115,31 @@ export class RelayDO implements DurableObject {
       return
     }
 
-    // 4. Registered user check — skip POW for platform users
+    // 4. Registered user check — skip POW for DVM/infra kinds only, not social
     const isRegistered = await this.isRegisteredPubkey(event.pubkey)
 
-    // 5. POW check (skip for registered users):
-    //    - Social kinds (0/1/3/5/6/7/16/30078): full POW (MIN_POW, default 20)
+    // 5. POW check:
+    //    - Social kinds (0/1/3/6/7/16/30023/30078): always require full POW (registered or not)
     //    - Exempt (zero POW): DVM results (6xxx), feedback (7000), heartbeat (30333), zap (9735)
-    //    - Everything else: reduced POW (10) — DVM requests (5xxx), endorsements (30311), etc.
-    if (!isRegistered) {
-      const SOCIAL_KINDS = new Set([0, 1, 3, 5, 6, 7, 16, 30023, 30078])
-      const EXEMPT_KINDS = new Set([9735, 30333])  // zap, heartbeat
-      const isExempt = EXEMPT_KINDS.has(event.kind) ||
-        (event.kind >= 6000 && event.kind <= 6999) || event.kind === 7000
-      const minPow = parseInt(this.env.MIN_POW || '20', 10)
-      if (SOCIAL_KINDS.has(event.kind)) {
-        if (!checkPow(event.id, minPow)) {
-          this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
-          return
-        }
-      } else if (!isExempt) {
-        const lowPow = Math.min(10, minPow)
-        if (!checkPow(event.id, lowPow)) {
-          this.sendOk(ws, event.id, false, `pow: required difficulty ${lowPow}`)
-          return
-        }
+    //    - DVM requests (5xxx), endorsements (30311), handler info (31990): registered = exempt, others need lowPow
+    const SOCIAL_KINDS = new Set([0, 1, 3, 6, 7, 16, 30023, 30078])
+    const EXEMPT_KINDS = new Set([9735, 30333])
+    const isExempt = EXEMPT_KINDS.has(event.kind) ||
+      (event.kind >= 6000 && event.kind <= 6999) || event.kind === 7000
+    const minPow = parseInt(this.env.MIN_POW || '20', 10)
+
+    if (SOCIAL_KINDS.has(event.kind)) {
+      // Social: everyone needs POW — registered status doesn't help here
+      if (!checkPow(event.id, minPow)) {
+        this.sendOk(ws, event.id, false, `pow: required difficulty ${minPow}`)
+        return
+      }
+    } else if (!isExempt && !isRegistered) {
+      // DVM requests etc: registered users exempt, others need lowPow
+      const lowPow = Math.min(10, minPow)
+      if (!checkPow(event.id, lowPow)) {
+        this.sendOk(ws, event.id, false, `pow: required difficulty ${lowPow}`)
+        return
       }
     }
 

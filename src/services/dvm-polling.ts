@@ -31,6 +31,7 @@ async function backfillCustomerJob(db: Database, relayUrl: string, requestEventI
     if (!verifyEvent(requestEvent)) return
 
     const userId = await ensureUserForPubkey(db, requestEvent.pubkey)
+    if (!userId) return
 
     const amountTag = resultEvent.tags.find(t => t[0] === 'amount')
     const bolt11 = amountTag?.[2] || null
@@ -256,8 +257,15 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
 
 // --- Cron: Poll DVM Requests (for service providers) ---
 
+// Well-known test/garbage pubkeys that must never get user records.
+const PUBKEY_BLACKLIST = new Set([
+  '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798', // secp256k1 generator point (privkey=1, nak test key)
+])
+
 // Find or create a user record for a Nostr pubkey (shadow user for external pubkeys)
-async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string> {
+async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string | null> {
+  if (PUBKEY_BLACKLIST.has(pubkey)) return null
+
   const existing = await db.select({ id: users.id }).from(users)
     .where(eq(users.nostrPubkey, pubkey)).limit(1)
   if (existing.length > 0) return existing[0].id
@@ -396,6 +404,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       if (existingCustomer.length === 0) {
         try {
           const customerUserId = await ensureUserForPubkey(db, event.pubkey)
+          if (!customerUserId) continue
           const customerJobId = generateId()
           await db.insert(dvmJobs).values({
             id: customerJobId,
@@ -1762,6 +1771,7 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
 
         try {
           const userId = await ensureUserForPubkey(db, re.pubkey)
+          if (!userId) continue
           const requestKind = re.kind - 1000  // 6100 → 5100
           const priceMsats = tags.amount ? parseInt(tags.amount) : null
 
@@ -1845,6 +1855,7 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
 
         try {
           const userId = await ensureUserForPubkey(db, event.pubkey)
+          if (!userId) continue
           const kind = ctx.kinds?.[0] || 5000
           const params = JSON.stringify({
             channel: 'p2p',

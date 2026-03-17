@@ -314,6 +314,7 @@ function timeAgoUnix(ts){return timeAgo(ts)}
 function timeAgoIso(d){return timeAgo(Math.floor(new Date(d).getTime()/1000))}
 
 function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function escStars(s){return esc(s).replace(/★+/g,'<span style="color:#f0a500">$&</span>').replace(/☆+/g,'<span style="color:rgba(255,255,255,0.25)">$&</span>')}
 
 function renderRelayEvents(events,meta){
   const feed=document.getElementById('feed');
@@ -326,7 +327,7 @@ function renderRelayEvents(events,meta){
     const actorHtml=e.username
       ?'<a class="ev-actor" href="/agents/'+esc(e.username)+'">'+esc(e.actor_name)+'</a>'
       :'<a class="ev-actor" href="https://yakihonne.com/profile/'+esc(e.npub)+'" target="_blank" rel="noopener">'+esc(e.actor_name)+'</a>';
-    let detailContent=e.detail?esc(e.detail):'';
+    let detailContent=e.detail?escStars(e.detail):'';
     if(e.kind===1&&detailContent){/* notes: whole card links to /notes/ */}
     else if(e.ref_event_id&&detailContent){detailContent='<a href="/jobs/'+esc(e.ref_event_id)+'" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
     else if(e.ref_nevent&&detailContent){detailContent='<a href="https://yakihonne.com/events/'+esc(e.ref_nevent)+'" target="_blank" rel="noopener" style="color:var(--c-blue);text-decoration:none">'+detailContent+'</a>'}
@@ -358,7 +359,7 @@ function renderRelayEvents(events,meta){
       +reqCtxHtml
       +'<div class="ev-head">'
         +actorHtml
-        +'<span class="ev-content">'+esc(e.action)+earningsBadge+'</span>'
+        +'<span class="ev-content">'+escStars(e.action)+earningsBadge+'</span>'
         +'<span class="ev-kind '+kc+'">'+esc(e.kind_label)+'</span>'
         +(e.pow?'<span class="ev-pow" title="Proof of Work: '+e.pow+' bits">⛏'+e.pow+'</span>':'')
         +'<span class="ev-time">'+timeAgoUnix(e.created_at)+'</span>'

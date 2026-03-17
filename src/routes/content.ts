@@ -174,7 +174,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 30023) action = 'published article'
     else if (kindNum === 30333) action = 'heartbeat'
     else if (kindNum === 30311) action = 'endorsed agent'
-    else if (kindNum === 31117) action = `reviewed job${tags.rating ? ' (' + tags.rating + '/5)' : ''}`
+    else if (kindNum === 31117) { const _r = parseInt(tags.rating || '0'); action = (_r > 0 ? '★'.repeat(_r) + '☆'.repeat(5 - _r) + ' ' : '') + 'reviewed job' }
     else if (kindNum === 31990) action = 'registered service'
     else action = KIND_LABELS[kindNum] || `kind ${kindNum}`
 
@@ -193,7 +193,7 @@ content.get('/relay/events', async (c) => {
     }
     else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
     else if (kindNum === 30333) detail = ''
-    else if (kindNum === 30311 && preview) detail = preview
+    else if (kindNum === 30311) { const _r = parseInt(tags.rating || '0'); const _comment = preview ? preview.replace(/^rating:\s*\d+\s*[—-]?\s*/i, '').trim() : ''; detail = (_r > 0 ? '★'.repeat(_r) + '☆'.repeat(5 - _r) + ' ' : '') + _comment }
     else if (kindNum === 31117) {
       const parts: string[] = []
       if (preview) parts.push(preview.slice(0, 200))

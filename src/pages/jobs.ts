@@ -2,8 +2,255 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import type { AppContext } from '../types'
 import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
+import { getI18n } from '../lib/i18n'
+
+// Shared CSS for job detail pages (used in both main path and fallback path)
+const JOB_PAGE_CSS = `
+.job-card{
+  border:1px solid var(--c-border);
+  border-radius:12px;
+  padding:24px 28px;
+  background:var(--c-surface);
+  position:relative;
+}
+.job-card::before{
+  content:'';position:absolute;inset:-1px;
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
+  z-index:-1;
+  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  mask-composite:xor;-webkit-mask-composite:xor;
+  padding:1px;border-radius:12px;
+}
+.job-card:focus-visible{
+  outline:2px solid var(--c-accent);
+  outline-offset:2px;
+}
+.job-meta{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  margin-bottom:16px;
+}
+.status-tag{
+  display:inline-block;
+  padding:3px 10px;
+  border-radius:4px;
+  font-size:12px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:1px;
+}
+.kind-tag{
+  display:inline-block;
+  background:var(--c-accent-bg);
+  border:1px solid var(--c-accent-dim);
+  border-radius:4px;
+  padding:3px 10px;
+  font-size:12px;
+  color:var(--c-accent);
+}
+.sats-tag{
+  display:inline-block;
+  padding:3px 10px;
+  background:rgba(255,176,0,0.12);
+  border:1px solid rgba(255,176,0,0.3);
+  border-radius:4px;
+  color:var(--c-gold);font-size:13px;font-weight:700;
+}
+.customer{
+  font-size:14px;color:var(--c-text-dim);
+  margin-bottom:16px;
+  overflow-wrap:break-word;word-break:break-word;
+}
+.customer span{color:var(--c-accent);font-weight:700}
+.section{margin-top:16px}
+.section-label{color:var(--c-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-weight:600}
+.input-content{
+  color:#e2e2de;font-size:15px;
+  line-height:1.7;
+  white-space:pre-line;
+  word-break:break-word;
+}
+.reply-block{
+  margin-top:20px;
+  padding-top:16px;
+  border-top:1px solid var(--c-border);
+}
+.reply-head{
+  display:flex;align-items:center;gap:8px;
+  margin-bottom:12px;
+}
+.reply-avatar{
+  width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;
+}
+.reply-name{
+  color:var(--c-accent);text-decoration:none;font-weight:600;font-size:14px;
+  border-bottom:1px solid var(--c-accent-dim);
+}
+.reply-label{
+  font-size:12px;color:var(--c-text-dim);
+  margin-left:2px;
+}
+.result-content{
+  color:#e2e2de;font-size:15px;
+  line-height:1.7;
+  word-break:break-word;
+}
+.md-body{white-space:normal}
+.md-body p{margin:0 0 0.8em;word-break:break-word}
+.md-body p:last-child{margin-bottom:0}
+.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1em 0 0.4em;font-weight:700;color:#f0f0ec}
+.md-body h3{font-size:1em}
+.md-body h4,.md-body h5,.md-body h6{font-size:0.95em}
+.md-body ul,.md-body ol{margin:0.5em 0 0.8em;padding-left:1.4em}
+.md-body li{margin-bottom:0.25em}
+.md-body code{font-family:monospace;font-size:0.88em;background:rgba(42,161,152,0.15);padding:1px 5px;border-radius:3px}
+.md-body pre{background:rgba(0,0,0,0.25);border:1px solid var(--c-border);border-radius:6px;padding:12px;overflow-x:auto;margin:0.6em 0}
+.md-body pre code{background:none;padding:0;font-size:0.85em}
+.md-body blockquote{margin:0.5em 0;padding:6px 12px;border-left:2px solid var(--c-accent-dim);color:var(--c-text-dim);font-style:italic}
+.md-body hr{border:none;border-top:1px solid var(--c-border);margin:1em 0}
+.md-body a{color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)}
+.md-body strong{font-weight:700;color:#f0f0ec}
+.md-body em{font-style:italic}
+.timestamp{
+  margin-top:20px;
+  padding-top:16px;
+  border-top:1px solid var(--c-border);
+  font-size:13px;color:var(--c-nav);
+}
+.activity-log{margin-top:24px}
+.activity-log .section-label{margin-bottom:10px}
+.activity-item{
+  padding:8px 0;border-bottom:1px solid var(--c-border);
+  font-size:13px;color:var(--c-text-dim);
+  display:flex;align-items:baseline;gap:8px;
+}
+.activity-item:last-child{border-bottom:none}
+.activity-item .actor{color:var(--c-accent);font-weight:700;text-decoration:none}
+.activity-item .actor:hover{opacity:0.7}
+.activity-item .status-processing{color:var(--c-teal)}
+.activity-item .status-success{color:var(--c-accent)}
+.activity-item .status-error{color:var(--c-red)}
+.activity-item .status-payment{color:var(--c-gold)}
+.activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
+.review-block{
+  margin-top:16px;padding:12px 16px;
+  border:1px solid rgba(211,54,130,0.25);border-radius:6px;
+  background:rgba(211,54,130,0.06);
+}
+.review-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.review-stars{color:#f0a500;font-size:16px;letter-spacing:1px}
+.review-label{color:var(--c-magenta,#d33682);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.review-by{color:var(--c-text-muted);font-size:12px;margin-left:auto}
+.review-text{color:var(--c-text-dim);font-size:14px;line-height:1.6;margin-top:4px}
+.review-paid{
+  display:inline-block;padding:2px 8px;
+  background:rgba(255,176,0,0.15);border:1px solid rgba(255,176,0,0.3);
+  border-radius:4px;color:var(--c-gold);font-size:12px;font-weight:700;
+}
+@media(max-width:480px){
+  .job-card{padding:16px 18px}
+  .input-content,.result-content{font-size:14px}
+}
+`
 
 const router = new Hono<AppContext>()
+
+// Lightweight markdown renderer (no deps, safe for Cloudflare Workers)
+function renderMarkdown(raw: string): string {
+  const he = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  // Inline markdown: escape HTML first, then apply patterns (& < > don't conflict with markdown syntax)
+  function inline(text: string): string {
+    let s = he(text)
+    // Inline code (protect first)
+    s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+    // Bold+italic
+    s = s.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    // Bold
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    s = s.replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+    // Italic
+    s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+    // Links
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    return s
+  }
+
+  const lines = raw.split('\n')
+  const out: string[] = []
+  let i = 0
+
+  const isSpecial = (l: string) =>
+    l.startsWith('```') || /^#{1,6}\s/.test(l) || /^[-*+]\s/.test(l) ||
+    /^\d+\.\s/.test(l) || l.startsWith('> ') || /^[-*_]{3,}$/.test(l.trim())
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // Fenced code block
+    if (line.startsWith('```')) {
+      const lang = he(line.slice(3).trim())
+      const block: string[] = []
+      i++
+      while (i < lines.length && !lines[i].startsWith('```')) { block.push(he(lines[i])); i++ }
+      i++
+      out.push(`<pre><code${lang ? ` class="language-${lang}"` : ''}>${block.join('\n')}</code></pre>`)
+      continue
+    }
+
+    // Headings
+    const hm = line.match(/^(#{1,6})\s+(.+)$/)
+    if (hm) {
+      const level = Math.min(hm[1].length + 2, 6)
+      out.push(`<h${level}>${inline(hm[2])}</h${level}>`)
+      i++; continue
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const qlines: string[] = []
+      while (i < lines.length && lines[i].startsWith('> ')) { qlines.push(inline(lines[i].slice(2))); i++ }
+      out.push(`<blockquote>${qlines.join('<br>')}</blockquote>`)
+      continue
+    }
+
+    // Unordered list
+    if (/^[-*+]\s/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^[-*+]\s/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^[-*+]\s/, ''))}</li>`); i++
+      }
+      out.push(`<ul>${items.join('')}</ul>`)
+      continue
+    }
+
+    // Ordered list
+    if (/^\d+\.\s/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^\d+\.\s/, ''))}</li>`); i++
+      }
+      out.push(`<ol>${items.join('')}</ol>`)
+      continue
+    }
+
+    // Horizontal rule
+    if (/^[-*_]{3,}$/.test(line.trim())) { out.push('<hr>'); i++; continue }
+
+    // Blank line
+    if (line.trim() === '') { i++; continue }
+
+    // Paragraph
+    const plines: string[] = []
+    while (i < lines.length && lines[i].trim() !== '' && !isSpecial(lines[i])) {
+      plines.push(inline(lines[i])); i++
+    }
+    if (plines.length > 0) out.push(`<p>${plines.join('<br>')}</p>`)
+  }
+
+  return out.join('\n')
+}
 
 // Resolve display name from Kind 0 profile (relay_event cache → external relay fetch)
 async function resolveDisplayName(db: any, env: any, pubkey: string): Promise<string | null> {
@@ -51,6 +298,9 @@ router.get('/jobs/:id', async (c) => {
   const db = c.get('db')
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
   const jobId = c.req.param('id')
+  const lang = c.req.query('lang')
+  const t = getI18n(lang)
+  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
   const { dvmJobs, users } = await import('../db/schema')
   const { and, or } = await import('drizzle-orm')
@@ -67,8 +317,8 @@ router.get('/jobs/:id', async (c) => {
   }
 
   const STATUS_LABELS: Record<string, string> = {
-    open: 'Open', processing: 'Processing', result_available: 'Result Available',
-    completed: 'Completed', cancelled: 'Cancelled', error: 'Error',
+    open: t.jobStatusOpen, processing: t.jobStatusProcessing, result_available: t.jobStatusResultAvailable,
+    completed: t.jobStatusCompleted, cancelled: t.jobStatusCancelled, error: t.jobStatusError,
   }
 
   // Accept both platform job ID and Nostr event ID (from relay timeline)
@@ -91,6 +341,7 @@ router.get('/jobs/:id', async (c) => {
     customerName: users.displayName,
     customerUsername: users.username,
     customerPubkey: users.nostrPubkey,
+    customerAvatarUrl: users.avatarUrl,
   }).from(dvmJobs)
     .leftJoin(users, eq(dvmJobs.userId, users.id))
     .where(and(
@@ -111,6 +362,16 @@ router.get('/jobs/:id', async (c) => {
       const resolvedName = await resolveDisplayName(db, c.env, re.pubkey)
       const displayLabel = resolvedName || npub
       const nevent = eventIdToNevent(re.eventId, ['wss://relay.2020117.xyz'], re.pubkey)
+
+      // Look up requester in users table for avatar + local profile link
+      const { users } = await import('../db/schema')
+      const requesterUser = await db.select({
+        displayName: users.displayName,
+        username: users.username,
+        avatarUrl: users.avatarUrl,
+      }).from(users).where(eq(users.nostrPubkey, re.pubkey)).limit(1)
+      const requesterUsername = requesterUser[0]?.username || null
+      const requesterAvatarUrl = requesterUser[0]?.avatarUrl || null
       const timeIso = new Date(re.eventCreatedAt * 1000).toISOString()
       const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -121,6 +382,7 @@ router.get('/jobs/:id', async (c) => {
       let fullInput: string | null = isEncrypted ? null : (tags.input || re.contentPreview || null)
       let resultPreview: string | null = null
       let resultProviderName: string | null = null
+      let resultProviderPubkey: string | null = null
 
       if (!isEncrypted) try {
         const { fetchEventsFromRelay } = await import('../services/relay-io')
@@ -143,6 +405,7 @@ router.get('/jobs/:id', async (c) => {
           if (resultRes.events.length > 0) {
             const rv = resultRes.events[0]
             resultPreview = rv.content || null
+            resultProviderPubkey = rv.pubkey
             resultProviderName = await resolveDisplayName(db, c.env, rv.pubkey)
           }
         } catch {
@@ -159,9 +422,22 @@ router.get('/jobs/:id', async (c) => {
           ).limit(1)
           if (resultRow.length > 0 && resultRow[0].contentPreview) {
             resultPreview = resultRow[0].contentPreview
+            resultProviderPubkey = resultRow[0].pubkey
             resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey)
           }
         }
+      }
+
+      // Look up result provider in users table for avatar + local profile link
+      let resultProviderUsername: string | null = null
+      let resultProviderAvatarUrl: string | null = null
+      if (resultProviderPubkey) {
+        const provUser = await db.select({
+          username: users.username,
+          avatarUrl: users.avatarUrl,
+        }).from(users).where(eq(users.nostrPubkey, resultProviderPubkey)).limit(1)
+        resultProviderUsername = provUser[0]?.username || null
+        resultProviderAvatarUrl = provUser[0]?.avatarUrl || null
       }
 
       // Fetch activity timeline (Kind 7000 feedback + 6xxx results) from relay_event cache
@@ -178,7 +454,7 @@ router.get('/jobs/:id', async (c) => {
       ).orderBy(relayEvents.eventCreatedAt).limit(20)
 
       // Build activity HTML
-      const FEEDBACK_STATUS: Record<string, string> = { processing: '⚡ processing', success: '✓ success', error: '✗ error', 'payment-required': '💰 payment required' }
+      const FEEDBACK_STATUS: Record<string, string> = { processing: t.jobStarted, success: t.jobCompleted, error: t.jobError, 'payment-required': t.jobPaymentRequired }
       let activityHtml = ''
       if (activityRows.length > 0) {
         const items = await Promise.all(activityRows.map(async (a) => {
@@ -186,56 +462,111 @@ router.get('/jobs/:id', async (c) => {
           const actorName = await resolveDisplayName(db, c.env, a.pubkey)
           const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
           const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
+          let label = ''
           if (a.kind === 7000) {
             const status = at.status || 'unknown'
-            const label = FEEDBACK_STATUS[status] || status
+            label = FEEDBACK_STATUS[status] || status
             const amountMsats = at.amount ? parseInt(at.amount) : 0
-            const amountStr = amountMsats > 0 ? ` — ${Math.floor(amountMsats / 1000)} sats` : ''
-            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">${esc(label)}${esc(amountStr)}</span> <span class="act-time">${timeA}</span></div>`
+            if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind >= 6000 && a.kind <= 6999) {
+            label = t.jobSubmittedResult
             const amountMsats = at.amount ? parseInt(at.amount) : 0
-            const amountStr = amountMsats > 0 ? ` — ${Math.floor(amountMsats / 1000)} sats` : ''
-            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">✓ delivered result${esc(amountStr)}</span> <span class="act-time">${timeA}</span></div>`
+            if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'
-            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">${esc(emoji === '+' ? '❤ liked' : emoji + ' reacted')}</span> <span class="act-time">${timeA}</span></div>`
+            label = emoji === '+' ? '❤ liked' : `${emoji} ${t.jobReacted}`
           } else if (a.kind === 31117) {
-            const rating = at.rating || '?'
-            return `<div class="act-row"><span class="act-actor">${esc(actorLabel)}</span> <span class="act-label">⭐ rated ${esc(String(rating))}/5</span> <span class="act-time">${timeA}</span></div>`
-          }
-          return ''
+            const rating = parseInt(at.rating || '0')
+            label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`
+          } else { return '' }
+          return `<div class="activity-item"><span class="actor">${esc(actorLabel)}</span><span>${esc(label)}</span><span class="atime">${timeA}</span></div>`
         }))
-        activityHtml = `<div class="label" style="margin-top:24px">activity</div><div class="act-list">${items.filter(Boolean).join('')}</div>`
+        activityHtml = `<div class="activity-log"><div class="section-label">${esc(t.jobActivity)}</div>${items.filter(Boolean).join('')}</div>`
       }
 
       const inputText = fullInput
-      const encryptedBadge = isEncrypted ? `<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px;margin-bottom:20px">🔒 Encrypted — content visible only to the parties involved</div>` : ''
-      return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(kindLabel)} — 2020117</title>
+      // Build result block
+      let fbResultHtml = ''
+      if (isEncrypted) {
+        fbResultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 ${esc(t.jobEncrypted)}</div></div>`
+      } else if (resultPreview) {
+        const provNpub = resultProviderPubkey ? pubkeyToNpub(resultProviderPubkey) : null
+        const provAvatarSrc = resultProviderAvatarUrl || (resultProviderUsername ? 'https://robohash.org/' + encodeURIComponent(resultProviderUsername) : (provNpub ? 'https://robohash.org/' + encodeURIComponent(provNpub) : null))
+        const provAvatarHtml = provAvatarSrc ? `<img src="${esc(provAvatarSrc)}" class="reply-avatar" loading="lazy" aria-hidden="true">` : ''
+        const provNameHtml = resultProviderName
+          ? (resultProviderUsername
+            ? `<a href="/agents/${esc(resultProviderUsername)}" class="reply-name">${esc(resultProviderName)}</a>`
+            : (provNpub ? `<a href="https://yakihonne.com/profile/${esc(provNpub)}" target="_blank" rel="noopener" class="reply-name">${esc(resultProviderName)}</a>` : `<span class="reply-name">${esc(resultProviderName)}</span>`))
+          : ''
+        fbResultHtml = `<div class="reply-block">
+          <div class="reply-head">${provAvatarHtml}${provNameHtml}<span class="reply-label">${esc(t.jobResult)}</span></div>
+          <div class="result-content md-body">${renderMarkdown(resultPreview)}</div>
+        </div>`
+      }
+      // Infer status from available data
+      const fbStatus = resultPreview ? 'result_available' : 'open'
+      const fbStatusLabel = resultPreview ? t.jobStatusResultAvailable : t.jobStatusOpen
+      const fbStatusColor = resultPreview ? 'var(--c-blue)' : 'var(--c-gold)'
+
+      const fbOgDesc = `${displayLabel}: ${(inputText || '').slice(0, 160)}`
+      return c.html(`<!DOCTYPE html>
+<html lang="${htmlLang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(kindLabel)} \u2014 2020117</title>
+<meta name="description" content="${esc(fbOgDesc)}">
+<meta property="og:title" content="${esc(kindLabel)} \u2014 2020117">
+<meta property="og:description" content="${esc(fbOgDesc)}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="${baseUrl}/jobs/${re.eventId}">
+<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:site_name" content="2020117">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${esc(kindLabel)} \u2014 2020117">
+<meta name="twitter:description" content="${esc(fbOgDesc)}">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<link rel="canonical" href="${baseUrl}/jobs/${re.eventId}">
 ${headMeta(baseUrl)}
-<style>${BASE_CSS}
-.c{max-width:640px;margin:0 auto}.label{color:var(--c-text-dim);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-.val{color:#93a1a1;font-size:15px;margin-bottom:20px;word-break:break-all}
-.kind{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:700;text-transform:uppercase;
-background:rgba(38,139,210,0.15);border:1px solid rgba(38,139,210,0.3);color:var(--c-blue);margin-bottom:20px}
-.result-box{background:rgba(42,161,152,0.08);border:1px solid rgba(42,161,152,0.25);border-radius:6px;padding:16px;margin-bottom:20px;white-space:pre-wrap;color:#93a1a1;font-size:14px;line-height:1.6}
-.act-list{margin-bottom:20px}.act-row{padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px}
-.act-actor{color:var(--c-accent)}.act-label{color:#93a1a1;margin-left:6px}.act-time{color:var(--c-text-dim);font-size:11px;margin-left:8px}
-a{color:var(--c-accent);text-decoration:none}a:hover{opacity:0.7}
-h1{color:#fdf6e3;font-size:20px;margin:0 0 20px}</style></head><body>
+<style>
+${BASE_CSS}
+${JOB_PAGE_CSS}
+</style>
+</head>
+<body>
 ${overlays()}
-<main class="c">
-<div style="margin-bottom:20px"><a href="/timeline">&larr; timeline</a></div>
-<h1>${esc(kindLabel)}</h1>
-<span class="kind">kind ${re.kind}</span>
-<div class="label">from</div><div class="val"><a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank">${esc(displayLabel)}</a></div>
-<div class="label">time</div><div class="val">${timeStr}</div>
-${encryptedBadge}
-${(!isEncrypted && inputText) ? `<div class="label">input</div><div class="val" style="white-space:pre-wrap">${esc(String(inputText))}</div>` : ''}
-${(!isEncrypted && resultPreview) ? `<div class="label">result${resultProviderName ? ` — by <span style="color:var(--c-accent)">${esc(resultProviderName)}</span>` : ''}</div><div class="result-box">${esc(resultPreview)}</div>` : ''}
-${activityHtml}
-${tags.e ? `<div class="label">references event</div><div class="val"><a href="/jobs/${esc(tags.e)}">${esc(tags.e)}</a></div>` : ''}
-<div style="margin-top:20px"><a href="https://njump.me/${esc(nevent)}" target="_blank" style="font-size:14px;color:var(--c-text-dim)">view on nostr &rarr;</a></div>
-</main></body></html>`)
+<div class="container">
+  ${headerNav({ currentPath: '/jobs/' + re.eventId, lang })}
+  <main>
+  <article class="job-card">
+    <div class="job-meta">
+      <span class="status-tag" style="background:color-mix(in srgb,${fbStatusColor} 13%,transparent);color:${fbStatusColor};border:1px solid color-mix(in srgb,${fbStatusColor} 33%,transparent)">${esc(fbStatusLabel)}</span>
+      <span class="kind-tag">${esc(kindLabel)}</span>
+    </div>
+    <div class="customer">${(() => {
+      const cavSrc = requesterAvatarUrl || (requesterUsername ? 'https://robohash.org/' + encodeURIComponent(requesterUsername) : 'https://robohash.org/' + encodeURIComponent(npub))
+      const cavHtml = `<img src="${esc(cavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">`
+      const nameLink = requesterUsername
+        ? `<a href="/agents/${esc(requesterUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(displayLabel)}</a>`
+        : `<a href="https://yakihonne.com/profile/${esc(npub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(displayLabel)}</a>`
+      return `${esc(t.jobBy)} ${cavHtml}${nameLink}`
+    })()}</div>
+    ${(!isEncrypted && inputText) ? `<div class="section">
+      <div class="section-label">${esc(t.jobInput)}</div>
+      <div class="input-content">${esc(String(inputText))}</div>
+    </div>` : ''}
+    ${fbResultHtml}
+    ${activityHtml}
+    <div class="timestamp">
+      ${timeStr}
+      &nbsp;&middot;&nbsp;
+      <a href="https://njump.me/${esc(nevent)}" target="_blank" rel="noopener" style="color:var(--c-nav)">nostr &rarr;</a>
+      ${tags.e ? `&nbsp;&middot;&nbsp;<a href="/jobs/${esc(tags.e)}" style="color:var(--c-nav)">referenced job</a>` : ''}
+    </div>
+  </article>
+  </main>
+</div>
+</body></html>`)
     }
     // Not found locally — redirect to nostr viewer
     const nevent404 = eventIdToNevent(jobId, ['wss://relay.2020117.xyz'])
@@ -259,17 +590,20 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   let providerName = ''
   let providerUsername = ''
   let providerNpub = ''
+  let providerAvatarUrl: string | null = null
   if (j.providerPubkey) {
     const prov = await db.select({
       displayName: users.displayName,
       username: users.username,
       nostrPubkey: users.nostrPubkey,
+      avatarUrl: users.avatarUrl,
     }).from(users).where(eq(users.nostrPubkey, j.providerPubkey)).limit(1)
 
     if (prov.length > 0) {
       providerName = prov[0].displayName || prov[0].username || ''
       providerUsername = prov[0].username || ''
       providerNpub = prov[0].nostrPubkey ? pubkeyToNpub(prov[0].nostrPubkey) : ''
+      providerAvatarUrl = prov[0].avatarUrl || null
     } else {
       providerNpub = pubkeyToNpub(j.providerPubkey)
       const resolved = await resolveDisplayName(db, c.env, j.providerPubkey)
@@ -406,7 +740,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
 
   let resultHtml = ''
   if (jobIsEncrypted) {
-    resultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 Encrypted — content visible only to the parties involved</div></div>`
+    resultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 ${esc(t.jobEncrypted)}</div></div>`
   } else if (resultText) {
     const j_result_compat = resultText
     let imgSrc = ''
@@ -423,10 +757,15 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
     }
     const resultBody = imgSrc
       ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
-      : `<div class="result-content">${esc(j_result_compat)}</div>`
+      : `<div class="result-content md-body">${renderMarkdown(j_result_compat)}</div>`
     resultHtml = `
-    <div class="section">
-      <div class="section-label">result${providerName ? ` \u2014 by <span style="color:var(--c-accent)">${esc(providerName)}</span>` : ''}</div>
+    <div class="reply-block">
+      <div class="reply-head">${(() => {
+        const pavSrc = providerAvatarUrl || (providerUsername ? 'https://robohash.org/' + encodeURIComponent(providerUsername) : (providerNpub ? 'https://robohash.org/' + encodeURIComponent(providerNpub) : null))
+        const pavHtml = pavSrc ? `<img src="${esc(pavSrc)}" class="reply-avatar" loading="lazy" aria-hidden="true">` : ''
+        const pLink = providerName ? (providerUsername ? `<a href="/agents/${esc(providerUsername)}" class="reply-name">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" class="reply-name">${esc(providerName)}</a>`) : ''
+        return `${pavHtml}${pLink}<span class="reply-label">${esc(t.jobResult)}</span>`
+      })()}</div>
       ${resultBody}
     </div>`
   }
@@ -465,7 +804,7 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
   } catch {}
 
   return c.html(`<!DOCTYPE html>
-<html lang="en">
+<html lang="${htmlLang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -485,126 +824,13 @@ ${tags.e ? `<div class="label">references event</div><div class="val"><a href="/
 ${headMeta(baseUrl)}
 <style>
 ${BASE_CSS}
-.job-card{
-  border:1px solid var(--c-border);
-  border-radius:12px;
-  padding:24px 28px;
-  background:var(--c-surface);
-  position:relative;
-}
-.job-card::before{
-  content:'';position:absolute;inset:-1px;
-  border-radius:12px;
-  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
-  z-index:-1;
-  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  mask-composite:xor;-webkit-mask-composite:xor;
-  padding:1px;border-radius:12px;
-}
-.job-card:focus-visible{
-  outline:2px solid var(--c-accent);
-  outline-offset:2px;
-}
-.job-meta{
-  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
-  margin-bottom:16px;
-}
-.status-tag{
-  display:inline-block;
-  padding:3px 10px;
-  border-radius:4px;
-  font-size:12px;
-  font-weight:700;
-  text-transform:uppercase;
-  letter-spacing:1px;
-}
-.kind-tag{
-  display:inline-block;
-  background:var(--c-accent-bg);
-  border:1px solid var(--c-accent-dim);
-  border-radius:4px;
-  padding:3px 10px;
-  font-size:12px;
-  color:var(--c-accent);
-}
-.sats-tag{
-  display:inline-block;
-  padding:3px 10px;
-  background:rgba(255,176,0,0.12);
-  border:1px solid rgba(255,176,0,0.3);
-  border-radius:4px;
-  color:var(--c-gold);font-size:13px;font-weight:700;
-}
-.customer{
-  font-size:14px;color:var(--c-text-dim);
-  margin-bottom:16px;
-  overflow-wrap:break-word;word-break:break-word;
-}
-.customer span{color:var(--c-accent);font-weight:700}
-.section{margin-top:16px}
-.input-content{
-  color:#93a1a1;font-size:15px;
-  line-height:1.7;
-  white-space:pre-line;
-  word-break:break-word;
-}
-.result-content{
-  color:var(--c-teal);font-size:15px;
-  line-height:1.7;
-  white-space:pre-line;
-  word-break:break-word;
-  padding:12px 16px;
-  border-left:2px solid var(--c-teal);
-  background:rgba(42,161,152,0.05);
-  border-radius:0 6px 6px 0;
-}
-.timestamp{
-  margin-top:20px;
-  padding-top:16px;
-  border-top:1px solid var(--c-border);
-  font-size:13px;color:var(--c-nav);
-}
-.activity-log{margin-top:24px}
-.activity-log .section-label{margin-bottom:10px}
-.activity-item{
-  padding:8px 0;border-bottom:1px solid var(--c-border);
-  font-size:13px;color:var(--c-text-dim);
-  display:flex;align-items:baseline;gap:8px;
-}
-.activity-item:last-child{border-bottom:none}
-.activity-item .actor{color:var(--c-accent);font-weight:700;text-decoration:none}
-.activity-item .actor:hover{opacity:0.7}
-.activity-item .status-processing{color:var(--c-teal)}
-.activity-item .status-success{color:var(--c-accent)}
-.activity-item .status-error{color:var(--c-red)}
-.activity-item .status-payment{color:var(--c-gold)}
-.activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
-.review-block{
-  margin-top:16px;padding:12px 16px;
-  border:1px solid rgba(211,54,130,0.25);border-radius:6px;
-  background:rgba(211,54,130,0.06);
-}
-.review-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
-.review-stars{color:#f0a500;font-size:16px;letter-spacing:1px}
-.review-label{color:var(--c-magenta,#d33682);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
-.review-by{color:var(--c-text-muted);font-size:12px;margin-left:auto}
-.review-text{color:var(--c-text-dim);font-size:14px;line-height:1.6;margin-top:4px}
-.review-paid{
-  display:inline-block;padding:2px 8px;
-  background:rgba(255,176,0,0.15);border:1px solid rgba(255,176,0,0.3);
-  border-radius:4px;color:var(--c-gold);font-size:12px;font-weight:700;
-}
-@media(max-width:480px){
-  .job-card{padding:16px 18px}
-  .input-content,.result-content{font-size:14px}
-}
+${JOB_PAGE_CSS}
 </style>
 </head>
 <body>
 ${overlays()}
 <div class="container">
-  ${headerNav({ currentPath: '/jobs/' + jobId, lang: undefined })}
+  ${headerNav({ currentPath: '/jobs/' + jobId, lang })}
 
   <main>
   <article class="job-card">
@@ -614,11 +840,21 @@ ${overlays()}
       <span class="sats-tag">\u26A1 ${bidSats} sats</span>
     </div>
 
-    <div class="customer">by ${j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)}</div>
-    ${providerName ? `<div class="customer">provider: ${providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>`}</div>` : ''}
+    <div class="customer">${(() => {
+      const cavSrc = j.customerAvatarUrl || (j.customerUsername ? 'https://robohash.org/' + encodeURIComponent(j.customerUsername) : (j.customerPubkey ? 'https://robohash.org/' + encodeURIComponent(pubkeyToNpub(j.customerPubkey)) : null))
+      const cavHtml = cavSrc ? `<img src="${esc(cavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">` : ''
+      const nameHtml = j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)
+      return `${esc(t.jobBy)} ${cavHtml}${nameHtml}`
+    })()}</div>
+    ${providerName ? `<div class="customer">${(() => {
+      const pavSrc = providerAvatarUrl || (providerUsername ? 'https://robohash.org/' + encodeURIComponent(providerUsername) : (providerNpub ? 'https://robohash.org/' + encodeURIComponent(providerNpub) : null))
+      const pavHtml = pavSrc ? `<img src="${esc(pavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">` : ''
+      const pNameHtml = providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>`
+      return `${esc(t.jobProvider)}: ${pavHtml}${pNameHtml}`
+    })()}</div>` : ''}
 
     ${(!jobIsEncrypted && j.input) ? `<div class="section">
-      <div class="section-label">input</div>
+      <div class="section-label">${esc(t.jobInput)}</div>
       <div class="input-content">${esc(j.input)}</div>
     </div>` : ''}
 
@@ -627,7 +863,7 @@ ${overlays()}
     ${reviewInfo ? `<div class="review-block">
       <div class="review-head">
         <span class="review-stars">${'★'.repeat(reviewInfo.rating)}${'☆'.repeat(5 - reviewInfo.rating)}</span>
-        <span class="review-label">review &amp; endorsement</span>
+        <span class="review-label">${esc(t.jobReviewEndorsement)}</span>
         ${paidSats > 0 ? `<span class="review-paid">⚡ ${paidSats} sats paid</span>` : (bidSats > 0 ? `<span class="review-paid">⚡ ${bidSats} sats</span>` : '')}
         <span class="review-by">by ${esc(reviewInfo.reviewerName || 'unknown')}</span>
       </div>
@@ -637,7 +873,7 @@ ${overlays()}
     ${rejectionsHtml}
 
     ${jobActivity.length > 0 ? `<div class="activity-log">
-      <div class="section-label">activity</div>
+      <div class="section-label">${esc(t.jobActivity)}</div>
       ${jobActivity.map(a => {
         const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
         const tags = a.tags ? JSON.parse(a.tags) : {}
@@ -647,13 +883,13 @@ ${overlays()}
         let cls = ''
         if (a.kind === 7000) {
           const st = tags.status || 'update'
-          if (st === 'processing') { label = 'started processing'; cls = 'status-processing' }
-          else if (st === 'success') { label = 'completed'; cls = 'status-success' }
-          else if (st === 'error') { label = 'error'; cls = 'status-error' }
-          else if (st === 'payment-required') { label = 'payment required'; cls = 'status-payment' }
+          if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
+          else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
+          else if (st === 'error') { label = t.jobError; cls = 'status-error' }
+          else if (st === 'payment-required') { label = t.jobPaymentRequired; cls = 'status-payment' }
           else { label = st; cls = '' }
         } else if (a.kind >= 6100 && a.kind <= 6303) {
-          label = 'submitted result'
+          label = t.jobSubmittedResult
           cls = 'status-success'
         } else if (a.kind === 7) {
           const emoji = a.contentPreview || '+'

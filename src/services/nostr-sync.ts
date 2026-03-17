@@ -467,9 +467,9 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
             .from(relayEvents)
             .where(and(
               eq(relayEvents.pubkey, pubkey),
-              sql`(${relayEvents.kind} >= 5000 AND ${relayEvents.kind} <= 5999) OR
+              sql`((${relayEvents.kind} >= 5000 AND ${relayEvents.kind} <= 5999) OR
                   (${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999) OR
-                  ${relayEvents.kind} IN (7000, 30333, 31990)`,
+                  ${relayEvents.kind} IN (7000, 30333, 31990))`,
             ))
             .limit(1)
           if (hasDvmActivity.length === 0) {

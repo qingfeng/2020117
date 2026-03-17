@@ -1595,20 +1595,9 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
       limit: 200,
     })
 
-    // Cache known user pubkeys for social-kind filtering (avoid N+1 queries)
-    const knownPubkeys = new Set<string>()
-    const knownRows = await db.select({ nostrPubkey: users.nostrPubkey }).from(users).where(isNotNull(users.nostrPubkey))
-    for (const row of knownRows) { if (row.nostrPubkey) knownPubkeys.add(row.nostrPubkey) }
-
-    // Social kinds: only index from pubkeys with a user record (registered or shadow DVM users)
-    const SOCIAL_KINDS = new Set([1, 6, 7, 30023])
-
     for (const event of events) {
       if (!verifyEvent(event)) continue
       if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
-
-      // Skip social content from unknown pubkeys — DVM/protocol events always pass
-      if (SOCIAL_KINDS.has(event.kind) && !knownPubkeys.has(event.pubkey)) continue
 
       // Upsert (skip if exists)
       try {

@@ -395,28 +395,45 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
     }
   }
 
-  // --- Phase B: auto-create users from external_dvm Kind 0 ---
+  // --- Phase B: auto-create users from any Kind 0 published to our relay ---
+  // Gate: the relay already enforces POW >= 20 for Kind 0 (social kinds).
+  // Any Kind 0 that made it into relay_events paid the entry cost — auto-register them.
   try {
-    const extPubkeys = await db
-      .selectDistinct({ pubkey: externalDvms.pubkey })
-      .from(externalDvms)
+    const PUBKEY_BLACKLIST = new Set([
+      '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798', // secp256k1 generator point (nak test key)
+    ])
 
-    // Filter out pubkeys already in user table (check ALL users, not just sync-enabled)
+    // Incremental: only process Kind 0s newer than last run
+    const sinceKey = 'phase_b_kind0_last_ts'
+    const sinceStr = env.KV ? await env.KV.get(sinceKey) : null
+    const since = sinceStr ? parseInt(sinceStr) : 0
+
+    const kind0Rows = await db
+      .selectDistinct({ pubkey: relayEvents.pubkey, eventCreatedAt: relayEvents.eventCreatedAt })
+      .from(relayEvents)
+      .where(and(eq(relayEvents.kind, 0), sql`${relayEvents.eventCreatedAt} > ${since}`))
+      .orderBy(relayEvents.eventCreatedAt)
+      .limit(50)
+
+    if (kind0Rows.length === 0) return
+
+    // Filter out pubkeys already in user table
     const allUserPubkeys = await db
       .select({ nostrPubkey: users.nostrPubkey })
       .from(users)
       .where(isNotNull(users.nostrPubkey))
     const existingPubkeys = new Set(allUserPubkeys.map(u => u.nostrPubkey!))
 
-    const missingPubkeys = extPubkeys
+    const missingPubkeys = kind0Rows
       .map(r => r.pubkey)
-      .filter(pk => !existingPubkeys.has(pk))
+      .filter(pk => !existingPubkeys.has(pk) && !PUBKEY_BLACKLIST.has(pk))
 
-    if (missingPubkeys.length === 0) return
+    let maxTs = since
+    for (const r of kind0Rows) { if (r.eventCreatedAt > maxTs) maxTs = r.eventCreatedAt }
 
-    console.log(`[Nostr Metadata] Phase B: ${missingPubkeys.length} external_dvm pubkeys without user record`)
+    console.log(`[Nostr Metadata] Phase B: ${missingPubkeys.length} new Kind 0 pubkeys to register (since ${since})`)
 
-    // Fetch Kind 0 from relay in batches
+    // Fetch full Kind 0 events from relay (need picture/lud16 not stored in content_preview)
     for (let i = 0; i < missingPubkeys.length; i += BATCH_SIZE) {
       const batch = missingPubkeys.slice(i, i + BATCH_SIZE)
 
@@ -424,15 +441,9 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       const seenIds = new Set<string>()
       for (const relay of relayUrls) {
         try {
-          const result = await fetchEventsFromRelay(relay, {
-            kinds: [0],
-            authors: batch,
-          })
+          const result = await fetchEventsFromRelay(relay, { kinds: [0], authors: batch })
           for (const e of result.events) {
-            if (!seenIds.has(e.id)) {
-              seenIds.add(e.id)
-              allEvents.push(e)
-            }
+            if (!seenIds.has(e.id)) { seenIds.add(e.id); allEvents.push(e) }
           }
           if (allEvents.length >= batch.length) break
         } catch (e) {
@@ -444,44 +455,15 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       const latestByPubkey = new Map<string, NostrEvent>()
       for (const ev of allEvents) {
         const existing = latestByPubkey.get(ev.pubkey)
-        if (!existing || ev.created_at > existing.created_at) {
-          latestByPubkey.set(ev.pubkey, ev)
-        }
+        if (!existing || ev.created_at > existing.created_at) latestByPubkey.set(ev.pubkey, ev)
       }
 
       for (const [pubkey, event] of latestByPubkey) {
         try {
           if (!verifyEvent(event)) continue
 
-          // Blacklist: well-known test/garbage pubkeys that must never get user records.
-          // 79be667e... = secp256k1 generator point (privkey=1), used by nak and other test tools.
-          const PUBKEY_BLACKLIST = new Set([
-            '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
-          ])
-          if (PUBKEY_BLACKLIST.has(pubkey)) continue
-
-          // Only create user records for DVM participants (agents with actual job activity).
-          // 2020117.xyz domain users are already in the DB from registration — no need to create them here.
-          // This prevents random bots/external agents from getting auto-registered and bypassing POW.
-          const hasDvmActivity = await db.select({ id: relayEvents.id })
-            .from(relayEvents)
-            .where(and(
-              eq(relayEvents.pubkey, pubkey),
-              sql`((${relayEvents.kind} >= 5000 AND ${relayEvents.kind} <= 5999) OR
-                  (${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999) OR
-                  ${relayEvents.kind} IN (7000, 30333, 31990))`,
-            ))
-            .limit(1)
-          if (hasDvmActivity.length === 0) {
-            continue  // Not a DVM participant — skip
-          }
-
           let meta: { name?: string; about?: string; picture?: string; lud16?: string }
-          try {
-            meta = JSON.parse(event.content)
-          } catch {
-            continue
-          }
+          try { meta = JSON.parse(event.content) } catch { continue }
 
           const rawName = (meta.name || '').trim()
           const baseName = rawName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
@@ -502,22 +484,21 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
             updatedAt: now,
           })
 
-          // Add to map so Phase A picks them up next Cron cycle
           pubkeyToUser.set(pubkey, {
-            id: userId,
-            nostrPubkey: pubkey,
-            displayName: rawName || null,
-            bio: meta.about || null,
-            avatarUrl: meta.picture || null,
-            lightningAddress: meta.lud16 || null,
+            id: userId, nostrPubkey: pubkey,
+            displayName: rawName || null, bio: meta.about || null,
+            avatarUrl: meta.picture || null, lightningAddress: meta.lud16 || null,
           })
 
-          console.log(`[Nostr Metadata] Created user ${username} from Kind 0 (pubkey=${pubkey.slice(0, 8)}...)`)
+          console.log(`[Nostr Metadata] Phase B: registered ${username} from Kind 0 (pubkey=${pubkey.slice(0, 8)}...)`)
         } catch (e) {
           console.error(`[Nostr Metadata] Phase B failed for pubkey ${pubkey.slice(0, 8)}:`, e)
         }
       }
     }
+
+    // Advance watermark
+    if (maxTs > since && env.KV) await env.KV.put(sinceKey, String(maxTs))
   } catch (e) {
     console.error('[Nostr Metadata] Phase B failed:', e)
   }

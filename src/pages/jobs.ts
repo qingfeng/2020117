@@ -329,6 +329,7 @@ router.get('/jobs/:id', async (c) => {
     input: dvmJobs.input,
     inputType: dvmJobs.inputType,
     result: dvmJobs.result,
+    resultEventId: dvmJobs.resultEventId,
     params: dvmJobs.params,
     bidMsats: dvmJobs.bidMsats,
     priceMsats: dvmJobs.priceMsats,
@@ -729,14 +730,24 @@ ${overlays()}
   const localTime = (iso: string) => `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace('T', ' '))}</time>`
 
   // Build result section
-  // If dvmJobs.result is null (external agent not tracked by platform),
   const jobIsEncrypted = j.inputType === 'encrypted'
 
-  // fall back to the 6xxx result event content from relayEvents
-  const resultText = jobIsEncrypted ? null : (j.result || (() => {
-    const resultEvent = jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)
-    return resultEvent?.contentPreview || null
-  })())
+  // Fetch full result from relay using result_event_id (DB may have truncated content_preview)
+  let resultText: string | null = null
+  if (!jobIsEncrypted) {
+    const resultEventId = j.resultEventId || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.eventId || null
+    if (resultEventId) {
+      try {
+        const { fetchEventsFromRelay: fer } = await import('../services/relay-io')
+        const _relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+        const { events: rEvs } = await fer(_relayUrl, { ids: [resultEventId], limit: 1 })
+        if (rEvs.length > 0) resultText = rEvs[0].content || null
+      } catch { /* fall back to DB */ }
+    }
+    if (!resultText) {
+      resultText = j.result || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.contentPreview || null
+    }
+  }
 
   let resultHtml = ''
   if (jobIsEncrypted) {

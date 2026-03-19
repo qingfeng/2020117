@@ -145,6 +145,14 @@ ${BASE_CSS}
 }
 .ev-request-ctx .req-label{color:var(--c-blue);font-weight:700;font-size:11px;text-transform:uppercase;margin-right:6px}
 .ev-request-ctx .req-by{color:var(--c-text-muted);font-size:11px}
+#new-banner{
+  display:none;cursor:pointer;
+  padding:8px 16px;margin-bottom:8px;
+  background:rgba(0,255,200,0.08);border:1px solid rgba(0,255,200,0.25);border-radius:4px;
+  color:var(--c-accent);font-size:13px;text-align:center;
+  animation:fadeIn 0.3s ease forwards;
+}
+#new-banner:hover{background:rgba(0,255,200,0.14)}
 #pager{margin-top:28px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;justify-content:center;gap:16px;align-items:center}
 .pg-btn{
   background:none;border:1px solid #2a2a2a;color:var(--c-text-dim);
@@ -236,6 +244,7 @@ ${overlays()}
     <button class="filter-btn" data-kind="activity:p2p">🌐 ${t.tabP2p}</button>
   </div>
   <div id="desc-box" class="desc-box" style="display:none"></div>
+  <div id="new-banner" role="button" tabindex="0" aria-label="new events available, click to refresh"></div>
   <div id="feed" aria-live="polite"><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px;margin-bottom:8px"></div><div class="skeleton" style="height:40px"></div></div>
   <div id="pager" style="display:none">
     <button id="prev" class="pg-btn" aria-label="previous page">&larr; prev</button>
@@ -278,6 +287,7 @@ function kindIcon(k){
 }
 let curKind='';
 let curPage=1;
+let lastFirstId=null;
 
 function updateUrl(){
   const u=new URL(location.href);
@@ -501,6 +511,7 @@ function showPager(meta){
 }
 
 async function loadPage(p){
+  document.getElementById('new-banner').style.display='none';
   const feed=document.getElementById('feed');
   try{
     const isActivity=curKind.startsWith('activity:');
@@ -512,6 +523,7 @@ async function loadPage(p){
       if(!r.ok){feed.innerHTML='<div class="error-msg"><span>Failed to load ('+r.status+')</span><button onclick="loadPage('+p+')">retry</button></div>';return}
       data=await r.json();
       curPage=data.meta?.current_page||p;
+      if(p===1&&data.items?.length)lastFirstId=data.items[0].time;
       renderActivity(data.items||[],data.meta||{});
     }else{
       url='${baseUrl}/api/relay/events?page='+p+'&limit=50';
@@ -520,6 +532,7 @@ async function loadPage(p){
       if(!r.ok){feed.innerHTML='<div class="error-msg"><span>Failed to load ('+r.status+')</span><button onclick="loadPage('+p+')">retry</button></div>';return}
       data=await r.json();
       curPage=data.meta?.current_page||p;
+      if(p===1&&data.events?.length)lastFirstId=data.events[0].event_id;
       renderRelayEvents(data.events||[],data.meta||{});
     }
     updateUrl();
@@ -529,6 +542,34 @@ async function loadPage(p){
     feed.innerHTML='<div class="error-msg"><span>Network error</span><button onclick="loadPage('+p+')">retry</button></div>';
   }
 }
+async function checkForNew(){
+  if(curPage!==1||!lastFirstId)return;
+  try{
+    const isActivity=curKind.startsWith('activity:');
+    let url,r,data;
+    if(isActivity){
+      url='${baseUrl}/api/activity?page=1&limit=5&type='+curKind.split(':')[1];
+      r=await fetch(url);if(!r.ok)return;
+      data=await r.json();
+      const items=data.items||[];
+      if(items.length&&items[0].time!==lastFirstId)showNewBanner();
+    }else{
+      url='${baseUrl}/api/relay/events?page=1&limit=5';
+      if(curKind)url+='&kind='+curKind;
+      r=await fetch(url);if(!r.ok)return;
+      data=await r.json();
+      const evs=data.events||[];
+      if(evs.length&&evs[0].event_id!==lastFirstId)showNewBanner();
+    }
+  }catch(e){}
+}
+function showNewBanner(){
+  const b=document.getElementById('new-banner');
+  b.textContent='\\u2191 ${t.newActivity} \\u00b7 ${t.tapToRefresh}';
+  b.style.display='block';
+}
+setInterval(checkForNew,30000);
+document.getElementById('new-banner').onclick=function(){loadPage(1)};
 document.getElementById('prev').onclick=function(){if(curPage>1)loadPage(curPage-1)};
 document.getElementById('next').onclick=function(){loadPage(curPage+1)};
 document.getElementById('feed').addEventListener('click',function(ev){var t=ev.target;while(t&&t!==this){if(t.dataset&&t.dataset.href){if(ev.target.tagName==='A')return;location.href=t.dataset.href;return}t=t.parentElement}});

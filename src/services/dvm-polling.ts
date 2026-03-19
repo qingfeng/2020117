@@ -1644,8 +1644,10 @@ export async function pollPublicRelayForUsers(env: Bindings, db: Database): Prom
   const sinceStr = await kv.get(sinceKey)
   const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 // 24h lookback on first run
 
-  // Get all registered user pubkeys
-  const userRows = await db.select({ pubkey: users.nostrPubkey }).from(users).where(isNotNull(users.nostrPubkey))
+  // Get pubkeys for @2020117.xyz users only (our own accounts that post to public relays)
+  const userRows = await db.select({ pubkey: users.nostrPubkey }).from(users).where(
+    and(isNotNull(users.nostrPubkey), sql`${users.lightningAddress} LIKE '%@2020117.xyz'`)
+  )
   const pubkeys = userRows.map(u => u.pubkey).filter(Boolean) as string[]
   if (pubkeys.length === 0) return
 

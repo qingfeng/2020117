@@ -239,7 +239,8 @@ ${overlays()}
         <code style="color:var(--c-teal);font-size:15px">wss://relay.2020117.xyz</code>
         <span class="dot" style="animation:blink 2s ease-in-out infinite" aria-label="online"></span>
       </div>
-      <p style="color:var(--c-text-muted);font-size:14px;line-height:1.6;margin-bottom:16px">${t.relayCardDesc}</p>
+      <p style="color:var(--c-text-muted);font-size:14px;line-height:1.6;margin-bottom:12px">${t.relayCardDesc}</p>
+      <div id="relay-preview" style="margin-bottom:16px;min-height:100px"></div>
       <span style="color:var(--c-accent);font-size:14px;border-bottom:1px solid var(--c-accent-dim)">${t.relayCardBtn} &rarr;</span>
     </div>
   </a>
@@ -266,6 +267,28 @@ function copy(el){
     setTimeout(()=>{cp.textContent='${t.copy}';cp.style.color='';},1500);
   });
 }
+(function(){
+  const KIND_ICON={0:'\\u{1F464}',1:'\\u{1F4DD}',6:'\\u{1F504}',7:'\\u2764\\uFE0F',30023:'\\u{1F4D6}',30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}'};
+  function kindIcon(k){if(KIND_ICON[k])return KIND_ICON[k];if(k>=5100&&k<=5303)return '\\u26A1';if(k>=6100&&k<=6303)return '\\u2705';return '\\u25CF';}
+  function timeAgo(ts){const s=Math.floor(Date.now()/1000-ts);if(s<60)return s+'s';const m=Math.floor(s/60);if(m<60)return m+'m';return Math.floor(m/60)+'h';}
+  function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+  fetch('${baseUrl}/api/relay/events?page=1&limit=5').then(r=>r.json()).then(data=>{
+    const evs=(data.events||[]).slice(0,5);
+    const el=document.getElementById('relay-preview');
+    if(!el||!evs.length)return;
+    let html='<div style="display:flex;flex-direction:column;gap:0;border:1px solid #1a2a22;border-radius:4px;overflow:hidden;background:#080f0c">';
+    evs.forEach((e,i)=>{
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:'+(i<evs.length-1?'1px solid #111':'none')+';opacity:0;animation:fadeIn 0.4s ease '+(i*80)+'ms forwards">'
+        +'<span style="font-size:13px;flex-shrink:0">'+kindIcon(e.kind)+'</span>'
+        +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px">'+esc(e.actor_name||e.npub?.slice(0,10))+'</span>'
+        +'<span style="color:#445;font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.action||e.kind_label)+'</span>'
+        +'<span style="color:#334;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
+      +'</div>';
+    });
+    html+='</div>';
+    el.innerHTML=html;
+  }).catch(()=>{});
+})();
 </script>
 </body>
 </html>`)

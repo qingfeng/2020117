@@ -272,32 +272,61 @@ function copy(el){
   function kindIcon(k){if(KIND_ICON[k])return KIND_ICON[k];if(k>=5100&&k<=5303)return '\\u26A1';if(k>=6100&&k<=6303)return '\\u2705';return '\\u25CF';}
   function timeAgo(ts){const s=Math.floor(Date.now()/1000-ts);if(s<60)return s+'s';const m=Math.floor(s/60);if(m<60)return m+'m';return Math.floor(m/60)+'h';}
   function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-  fetch('${baseUrl}/api/relay/events?page=1&limit=5').then(r=>r.json()).then(data=>{
-    const evs=(data.events||[]).slice(0,5);
+  function makeRow(e,border){
+    const name=(e.actor_name||e.npub||'').replace(/\s*[\u{1F300}-\u{1FAFF}\u2600-\u27BF]+/gu,'').trim().slice(0,18);
+    const avatarSrc=e.avatar_url||(e.username?'https://robohash.org/'+encodeURIComponent(e.username):null);
+    const avatarHtml=avatarSrc
+      ?'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background-image:url('+esc(avatarSrc)+');background-size:cover;background-position:center;background-color:#1a2a1e"></div>'
+      :'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:#1a2a1e;display:flex;align-items:center;justify-content:center;font-size:14px">'+kindIcon(e.kind)+'</div>';
+    const snippet=e.detail||e.action||'';
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:10px;padding:9px 12px;border-bottom:'+(border?'1px solid #0e1a14':'none')+';transition:opacity 0.4s,max-height 0.4s;overflow:hidden;max-height:80px;opacity:1';
+    row.innerHTML=avatarHtml
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px">'
+          +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">'+esc(name)+'</span>'
+          +'<span style="color:#2a4a38;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">'+esc(e.action||e.kind_label)+'</span>'
+          +'<span style="color:#1e3028;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
+        +'</div>'
+        +(snippet?'<div style="color:#3a5a48;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(snippet.slice(0,80))+'</div>':'')
+      +'</div>';
+    return row;
+  }
+  fetch('${baseUrl}/api/relay/events?page=1&limit=15').then(r=>r.json()).then(data=>{
+    const evs=data.events||[];
     const el=document.getElementById('relay-preview');
     if(!el||!evs.length)return;
-    let html='<div style="display:flex;flex-direction:column;border:1px solid #1a2a22;border-radius:6px;overflow:hidden;background:#060d0a">';
-    evs.forEach((e,i)=>{
-      const name=(e.actor_name||e.npub||'').replace(/\\s*[\\u{1F300}-\\u{1FAFF}\\u2600-\\u27BF]+/gu,'').trim().slice(0,18);
-      const avatarSrc=e.avatar_url||(e.username?'https://robohash.org/'+encodeURIComponent(e.username):null);
-      const avatarHtml=avatarSrc
-        ?'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background-image:url('+esc(avatarSrc)+');background-size:cover;background-position:center;background-color:#1a2a1e"></div>'
-        :'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:#1a2a1e;display:flex;align-items:center;justify-content:center;font-size:14px">'+kindIcon(e.kind)+'</div>';
-      const snippet=e.detail||e.action||'';
-      html+='<div style="display:flex;gap:10px;padding:9px 12px;border-bottom:'+(i<evs.length-1?'1px solid #0e1a14':'none')+'">'
-        +avatarHtml
-        +'<div style="flex:1;min-width:0">'
-          +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px">'
-            +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">'+esc(name)+'</span>'
-            +'<span style="color:#2a4a38;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">'+esc(e.action||e.kind_label)+'</span>'
-            +'<span style="color:#1e3028;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
-          +'</div>'
-          +(snippet?'<div style="color:#3a5a48;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(snippet.slice(0,80))+'</div>':'')
-        +'</div>'
-      +'</div>';
-    });
-    html+='</div>';
-    el.innerHTML=html;
+    const wrap=document.createElement('div');
+    wrap.style.cssText='display:flex;flex-direction:column;border:1px solid #1a2a22;border-radius:6px;overflow:hidden;background:#060d0a';
+    const visible=5;
+    let idx=Math.min(visible,evs.length);
+    evs.slice(0,idx).forEach((e,i)=>wrap.appendChild(makeRow(e,i<visible-1)));
+    el.appendChild(wrap);
+    if(evs.length<=visible)return;
+    setInterval(()=>{
+      if(idx>=evs.length)idx=0;
+      const first=wrap.firstElementChild;
+      if(!first)return;
+      first.style.opacity='0';
+      first.style.maxHeight='0';
+      first.style.padding='0 12px';
+      setTimeout(()=>{
+        wrap.removeChild(first);
+        // fix border on new last child
+        Array.from(wrap.children).forEach((c,i)=>{c.style.borderBottom=i<wrap.children.length-1?'1px solid #0e1a14':'none'});
+        const row=makeRow(evs[idx],false);
+        row.style.opacity='0';
+        row.style.maxHeight='0';
+        row.style.padding='0 12px';
+        wrap.appendChild(row);
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{
+          row.style.opacity='1';
+          row.style.maxHeight='80px';
+          row.style.padding='9px 12px';
+        }));
+        idx++;
+      },420);
+    },3000);
   }).catch(()=>{});
 })();
 </script>

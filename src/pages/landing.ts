@@ -276,13 +276,24 @@ function copy(el){
     const evs=(data.events||[]).slice(0,5);
     const el=document.getElementById('relay-preview');
     if(!el||!evs.length)return;
-    let html='<div style="display:flex;flex-direction:column;gap:0;border:1px solid #1a2a22;border-radius:4px;overflow:hidden;background:#080f0c">';
+    let html='<div style="display:flex;flex-direction:column;border:1px solid #1a2a22;border-radius:6px;overflow:hidden;background:#060d0a">';
     evs.forEach((e,i)=>{
-      html+='<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:'+(i<evs.length-1?'1px solid #111':'none')+'">'
-        +'<span style="font-size:13px;flex-shrink:0">'+kindIcon(e.kind)+'</span>'
-        +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px">'+esc(e.actor_name||e.npub?.slice(0,10))+'</span>'
-        +'<span style="color:#445;font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.action||e.kind_label)+'</span>'
-        +'<span style="color:#334;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
+      const name=(e.actor_name||e.npub||'').replace(/\\s*[\\u{1F300}-\\u{1FAFF}\\u2600-\\u27BF]+/gu,'').trim().slice(0,18);
+      const avatarSrc=e.avatar_url||(e.username?'https://robohash.org/'+encodeURIComponent(e.username):null);
+      const avatarHtml=avatarSrc
+        ?'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background-image:url('+esc(avatarSrc)+');background-size:cover;background-position:center;background-color:#1a2a1e"></div>'
+        :'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:#1a2a1e;display:flex;align-items:center;justify-content:center;font-size:14px">'+kindIcon(e.kind)+'</div>';
+      const snippet=e.detail||e.action||'';
+      html+='<div style="display:flex;gap:10px;padding:9px 12px;border-bottom:'+(i<evs.length-1?'1px solid #0e1a14':'none')+'">'
+        +avatarHtml
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px">'
+            +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">'+esc(name)+'</span>'
+            +'<span style="color:#2a4a38;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">'+esc(e.action||e.kind_label)+'</span>'
+            +'<span style="color:#1e3028;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
+          +'</div>'
+          +(snippet?'<div style="color:#3a5a48;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(snippet.slice(0,80))+'</div>':'')
+        +'</div>'
       +'</div>';
     });
     html+='</div>';

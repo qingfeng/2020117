@@ -278,7 +278,7 @@ function copy(el){
     if(!el||!evs.length)return;
     let html='<div style="display:flex;flex-direction:column;gap:0;border:1px solid #1a2a22;border-radius:4px;overflow:hidden;background:#080f0c">';
     evs.forEach((e,i)=>{
-      html+='<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:'+(i<evs.length-1?'1px solid #111':'none')+';opacity:0;animation:fadeIn 0.4s ease '+(i*80)+'ms forwards">'
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:'+(i<evs.length-1?'1px solid #111':'none')+'">'
         +'<span style="font-size:13px;flex-shrink:0">'+kindIcon(e.kind)+'</span>'
         +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px">'+esc(e.actor_name||e.npub?.slice(0,10))+'</span>'
         +'<span style="color:#445;font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(e.action||e.kind_label)+'</span>'

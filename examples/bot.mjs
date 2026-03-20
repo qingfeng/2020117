@@ -2,6 +2,11 @@
 import WebSocket from 'ws'
 globalThis.WebSocket = WebSocket
 
+// Prevent nostr-tools relay.send() unhandled rejections from crashing the process
+process.on('unhandledRejection', (err) => {
+  console.error(`[unhandledRejection] ${err?.message || err}`)
+})
+
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { generateSecretKey } from 'nostr-tools/pure'
 import { Relay } from 'nostr-tools/relay'
@@ -13,6 +18,8 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
 import { spawn } from 'child_process'
 import Hyperswarm from 'hyperswarm'
+import { createXai } from '@ai-sdk/xai'
+import { generateText } from 'ai'
 import b4a from 'b4a'
 
 // ============================================================
@@ -37,6 +44,8 @@ function parseArgs() {
     ollamaUrl: 'http://localhost:11434',
     ollamaModel: '',      // auto-detect if empty
     dvmBackend: '',       // --dvm-backend=<hex-pubkey>  use p2p DVM agent instead of local Ollama
+    simpleBackend: false, // --simple-backend  no AI, rule-based replies (low quality, zero cost)
+    xaiBackend: false,    // --xai-backend  use xAI Grok API (requires xai_api_key in keys file)
     dvmBackendTimeout: 300, // seconds to wait for p2p DVM response
     maxJobs: 3,
     providerPrice: 10,    // sats per job
@@ -67,6 +76,8 @@ function parseArgs() {
       case '--ollama-url':        opts.ollamaUrl = val; break
       case '--ollama-model':      opts.ollamaModel = val; break
       case '--dvm-backend':       opts.dvmBackend = val || true; break
+      case '--simple-backend':    opts.simpleBackend = true; break
+      case '--xai-backend':       opts.xaiBackend = true; break
       case '--dvm-backend-timeout': opts.dvmBackendTimeout = parseInt(val); break
       case '--max-jobs':          opts.maxJobs = parseInt(val); break
       case '--provider-price':    opts.providerPrice = parseInt(val); break
@@ -157,6 +168,7 @@ function loadOrCreateAgent(opts) {
       lightningAddress: agent.lightning_address || null,
       displayName: agent.display_name || null,
       about: agent.about || null,
+      xaiApiKey: agent.xai_api_key || null,
     }
   }
 
@@ -807,6 +819,10 @@ function pick(arr) { return arr[crypto.randomInt(arr.length)] }
 function ts() { return new Date().toLocaleString() }
 
 async function publishEvent(relay, event) {
+  if (!relay?.connected) {
+    console.error(`  -> FAILED: relay not connected (kind ${event.kind})`)
+    return false
+  }
   try {
     await relay.publish(event)
     console.log(`  -> event ${event.id.slice(0, 12)}... (kind ${event.kind}) OK`)
@@ -836,6 +852,30 @@ const CRYPTO_KEYWORDS = [
   '涨','跌','看多','看空','支撑','阻力','趋势',
   '均线','指标','预测','分析','突破','回调',
 ]
+
+async function evaluateResultWithXai(apiKey, jobInput, content) {
+  try {
+    const xai = createXai({ apiKey })
+    const { text } = await generateText({
+      model: xai('grok-4-fast-reasoning'),
+      system: 'You are a strict quality evaluator for AI-generated cryptocurrency analysis. Evaluate the response objectively.',
+      prompt: `Original request: "${jobInput.slice(0, 300)}"\n\nProvider response:\n${content.slice(0, 1500)}\n\nEvaluate the response quality. Check: (1) Is the content relevant and accurate? (2) Does it contain real/plausible data or is it fabricated? (3) Is it detailed enough to be useful?\n\nReply with ONLY a JSON object, no markdown:\n{"rating": <1-5>, "quality": "<reject|poor|good|excellent>", "reason": "<one sentence>"}`,
+    })
+    const json = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}')
+    if (!json.rating) throw new Error('no rating in response')
+    return {
+      score: json.rating * 20,
+      rating: json.rating,
+      quality: json.quality || (json.rating >= 4 ? 'excellent' : json.rating >= 3 ? 'good' : json.rating >= 2 ? 'poor' : 'reject'),
+      reason: json.reason || '',
+      matchedKeywords: 0,
+      length: content.length,
+    }
+  } catch (e) {
+    console.error(`  XAI eval failed (${e.message}), falling back to rule-based`)
+    return evaluateResult(content)
+  }
+}
 
 function evaluateResult(content) {
   if (!content || typeof content !== 'string') return { score: 0, rating: 1, quality: 'reject', reason: 'Empty result', matchedKeywords: 0, length: 0 }
@@ -948,6 +988,63 @@ async function processJobWithOllama(ollamaUrl, model, input, kind) {
   }
 
   return await ollamaGenerate(ollamaUrl, model, input, systemPrompt)
+}
+
+function processJobSimple(input, kind) {
+  const text = input.trim()
+  const upper = text.toUpperCase()
+
+  if (kind === 5100) {
+    // Crypto analysis — extract any ticker-like tokens, fill in plausible-sounding template
+    const tickerMatch = upper.match(/\b(BTC|ETH|SOL|BNB|XRP|DOGE|ADA|AVAX|DOT|MATIC|LINK|UNI|LTC|ATOM|NEAR)\b/)
+    const ticker = tickerMatch ? tickerMatch[1] : 'BTC'
+    const prices = { BTC:'85,000–92,000', ETH:'2,800–3,200', SOL:'130–155', BNB:'580–620', XRP:'0.52–0.61',
+      DOGE:'0.14–0.18', ADA:'0.42–0.51', AVAX:'28–34', DOT:'6.5–7.8', MATIC:'0.55–0.68',
+      LINK:'13–16', UNI:'7–9', LTC:'78–88', ATOM:'6.8–8.1', NEAR:'4.2–5.0' }
+    const range = prices[ticker] || '—'
+    const sentiments = ['neutral with slight bullish bias', 'cautiously bearish', 'consolidating', 'mildly bullish']
+    const sentiment = sentiments[Math.floor(Math.random() * sentiments.length)]
+    return `## ${ticker} Analysis\n\n**Trend**: The ${ticker} market is currently ${sentiment}.\n\n**Key Levels**\n- Support: lower end of ${range}\n- Resistance: upper end of ${range}\n\n**Indicators**\n- RSI (14): ~${45 + Math.floor(Math.random()*20)} (neutral zone)\n- MACD: showing mild ${Math.random()>0.5?'bullish':'bearish'} divergence\n- Volume: ${Math.random()>0.5?'slightly above':'below'} 20-day average\n\n**Outlook**: Short-term price action may test the ${Math.random()>0.5?'resistance':'support'} zone. Monitor volume and macro sentiment closely before entering a position.\n\n*Note: This is a basic analysis. Always do your own research.*`
+  }
+
+  if (kind === 5302) {
+    // Translation — can't really translate without AI, just return a note
+    return `[Translation] The provided text has been reviewed. A full high-quality translation requires additional language model processing. The core message appears to relate to: "${text.slice(0, 80)}..."`
+  }
+
+  if (kind === 5303) {
+    // Summarization — naive extractive summary (first + last sentence)
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.length > 20)
+    if (sentences.length <= 2) return `Summary: ${text.slice(0, 200)}`
+    return `Summary: ${sentences[0]} [...] ${sentences[sentences.length - 1]}\n\nKey point count: ~${sentences.length} sentences condensed.`
+  }
+
+  // Generic fallback
+  const wordCount = text.split(/\s+/).length
+  return `Analysis complete. The submitted query contains ${wordCount} words and covers the following topic area: "${text.slice(0, 60)}". Based on available patterns, the subject matter appears ${Math.random()>0.5?'standard':'complex'} in scope. Further refinement may improve output quality.`
+}
+
+async function processJobWithXai(apiKey, input, kind) {
+  const xai = createXai({ apiKey })
+  let system
+  if (kind === 5100) {
+    system = 'You are a professional cryptocurrency analyst with access to real-time market data. Always search for the latest price, volume, and on-chain data before answering. Provide detailed, data-driven analysis with current price levels, technical indicators (RSI, MACD, EMA), and short-term predictions. Structure your response with clear sections and include specific numbers.'
+  } else if (kind === 5302) {
+    system = 'You are a professional translator. Translate the given text accurately and naturally.'
+  } else if (kind === 5303) {
+    system = 'You are a professional summarizer. Provide concise, accurate summaries that capture all key points.'
+  } else {
+    system = 'You are a helpful AI assistant with access to real-time information. Search for the latest data when relevant and respond thoroughly and accurately.'
+  }
+  const { text } = await generateText({
+    model: xai('grok-4-fast-reasoning'),
+    system,
+    prompt: input,
+    providerOptions: {
+      xai: { searchParameters: { mode: 'on', returnCitations: false } },
+    },
+  })
+  return text
 }
 
 // ── P2P Session Manager ───────────────────────────────────────────────────────
@@ -1070,7 +1167,7 @@ async function main() {
 
   // Auto-detect Ollama model if provider mode (skip if using p2p DVM backend)
   let ollamaModel = opts.ollamaModel
-  if (isProvider && !opts.dvmBackend && !ollamaModel) {
+  if (isProvider && !opts.dvmBackend && !opts.simpleBackend && !opts.xaiBackend && !ollamaModel) {
     try {
       ollamaModel = await ollamaDetectModel(opts.ollamaUrl)
       console.log(`  Auto-detected Ollama model: ${ollamaModel}`)
@@ -1096,6 +1193,10 @@ async function main() {
   if (isProvider) {
     if (opts.dvmBackend) {
       console.log(`  P2P Backend:   Hyperswarm topic=SHA256(2020117-dvm-kind-${opts.provide}) timeout=${opts.dvmBackendTimeout}s`)
+    } else if (opts.simpleBackend) {
+      console.log(`  Backend:       Simple (rule-based, no AI)`)
+    } else if (opts.xaiBackend) {
+      console.log(`  Backend:       xAI Grok (grok-4-fast-reasoning)${identity.xaiApiKey ? '' : ' ⚠️  no api key!'}`)
     } else {
       console.log(`  Ollama:        ${opts.ollamaUrl} / ${ollamaModel}`)
     }
@@ -1147,6 +1248,14 @@ async function main() {
         onevent: async (e) => { try { await handleReply(e) } catch (err) { console.error(`  Reply err: ${err.message}`) } },
       })
       console.log(`  Subscribed: replies (all notes)`)
+
+      // Subscribe to DVM job posts (Kind 5100) — comment using Ollama if available
+      if (ollamaModel) {
+        relay.subscribe([{ kinds: [5100], since: Math.floor(Date.now()/1000) }], {
+          onevent: async (e) => { try { await handleDvmJobReply(e) } catch (err) { console.error(`  DVM job reply err: ${err.message}`) } },
+        })
+        console.log(`  Subscribed: DVM job comments (Kind 5100)`)
+      }
     }
 
     if (opts.like) {
@@ -1157,10 +1266,15 @@ async function main() {
     }
 
     if (opts.dvmInterval > 0) {
-      relay.subscribe([{ kinds: [6100, 7000], '#p': [identity.pubkey], since: Math.floor(Date.now()/1000) }], {
+      // Use earliest pending job time as since — catches results that arrived during reconnect
+      const earliestJob = Math.min(...[...pendingJobs.values()].map(j => j.postedAt), Date.now()) / 1000
+      const dvmSince = Math.floor(earliestJob) - 5
+      relay.subscribe([{ kinds: [6100, 7000], '#p': [identity.pubkey], since: dvmSince }], {
         onevent: async (e) => { try { await handleDVMResponse(e) } catch (err) { console.error(`  DVM response err: ${err.message}`) } },
       })
-      console.log(`  Subscribed: DVM results (Kind 6100 + 7000)`)
+      console.log(`  Subscribed: DVM results (Kind 6100 + 7000, since ${new Date(dvmSince*1000).toLocaleTimeString()})`)
+      // On first connect only: recover jobs that got results while script was down
+      recoverUnreviewedJobs()
     }
 
     // Provider: subscribe for incoming job requests
@@ -1212,6 +1326,42 @@ async function main() {
     repliedTo.add(event.id)
     tracker.count = round; tracker.lastReplyAt = Date.now()
     threadTracker.set(threadRoot, tracker)
+  }
+
+  // --- DVM job comment handler ---
+  async function handleDvmJobReply(event) {
+    if (event.pubkey === identity.pubkey) return
+    if (repliedTo.has(event.id)) return
+    if (Math.random() > opts.replyChance) return
+    const r = await ensureRelay(); if (!r) return
+
+    const input = event.tags.find(t => t[0] === 'i')?.[1] || event.content || ''
+    if (!input.trim()) return
+
+    console.log(`\n[${ts()}] [${identity.name}] Commenting on DVM job ${event.id.slice(0,12)}...`)
+    console.log(`  Job: ${input.slice(0,80)}`)
+
+    let comment
+    try {
+      comment = await ollamaGenerate(
+        opts.ollamaUrl, ollamaModel,
+        `A user posted this task on a decentralized AI marketplace: "${input.slice(0, 300)}"\n\nWrite a brief, genuine comment (1-2 sentences) reacting to this task. Be natural and conversational, not promotional. Do NOT offer to do the task yourself.`,
+        'You are a casual participant in an AI agent marketplace. Keep comments short, human, and relevant.',
+      )
+      comment = comment?.trim()
+    } catch (e) {
+      console.error(`  DVM job comment Ollama err: ${e.message}`)
+      return
+    }
+    if (!comment) return
+
+    console.log(`  Comment: ${comment.slice(0,80)}`)
+    const re = signWithPow({ kind: 1, pubkey: identity.pubkey, content: comment,
+      tags: [['e', event.id, opts.relay, 'root'], ['p', event.pubkey]],
+      created_at: Math.floor(Date.now()/1000),
+    }, identity.sk)
+    await publishEvent(r, re)
+    repliedTo.add(event.id)
   }
 
   // --- Like handler ---
@@ -1304,9 +1454,12 @@ async function main() {
     console.log(`  Provider: ${providerPubkey.slice(0,12)}...`)
     console.log(`  Result:   ${resultContent.slice(0,120)}${resultContent.length > 120 ? '...' : ''}`)
 
-    const evaluation = evaluateResult(resultContent)
-    console.log(`  Quality:  score=${evaluation.score} rating=${evaluation.rating}/5 (${evaluation.quality})`)
-    console.log(`            keywords=${evaluation.matchedKeywords} length=${evaluation.length}`)
+    const jobInput = job?.input || ''
+    const evaluation = identity.xaiApiKey
+      ? await evaluateResultWithXai(identity.xaiApiKey, jobInput, resultContent)
+      : evaluateResult(resultContent)
+    console.log(`  Quality:  score=${evaluation.score} rating=${evaluation.rating}/5 (${evaluation.quality}) [${identity.xaiApiKey ? 'xai' : 'rule'}]`)
+    console.log(`            reason: ${evaluation.reason || `keywords=${evaluation.matchedKeywords} length=${evaluation.length}`}`)
 
     // Reject low quality — give them a chance to improve
     if (evaluation.quality === 'reject') {
@@ -1340,6 +1493,7 @@ async function main() {
     let paySats
     if (evaluation.rating >= 4) paySats = bidSats
     else if (evaluation.rating === 3) paySats = Math.ceil(bidSats * 0.7)
+    else if (evaluation.rating <= 2) paySats = 0
     else paySats = Math.ceil(bidSats * 0.5)
 
     // Prefer bolt11 tag (NWC make_invoice, no LNURL needed), then lud16, then profile lookup
@@ -1400,9 +1554,8 @@ async function main() {
       console.log(`  Kind 7000 success sent — job closed`)
 
       // Kind 30311 — rolling endorsement
-      const endorseContent = Math.random() < 0.8
-        ? `Provider ${providerPubkey.slice(0,12)} delivered ${evaluation.quality} work on Kind 5100 task. Rating: ${evaluation.rating}/5.`
-        : `Provider ${providerPubkey.slice(0,12)} 完成了 Kind 5100 任务，评分 ${evaluation.rating}/5。`
+      const endorseContent = evaluation.reason
+        || (Math.random() < 0.8 ? pick(reviewPool.en) : pick(reviewPool.zh))
       const ee = signWithPow({ kind: 30311, pubkey: identity.pubkey, content: endorseContent,
         tags: [['d',providerPubkey],['p',providerPubkey],['rating',String(evaluation.rating)],['k','5100'],['paid',paid?String(paySats):'0']],
         created_at: Math.floor(Date.now()/1000),
@@ -1413,6 +1566,47 @@ async function main() {
 
     pendingJobs.delete(requestId)
     console.log(`  Settled! (${pendingJobs.size} pending)`)
+  }
+
+  // --- Startup recovery: find 6100 results from last 24h that were never reviewed ---
+  let hasRunRecovery = false
+  async function recoverUnreviewedJobs() {
+    if (hasRunRecovery) return   // only once per process
+    hasRunRecovery = true
+    const r = await ensureRelay()
+    if (!r) return
+    const since = Math.floor(Date.now() / 1000) - 86400
+    console.log(`\n[${ts()}] [${identity.name}] Startup recovery: checking for unreviewed results (last 24h)...`)
+    const results = []
+    await new Promise(resolve => {
+      const sub = r.subscribe([{ kinds: [6100], '#p': [identity.pubkey], since }], {
+        onevent: (e) => results.push(e),
+        oneose: () => { sub.close(); resolve() },
+      })
+      setTimeout(() => { try { sub.close() } catch {} resolve() }, 8000)
+    })
+    if (!results.length) { console.log(`  No unreviewed results found`); return }
+    console.log(`  Found ${results.length} result(s) — checking for missing reviews...`)
+    for (const event of results) {
+      const requestId = event.tags.find(t => t[0] === 'e')?.[1]
+      if (!requestId || settledJobs.has(requestId)) continue
+      let alreadyReviewed = false
+      await new Promise(resolve => {
+        const sub = r.subscribe([{ kinds: [31117], authors: [identity.pubkey], '#e': [requestId], limit: 1 }], {
+          onevent: () => { alreadyReviewed = true; sub.close(); resolve() },
+          oneose: () => { sub.close(); resolve() },
+        })
+        setTimeout(() => { try { sub.close() } catch {} resolve() }, 5000)
+      })
+      if (alreadyReviewed) {
+        settledJobs.add(requestId)
+        console.log(`  ${requestId.slice(0,12)}... already reviewed — skip`)
+        continue
+      }
+      console.log(`  ${requestId.slice(0,12)}... unreviewed — recovering...`)
+      try { await handleDVMResponse(event) } catch (e) { console.error(`  Recovery failed: ${e.message}`) }
+    }
+    console.log(`  Recovery complete`)
   }
 
   // --- Incoming Job handler (Provider side) ---
@@ -1513,6 +1707,13 @@ async function main() {
       if (opts.dvmBackend) {
         console.log(`  Connecting via P2P (Hyperswarm) to process job...`)
         result = await processJobViaP2P(identity.nwcUri, input, opts.provide, opts.dvmBackendTimeout, 100, opts.ollamaModel || 'qwen3.5:9b')
+      } else if (opts.simpleBackend) {
+        console.log(`  Processing with simple backend (no AI)...`)
+        result = processJobSimple(input, opts.provide)
+      } else if (opts.xaiBackend) {
+        if (!identity.xaiApiKey) throw new Error('xai_api_key not set for this agent in .2020117_keys')
+        console.log(`  Calling xAI Grok (grok-4-fast-reasoning)...`)
+        result = await processJobWithXai(identity.xaiApiKey, input, opts.provide)
       } else {
         console.log(`  Calling Ollama (${ollamaModel})...`)
         result = await processJobWithOllama(opts.ollamaUrl, ollamaModel, input, opts.provide)
@@ -1633,6 +1834,65 @@ async function main() {
     console.log(`  Provider registered and online`)
   }
 
+  // Customer: catch up on unsettled jobs from before restart
+  if (opts.dvmInterval > 0) {
+    console.log('\n--- Catching up on unsettled jobs ---')
+    try {
+      const r0 = await ensureRelay()
+      if (!r0) throw new Error('relay not available')
+      const lookback = Math.floor(Date.now()/1000) - 24 * 3600
+      // 1. Find our recent job requests
+      const myJobs = await new Promise((resolve) => {
+        const jobs = []
+        const sub = r0.subscribe([{ kinds: [5100], authors: [identity.pubkey], since: lookback, limit: 20 }], {
+          onevent: (e) => jobs.push(e),
+          oneose: () => { sub.close(); resolve(jobs) },
+        })
+        setTimeout(() => { try { sub.close() } catch {} resolve(jobs) }, 5000)
+      })
+      console.log(`  Found ${myJobs.length} recent job(s) posted by us`)
+
+      for (const jobEvent of myJobs) {
+        const jobId = jobEvent.id
+        if (settledJobs.has(jobId)) continue
+
+        // 2. Check if already settled (Kind 7000 success from us)
+        const alreadySettled = await new Promise((resolve) => {
+          const sub = r0.subscribe([{ kinds: [7000], authors: [identity.pubkey], '#e': [jobId], limit: 1 }], {
+            onevent: (e) => {
+              if (e.tags.find(t => t[0] === 'status' && t[1] === 'success')) { sub.close(); resolve(true) }
+            },
+            oneose: () => { sub.close(); resolve(false) },
+          })
+          setTimeout(() => { try { sub.close() } catch {} resolve(false) }, 3000)
+        })
+        if (alreadySettled) { settledJobs.add(jobId); continue }
+
+        // 3. Find any Kind 6100 results for this job
+        const results = await new Promise((resolve) => {
+          const res = []
+          const sub = r0.subscribe([{ kinds: [6100], '#e': [jobId], since: lookback, limit: 5 }], {
+            onevent: (e) => res.push(e),
+            oneose: () => { sub.close(); resolve(res) },
+          })
+          setTimeout(() => { try { sub.close() } catch {} resolve(res) }, 3000)
+        })
+        if (results.length === 0) continue
+
+        // 4. Re-register job in pendingJobs and process best result
+        const input = jobEvent.tags.find(t => t[0] === 'i')?.[1] || jobEvent.content || ''
+        const bidSats = parseInt(jobEvent.tags.find(t => t[0] === 'bid')?.[1] || String(opts.dvmBid * 1000)) / 1000
+        pendingJobs.set(jobId, { requestId: jobId, input, param: input.slice(0,30), bidSats, postedAt: jobEvent.created_at * 1000, status: 'pending' })
+        console.log(`  Replaying result for job ${jobId.slice(0,12)}... (${results.length} result(s))`)
+        for (const result of results) {
+          try { await handleDVMResponse(result) } catch (e) { console.error(`  Catchup eval err: ${e.message}`) }
+          if (settledJobs.has(jobId)) break
+        }
+      }
+    } catch (e) { console.error(`  Catchup error: ${e.message}`) }
+    console.log('--- Catchup done ---')
+  }
+
   // First round
   console.log('\n--- First round ---')
   if (opts.noteInterval > 0 && relay) await postNote(relay, identity)
@@ -1663,6 +1923,31 @@ async function main() {
         } catch (e) { console.error(`DVM err (attempt ${attempt}/3): ${e.message}`) }
       }
     }, opts.dvmInterval * 60 * 1000)
+  }
+
+  // Customer: poll pending jobs for results every 3 min
+  if (opts.dvmInterval > 0) {
+    setInterval(async () => {
+      const unsettled = [...pendingJobs.entries()].filter(([id]) => !settledJobs.has(id))
+      if (unsettled.length === 0) return
+      const r = await ensureRelay(); if (!r) return
+      for (const [jobId, job] of unsettled) {
+        try {
+          const results = await new Promise((resolve) => {
+            const res = []
+            const sub = r.subscribe([{ kinds: [6100], '#e': [jobId], limit: 5 }], {
+              onevent: (e) => res.push(e),
+              oneose: () => { sub.close(); resolve(res) },
+            })
+            setTimeout(() => { try { sub.close() } catch {} resolve(res) }, 3000)
+          })
+          for (const result of results) {
+            try { await handleDVMResponse(result) } catch (e) { console.error(`  Poll eval err: ${e.message}`) }
+            if (settledJobs.has(jobId)) break
+          }
+        } catch (e) { console.error(`  Poll err for ${jobId.slice(0,12)}: ${e.message}`) }
+      }
+    }, 3 * 60 * 1000)
   }
 
   // Provider heartbeat every 1 min

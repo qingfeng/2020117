@@ -161,17 +161,14 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
               .where(eq(dvmJobs.id, job.id))
             console.log(`[DVM] Job ${job.id} → completed (Kind 7000 success)`)
           } else if (feedbackStatus === 'error') {
-            // Only mark as error if the feedback is from the provider (not a customer quality rejection)
-            const isFromProvider = !job.providerPubkey || event.pubkey === job.providerPubkey
-            if (isFromProvider) {
-              await db.update(dvmJobs)
-                .set({ status: 'error', result: event.content || 'Error', updatedAt: new Date() })
-                .where(eq(dvmJobs.id, job.id))
-              console.log(`[DVM] Job ${job.id} → error`)
-            } else {
-              // Customer rejected this result — keep job open for better responses
-              console.log(`[DVM] Job ${job.id} — customer rejected result from ${event.pubkey.slice(0,12)}, keeping open`)
-            }
+            // status=error from anyone → reset job to open so other providers can fulfill it
+            // Provider failed: let others try. Customer rejected: same outcome.
+            // Only status=success (after payment) truly closes a job.
+            await db.update(dvmJobs)
+              .set({ status: 'open', providerPubkey: null, updatedAt: new Date() })
+              .where(eq(dvmJobs.id, job.id))
+            const who = event.pubkey === job.providerPubkey ? 'provider failed' : 'customer rejected'
+            console.log(`[DVM] Job ${job.id} → open (${who}, 7000 error from ${event.pubkey.slice(0, 8)}...)`)
           }
         } else if (event.kind >= 6000 && event.kind <= 6999) {
           // Result event — extract bolt11 from amount tag

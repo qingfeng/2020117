@@ -303,7 +303,7 @@ router.get('/jobs/:id', async (c) => {
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
   const { dvmJobs, users } = await import('../db/schema')
-  const { and, or } = await import('drizzle-orm')
+  const { and, or, sql: sqlRole } = await import('drizzle-orm')
   const { pubkeyToNpub, eventIdToNevent } = await import('../services/nostr')
 
   const DVM_KIND_LABELS: Record<number, string> = {
@@ -345,10 +345,9 @@ router.get('/jobs/:id', async (c) => {
     customerAvatarUrl: users.avatarUrl,
   }).from(dvmJobs)
     .leftJoin(users, eq(dvmJobs.userId, users.id))
-    .where(and(
-      or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)),
-      eq(dvmJobs.role, 'customer'),
-    ))
+    .where(or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)))
+    // Prefer customer record so we get bid/customer info; fall back to provider record
+    .orderBy(sqlRole`CASE WHEN ${dvmJobs.role} = 'customer' THEN 0 ELSE 1 END`)
     .limit(1)
 
   if (result.length === 0) {
@@ -462,30 +461,36 @@ router.get('/jobs/:id', async (c) => {
           const at = a.tags ? JSON.parse(a.tags) : {}
           const actorName = await resolveDisplayName(db, c.env, a.pubkey)
           const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
+          const actorUser = await db.select({ username: users.username }).from(users).where(eq(users.nostrPubkey, a.pubkey)).limit(1)
+          const actorUsername = actorUser[0]?.username || null
           const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
-          let label = ''
-          let reason = ''
+          let label = '', cls = '', reason = ''
           if (a.kind === 7000) {
             const status = at.status || 'unknown'
             const isCustomer = a.pubkey === re.pubkey
-            if (status === 'error' && isCustomer) { label = t.jobRejected; reason = a.contentPreview || '' }
-            else if (status === 'error') { label = t.jobFailed; reason = a.contentPreview || '' }
-            else { label = FEEDBACK_STATUS[status] || status }
+            if (status === 'processing') { label = FEEDBACK_STATUS[status] || status; cls = 'status-processing' }
+            else if (status === 'success') { label = FEEDBACK_STATUS[status] || status; cls = 'status-success' }
+            else if (status === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error'; reason = a.contentPreview || '' }
+            else if (status === 'error') { label = t.jobFailed; cls = 'status-error'; reason = a.contentPreview || '' }
+            else if (status === 'payment-required') { label = FEEDBACK_STATUS[status] || status; cls = 'status-payment' }
+            else { label = FEEDBACK_STATUS[status] || status; cls = '' }
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind >= 6000 && a.kind <= 6999) {
-            label = t.jobSubmittedResult
+            label = t.jobSubmittedResult; cls = 'status-success'
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'
-            label = emoji === '+' ? '❤ liked' : `${emoji} ${t.jobReacted}`
+            label = emoji === '+' ? '❤ liked' : `${emoji} ${t.jobReacted}`; cls = 'status-success'
           } else if (a.kind === 31117) {
             const rating = parseInt(at.rating || '0')
-            label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`
+            label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`; cls = 'status-payment'
           } else { return '' }
-          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;font-style:italic">${esc(reason.slice(0, 120))}</div>` : ''
-          return `<div class="activity-item" style="flex-wrap:wrap"><span class="actor">${esc(actorLabel)}</span><span>${esc(label)}</span><span class="atime">${timeA}</span>${reasonHtml}</div>`
+          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:3px;font-style:italic;width:100%">${esc(reason.slice(0, 200))}</div>` : ''
+          const actorHref = actorUsername ? `/agents/${esc(actorUsername)}` : `https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}`
+          const actorExtra = actorUsername ? '' : ' target="_blank" rel="noopener"'
+          return `<div class="activity-item" style="flex-wrap:wrap"><a class="actor" href="${actorHref}"${actorExtra}>${esc(actorLabel)}</a> <span class="${cls}">${esc(label)}</span><span class="atime">${timeA}</span>${reasonHtml}</div>`
         }))
         activityHtml = `<div class="activity-log"><div class="section-label">${esc(t.jobActivity)}</div>${items.filter(Boolean).join('')}</div>`
       }

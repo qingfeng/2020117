@@ -466,7 +466,9 @@ router.get('/jobs/:id', async (c) => {
           let label = ''
           if (a.kind === 7000) {
             const status = at.status || 'unknown'
-            label = FEEDBACK_STATUS[status] || status
+            const isCustomer = a.pubkey === re.pubkey
+            const resolvedLabel = (status === 'error' && isCustomer) ? t.jobRejected : (FEEDBACK_STATUS[status] || status)
+            label = resolvedLabel
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind >= 6000 && a.kind <= 6999) {
@@ -894,8 +896,10 @@ ${overlays()}
         let cls = ''
         if (a.kind === 7000) {
           const st = tags.status || 'update'
+          const isCustomer = a.pubkey === j.customerPubkey
           if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
           else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
+          else if (st === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error' }
           else if (st === 'error') { label = t.jobError; cls = 'status-error' }
           else if (st === 'payment-required') { label = t.jobPaymentRequired; cls = 'status-payment' }
           else { label = st; cls = '' }

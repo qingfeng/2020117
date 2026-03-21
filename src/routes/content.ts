@@ -693,6 +693,7 @@ content.get('/timeline', async (c) => {
 content.get('/jobs/:id', async (c) => {
   const db = c.get('db')
   const id = c.req.param('id')
+  const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
 
   const jobResult = await db.select({
     id: dvmJobs.id, kind: dvmJobs.kind, status: dvmJobs.status, input: dvmJobs.input,
@@ -703,7 +704,8 @@ content.get('/jobs/:id', async (c) => {
     customerAvatarUrl: users.avatarUrl, customerNostrPubkey: users.nostrPubkey,
     providerPubkey: dvmJobs.providerPubkey,
     requestEventId: dvmJobs.requestEventId,
-  }).from(dvmJobs).leftJoin(users, eq(dvmJobs.userId, users.id)).where(eq(dvmJobs.id, id)).limit(1)
+  }).from(dvmJobs).leftJoin(users, eq(dvmJobs.userId, users.id))
+    .where(or(eq(dvmJobs.id, id), eq(dvmJobs.requestEventId, id))).limit(1)
 
   if (jobResult.length === 0) return c.json({ error: 'Job not found' }, 404)
 
@@ -742,8 +744,38 @@ content.get('/jobs/:id', async (c) => {
     }
   }
 
+  // Fetch activity log: Kind 7000 feedback events for this job
+  const nostrEventId = j.requestEventId || j.id
+  const activities: { type: string; status: string | null; actor_pubkey: string; actor_name: string | null; content: string | null; created_at: string }[] = []
+  if (nostrEventId) {
+    const feedbackRows = await db.select({
+      contentPreview: relayEvents.contentPreview, tags: relayEvents.tags,
+      eventCreatedAt: relayEvents.eventCreatedAt, pubkey: relayEvents.pubkey,
+      actorName: users.displayName, actorUsername: users.username,
+    }).from(relayEvents)
+      .leftJoin(users, eq(relayEvents.pubkey, users.nostrPubkey))
+      .where(sql`${relayEvents.kind} = 7000 AND instr(${relayEvents.tags}, ${nostrEventId}) > 0`)
+      .orderBy(relayEvents.eventCreatedAt)
+      .limit(20)
+    for (const row of feedbackRows) {
+      const tags = row.tags ? JSON.parse(row.tags) : []
+      const statusTag = Array.isArray(tags) ? tags.find((t: string[]) => t[0] === 'status') : null
+      activities.push({
+        type: 'feedback',
+        status: statusTag?.[1] || null,
+        actor_pubkey: row.pubkey || '',
+        actor_name: row.actorName || row.actorUsername || null,
+        content: row.contentPreview || null,
+        created_at: new Date((row.eventCreatedAt || 0) * 1000).toISOString(),
+      })
+    }
+  }
+
+  const jobUrl = `${baseUrl}/jobs/${nostrEventId || j.id}`
+
   return c.json({
-    id: j.id, kind: j.kind, kind_label: DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`,
+    id: j.id, nostr_event_id: nostrEventId, job_url: jobUrl,
+    kind: j.kind, kind_label: DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`,
     status: j.status, input: j.input, input_type: j.inputType,
     result: j.result || j.output || null,
     amount_sats: (j.priceMsats || j.bidMsats) ? Math.floor((j.priceMsats || j.bidMsats || 0) / 1000) : 0,
@@ -751,6 +783,7 @@ content.get('/jobs/:id', async (c) => {
     customer: { username: j.customerUsername, display_name: j.customerDisplayName, avatar_url: j.customerAvatarUrl, nostr_pubkey: j.customerNostrPubkey },
     provider,
     review,
+    activities,
   })
 })
 

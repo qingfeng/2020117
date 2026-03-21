@@ -1840,11 +1840,11 @@ async function main() {
     try {
       const r0 = await ensureRelay()
       if (!r0) throw new Error('relay not available')
-      const lookback = Math.floor(Date.now()/1000) - 24 * 3600
+      const lookback = Math.floor(Date.now()/1000) - 72 * 3600
       // 1. Find our recent job requests
       const myJobs = await new Promise((resolve) => {
         const jobs = []
-        const sub = r0.subscribe([{ kinds: [5100], authors: [identity.pubkey], since: lookback, limit: 20 }], {
+        const sub = r0.subscribe([{ kinds: [5100], authors: [identity.pubkey], since: lookback, limit: 100 }], {
           onevent: (e) => jobs.push(e),
           oneose: () => { sub.close(); resolve(jobs) },
         })
@@ -1871,18 +1871,20 @@ async function main() {
         // 3. Find any Kind 6100 results for this job
         const results = await new Promise((resolve) => {
           const res = []
-          const sub = r0.subscribe([{ kinds: [6100], '#e': [jobId], since: lookback, limit: 5 }], {
+          const sub = r0.subscribe([{ kinds: [6100], '#e': [jobId], limit: 5 }], {
             onevent: (e) => res.push(e),
             oneose: () => { sub.close(); resolve(res) },
           })
           setTimeout(() => { try { sub.close() } catch {} resolve(res) }, 3000)
         })
-        if (results.length === 0) continue
-
-        // 4. Re-register job in pendingJobs and process best result
+        // 4. Re-register job in pendingJobs (even if no results yet — poll timer will retry)
         const input = jobEvent.tags.find(t => t[0] === 'i')?.[1] || jobEvent.content || ''
         const bidSats = parseInt(jobEvent.tags.find(t => t[0] === 'bid')?.[1] || String(opts.dvmBid * 1000)) / 1000
         pendingJobs.set(jobId, { requestId: jobId, input, param: input.slice(0,30), bidSats, postedAt: jobEvent.created_at * 1000, status: 'pending' })
+        if (results.length === 0) {
+          console.log(`  Job ${jobId.slice(0,12)}... registered, no results yet — will poll`)
+          continue
+        }
         console.log(`  Replaying result for job ${jobId.slice(0,12)}... (${results.length} result(s))`)
         for (const result of results) {
           try { await handleDVMResponse(result) } catch (e) { console.error(`  Catchup eval err: ${e.message}`) }
@@ -1962,7 +1964,7 @@ async function main() {
 
   // Cleanup every hour
   setInterval(() => {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000
+    const cutoff = Date.now() - 72 * 60 * 60 * 1000
     for (const [id, t] of threadTracker) { if (t.lastReplyAt < cutoff) threadTracker.delete(id) }
     for (const [id, j] of pendingJobs) { if (j.postedAt < cutoff) pendingJobs.delete(id) }
     if (settledJobs.size > 10000) { const it = settledJobs.values(); for (let i=0;i<5000;i++) settledJobs.delete(it.next().value) }

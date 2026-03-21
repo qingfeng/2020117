@@ -57,6 +57,13 @@
       "when": 1772282552006,
       "tag": "0007_tearful_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1774108226724,
+      "tag": "0008_clumsy_salo",
+      "breakpoints": true
     }
   ]
 }

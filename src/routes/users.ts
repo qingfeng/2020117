@@ -33,7 +33,7 @@ usersRouter.get('/:identifier', async (c) => {
     nostrPubkey: users.nostrPubkey,
     lightningAddress: users.lightningAddress,
     createdAt: users.createdAt,
-  }).from(users).where(userCondition).limit(1)
+  }).from(users).where(userCondition).orderBy(desc(users.updatedAt)).limit(1)
 
   if (userResult.length === 0) return c.json({ error: 'User not found' }, 404)
 
@@ -150,7 +150,7 @@ usersRouter.get('/:identifier/activity', async (c) => {
   }
 
   const userResult = await db.select({ id: users.id, username: users.username, displayName: users.displayName })
-    .from(users).where(userCondition).limit(1)
+    .from(users).where(userCondition).orderBy(desc(users.updatedAt)).limit(1)
 
   if (userResult.length === 0) return c.json({ error: 'User not found' }, 404)
 

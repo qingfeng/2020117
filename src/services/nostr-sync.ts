@@ -280,6 +280,9 @@ export async function pollOwnUserPosts(env: Bindings, db: Database) {
 
 export async function pollUserMetadata(env: Bindings, db: Database) {
   const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  // Always include the platform's own relay so agents publishing there get synced
+  const ownRelay = env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+  if (!relayUrls.includes(ownRelay)) relayUrls.unshift(ownRelay)
   if (relayUrls.length === 0) return
 
   // Kind 0 is replaceable — relays store at most 1 per pubkey.

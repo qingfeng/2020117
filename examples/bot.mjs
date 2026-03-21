@@ -381,7 +381,7 @@ async function ollamaGenerate(baseUrl, model, prompt, systemPrompt) {
     model,
     prompt,
     stream: false,
-    options: { temperature: 0.7, num_predict: 1024 },
+    options: { temperature: 0.7, num_predict: 2048 },
   }
   if (systemPrompt) body.system = systemPrompt
 
@@ -400,6 +400,9 @@ async function ollamaGenerate(baseUrl, model, prompt, systemPrompt) {
   }
 
   const data = await res.json()
+  if (data.done_reason === 'length') {
+    console.log(`  [Ollama] Response may be truncated (hit token limit)`)
+  }
   return data.response || ''
 }
 
@@ -818,19 +821,27 @@ const POW_DIFFICULTY = 20
 function pick(arr) { return arr[crypto.randomInt(arr.length)] }
 function ts() { return new Date().toLocaleString() }
 
-async function publishEvent(relay, event) {
+async function publishEvent(relay, event, retries = 2) {
   if (!relay?.connected) {
     console.error(`  -> FAILED: relay not connected (kind ${event.kind})`)
     return false
   }
-  try {
-    await relay.publish(event)
-    console.log(`  -> event ${event.id.slice(0, 12)}... (kind ${event.kind}) OK`)
-    return true
-  } catch (e) {
-    console.error(`  -> FAILED: ${e.message}`)
-    return false
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      await relay.publish(event)
+      console.log(`  -> event ${event.id.slice(0, 12)}... (kind ${event.kind}) OK`)
+      return true
+    } catch (e) {
+      if (attempt <= retries) {
+        console.log(`  -> publish timeout (attempt ${attempt}/${retries + 1}), retrying...`)
+        await new Promise(r => setTimeout(r, 2000))
+        if (!relay?.connected) break
+      } else {
+        console.error(`  -> FAILED: ${e.message}`)
+      }
+    }
   }
+  return false
 }
 
 function signWithPow(unsignedEvent, sk) {
@@ -911,8 +922,23 @@ function evaluateResult(content) {
 //  Features — Customer
 // ============================================================
 
-async function postNote(relay, identity) {
-  const content = pickNote()
+async function postNote(relay, identity, ollamaUrl = null, model = null) {
+  let content
+  if (ollamaUrl && model) {
+    try {
+      const lang = Math.random() < 0.5 ? '中文' : 'English'
+      const persona = [identity.displayName, identity.about].filter(Boolean).join(' — ')
+      content = await ollamaGenerate(
+        ollamaUrl, model,
+        `Write a short, authentic social media post (2-4 sentences) from a tech worker / programmer venting, reflecting, or sharing something from their day. Be specific and original. Write in ${lang}. Add 1-2 relevant hashtags at the end.`,
+        `You are ${persona || identity.name}, posting on Nostr. First person, casual tone. No generic platitudes.`,
+      )
+      content = content?.trim()
+    } catch (e) {
+      console.log(`  Ollama note gen failed (${e.message}), using template`)
+    }
+  }
+  if (!content) content = pickNote()
   console.log(`\n[${ts()}] [${identity.name}] Posting note...`)
   console.log(`  ${content.slice(0, 80)}`)
   const event = signWithPow({ kind: 1, pubkey: identity.pubkey, content, tags: [['t','life'],['t','打工人']], created_at: Math.floor(Date.now()/1000) }, identity.sk)
@@ -1165,15 +1191,26 @@ async function main() {
   // P2P backend mode: serial processing (one job at a time) to avoid wasted payments
   if (opts.dvmBackend && opts.maxJobs > 1) opts.maxJobs = 1
 
-  // Auto-detect Ollama model if provider mode (skip if using p2p DVM backend)
+  // Auto-detect Ollama model
   let ollamaModel = opts.ollamaModel
-  if (isProvider && !opts.dvmBackend && !opts.simpleBackend && !opts.xaiBackend && !ollamaModel) {
-    try {
-      ollamaModel = await ollamaDetectModel(opts.ollamaUrl)
-      console.log(`  Auto-detected Ollama model: ${ollamaModel}`)
-    } catch (e) {
-      console.error(`  ERROR: Cannot connect to Ollama at ${opts.ollamaUrl}: ${e.message}`)
-      process.exit(1)
+  if (!ollamaModel) {
+    if (isProvider && !opts.dvmBackend && !opts.simpleBackend && !opts.xaiBackend) {
+      // Pure Ollama provider — must have Ollama
+      try {
+        ollamaModel = await ollamaDetectModel(opts.ollamaUrl)
+        console.log(`  Auto-detected Ollama model: ${ollamaModel}`)
+      } catch (e) {
+        console.error(`  ERROR: Cannot connect to Ollama at ${opts.ollamaUrl}: ${e.message}`)
+        process.exit(1)
+      }
+    } else if (opts.reply) {
+      // Non-Ollama backend or customer mode — try Ollama for DVM job comments, silently skip if unavailable
+      try {
+        ollamaModel = await ollamaDetectModel(opts.ollamaUrl)
+        console.log(`  Ollama available for DVM job comments: ${ollamaModel}`)
+      } catch {
+        // No Ollama — DVM job comments disabled
+      }
     }
   }
 
@@ -1290,9 +1327,30 @@ async function main() {
           if (e.pubkey === identity.pubkey) return
           const status = e.tags.find(t => t[0] === 'status')?.[1]
           const eTag = e.tags.find(t => t[0] === 'e')
-          const jobId = eTag?.[1]?.slice(0, 12) || '?'
+          const fullJobId = eTag?.[1]
+          const jobId = fullJobId?.slice(0, 12) || '?'
           console.log(`\n[${ts()}] [${identity.name}] Customer feedback: ${status} for ${jobId}...`)
           if (e.content) console.log(`  Message: ${e.content.slice(0, 100)}`)
+          // If customer re-opened the job (error feedback), allow re-processing
+          if (status === 'error' && fullJobId) {
+            handledJobs.delete(fullJobId)
+            activeProviderJobs.delete(fullJobId)
+            console.log(`  Job re-opened — fetching to re-process...`)
+            try {
+              const r2 = await ensureRelay()
+              if (r2) {
+                const jobEvents = await new Promise(resolve => {
+                  const evts = []
+                  const sub = r2.subscribe([{ ids: [fullJobId] }], {
+                    onevent: ev => evts.push(ev),
+                    oneose: () => { sub.close(); resolve(evts) },
+                  })
+                  setTimeout(() => { try { sub.close() } catch {} resolve(evts) }, 3000)
+                })
+                if (jobEvents[0]) await handleIncomingJob(jobEvents[0])
+              }
+            } catch (err) { console.error(`  Re-fetch failed: ${err.message}`) }
+          }
         },
       })
       console.log(`  Subscribed: customer feedback`)
@@ -1313,7 +1371,21 @@ async function main() {
     if (tracker.count >= opts.maxReplies) return
 
     const round = tracker.count + 1
-    const content = pickReply(round)
+    let content
+    if (ollamaModel) {
+      try {
+        const lang = Math.random() < 0.5 ? '中文' : 'English'
+        const isLast = round >= opts.maxReplies
+        const persona = [identity.displayName, identity.about].filter(Boolean).join(' — ')
+        content = await ollamaGenerate(
+          opts.ollamaUrl, ollamaModel,
+          `Someone on Nostr posted: "${event.content.slice(0, 200)}"\n\nWrite a short reply (1-2 sentences) in ${lang}. ${isLast ? 'Wrap up the conversation warmly.' : 'React naturally — relate, empathize, or add something genuine.'} Be casual and human.`,
+          `You are ${persona || identity.name}. Keep it brief and natural.`,
+        )
+        content = content?.trim()
+      } catch {}
+    }
+    if (!content) content = pickReply(round)
     console.log(`\n[${ts()}] [${identity.name}] Replying (${round}/${opts.maxReplies})`)
     console.log(`  Them: ${event.content.slice(0,60)}`)
     console.log(`  Us:   ${content.slice(0,60)}`)
@@ -1908,7 +1980,7 @@ async function main() {
 
   // First round
   console.log('\n--- First round ---')
-  if (opts.noteInterval > 0 && relay) await postNote(relay, identity)
+  if (opts.noteInterval > 0 && relay) await postNote(relay, identity, opts.ollamaUrl, ollamaModel)
   if (opts.dvmInterval > 0 && relay) {
     const hasPending = pendingJobs.size > 0
     if (hasPending) console.log(`  Skipping first DVM job — ${pendingJobs.size} pending job(s) already in queue`)
@@ -1922,7 +1994,7 @@ async function main() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const r = await ensureRelay()
-          if (r) { await postNote(r, identity); break }
+          if (r) { await postNote(r, identity, opts.ollamaUrl, ollamaModel); break }
           else { await new Promise(r => setTimeout(r, 30000)) }
         } catch (e) { console.error(`Note err (attempt ${attempt}/3): ${e.message}`) }
       }

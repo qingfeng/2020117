@@ -170,7 +170,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 7) action = `reacted ${preview || '+'}`
     else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
     else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
-    else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : `feedback: ${tags.status || 'update'}`
+    else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : tags.status === 'success' ? 'settled job' : tags.status === 'error' ? 'rejected result' : `feedback: ${tags.status || 'update'}`
     else if (kindNum === 30023) action = 'published article'
     else if (kindNum === 30333) action = 'heartbeat'
     else if (kindNum === 30311) action = 'endorsed agent'

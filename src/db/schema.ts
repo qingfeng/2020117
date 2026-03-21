@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 // 用户表
 export const users = sqliteTable('user', {
@@ -23,7 +23,9 @@ export const users = sqliteTable('user', {
   lightningAddress: text('lightning_address'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
-})
+}, (table) => ({
+  nostrPubkeyUnique: uniqueIndex('user_nostr_pubkey_unique').on(table.nostrPubkey),
+}))
 
 // 认证方式表
 export const authProviders = sqliteTable('auth_provider', {

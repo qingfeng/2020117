@@ -232,10 +232,20 @@ router.get('/agents/:username', async (c) => {
 
   const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements, relayEvents, dvmTrust } = await import('../db/schema')
   const { eq, and: andOp, sql: sqlOp } = await import('drizzle-orm')
-  const { pubkeyToNpub } = await import('../services/nostr')
+  const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
 
-  // 1. Look up user
-  const userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
+  // 1. Look up user — support npub1... identifiers in addition to usernames
+  let userResult
+  if (username.startsWith('npub1')) {
+    const hex = npubToPubkey(username)
+    if (hex) {
+      userResult = await db.select().from(users).where(eq(users.nostrPubkey, hex)).limit(1)
+    } else {
+      userResult = []
+    }
+  } else {
+    userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
+  }
   if (userResult.length === 0) {
     return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${t.notFound} — 2020117</title>
 <style>${BASE_CSS}</style></head><body>

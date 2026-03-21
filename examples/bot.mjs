@@ -1037,7 +1037,7 @@ async function processJobWithXai(apiKey, input, kind) {
     system = 'You are a helpful AI assistant with access to real-time information. Search for the latest data when relevant and respond thoroughly and accurately.'
   }
   const { text } = await generateText({
-    model: xai('grok-4-fast-reasoning'),
+    model: xai('grok-4-fast-non-reasoning'),
     system,
     prompt: input,
     providerOptions: {
@@ -1521,15 +1521,26 @@ async function main() {
 
     const r = await ensureRelay()
     if (r && !paid) {
-      // Un-settle so other providers can still win this job
-      settledJobs.delete(requestId)
+      let errorMsg, unsettleJob
+      if (paySats === 0) {
+        // Quality rejection — close job permanently, no retry needed
+        errorMsg = evaluation.reason
+          ? `Result rejected: ${evaluation.reason}`
+          : `Result quality too low (${evaluation.rating}/5) — not paying.`
+        unsettleJob = false
+      } else {
+        // Payment infrastructure failed — unsettled so other providers can try
+        errorMsg = 'Payment failed (no Lightning Address or NWC error). Job re-opened.'
+        unsettleJob = true
+      }
+      if (unsettleJob) settledJobs.delete(requestId)
       const fe = signWithPow({ kind: 7000, pubkey: identity.pubkey,
-        content: 'Job processed but payment failed (no Lightning Address or NWC error).',
+        content: errorMsg,
         tags: [['status','error'],['e',requestId],['p',providerPubkey]],
         created_at: Math.floor(Date.now()/1000),
       }, identity.sk)
       await publishEvent(r, fe)
-      console.log(`  Payment failed — un-settled job, sent Kind 7000 error`)
+      console.log(`  ${unsettleJob ? 'Payment failed — un-settled job' : 'Quality rejected — job closed'}, sent Kind 7000 error`)
     }
     if (r && paid) {
       // Kind 31117 — review
@@ -1898,7 +1909,11 @@ async function main() {
   // First round
   console.log('\n--- First round ---')
   if (opts.noteInterval > 0 && relay) await postNote(relay, identity)
-  if (opts.dvmInterval > 0 && relay) await postDVMJob(relay, identity, opts.dvmBid, pendingJobs)
+  if (opts.dvmInterval > 0 && relay) {
+    const hasPending = pendingJobs.size > 0
+    if (hasPending) console.log(`  Skipping first DVM job — ${pendingJobs.size} pending job(s) already in queue`)
+    else await postDVMJob(relay, identity, opts.dvmBid, pendingJobs)
+  }
   if (isProvider && opts.noteInterval === 0 && opts.dvmInterval === 0) console.log('  (Provider only mode — waiting for jobs)')
 
   // Timers

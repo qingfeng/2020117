@@ -225,7 +225,7 @@ content.get('/relay/events', async (c) => {
       avatar_url: user?.avatarUrl || null, action, detail, pow,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
       job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
-        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000 || kindNum === 31117) ? (tags.e || null) : null,
+        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000 || kindNum === 31117 || kindNum === 30311) ? (tags.e || null) : null,
       note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       article_title: articleTitle, article_summary: articleSummary,

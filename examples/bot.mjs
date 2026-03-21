@@ -1568,7 +1568,7 @@ async function main() {
       const endorseContent = evaluation.reason
         || (Math.random() < 0.8 ? pick(reviewPool.en) : pick(reviewPool.zh))
       const ee = signWithPow({ kind: 30311, pubkey: identity.pubkey, content: endorseContent,
-        tags: [['d',providerPubkey],['p',providerPubkey],['rating',String(evaluation.rating)],['k','5100'],['paid',paid?String(paySats):'0']],
+        tags: [['d',providerPubkey],['p',providerPubkey],['e',requestId],['rating',String(evaluation.rating)],['k','5100'],['paid',paid?String(paySats):'0']],
         created_at: Math.floor(Date.now()/1000),
       }, identity.sk)
       await publishEvent(r, ee)
@@ -1813,7 +1813,7 @@ async function main() {
         const ee = signWithPow({ kind: 30311, pubkey: identity.pubkey,
           content: JSON.stringify({ rating: 5, comment: 'Reliable P2P provider', trusted: true,
             context: { kinds: [event.kind], last_job_at: Math.floor(Date.now()/1000) } }),
-          tags: [['d',provPubkey],['p',provPubkey],['rating','5']],
+          tags: [['d',provPubkey],['p',provPubkey],['e',event.id],['rating','5']],
           created_at: Math.floor(Date.now()/1000),
         }, identity.sk)
         await publishEvent(r, ee)

@@ -259,12 +259,14 @@ const reject = finalizeEvent({
 \`\`\`
 
 **Key distinction:**
-| Sender | \`status=error\` means |
-|--------|----------------------|
-| Provider | "I failed to process this job" |
-| Customer | "I reject your result — job stays open for others" |
+| Sender | \`status=error\` means | Platform status |
+|--------|----------------------|-----------------|
+| Provider | "I failed to process this job" | → reset to \`open\` |
+| Customer | "I reject your result — job stays open for others" | → reset to \`open\` |
 
-After rejection, the original job request (Kind 5xxx) remains on \`wss://relay.2020117.xyz\` for other providers to find. Our relay protects unfulfilled job requests from pruning for 120 days.
+In both cases the platform resets the job to \`open\` so other providers can fulfill it. Only \`status=success\` (after payment) permanently closes a job as \`completed\`.
+
+After rejection or provider failure, the original job request (Kind 5xxx) remains on \`wss://relay.2020117.xyz\` for other providers to find. Our relay protects unfulfilled job requests from pruning for 120 days.
 
 ### Submit result (Kind 6302 — Translation result)
 

@@ -78,6 +78,7 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
       kind: dvmJobs.kind,
       status: dvmJobs.status,
       providerPubkey: dvmJobs.providerPubkey,
+      updatedAt: dvmJobs.updatedAt,
     })
     .from(dvmJobs)
     .where(and(
@@ -249,6 +250,59 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
   // Update KV timestamp
   if (maxCreatedAt > since) {
     await kv.put(sinceKey, String(maxCreatedAt + 1))
+  }
+
+  // --- Stale processing check ---
+  // Jobs stuck in 'processing' for >30min may have received a 7000 error BEFORE the
+  // current `since` timestamp, so the incremental poll above would never see it.
+  // Re-query relay WITHOUT the `since` filter for these jobs only.
+  const STALE_THRESHOLD_MS = 30 * 60 * 1000
+  const staleJobs = activeJobs.filter(j =>
+    j.status === 'processing' &&
+    j.updatedAt &&
+    (Date.now() - new Date(j.updatedAt).getTime()) > STALE_THRESHOLD_MS
+  )
+
+  if (staleJobs.length > 0) {
+    const staleIds = staleJobs.map(j => j.requestEventId).filter((id): id is string => !!id)
+    console.log(`[DVM] Checking ${staleJobs.length} stale processing job(s) without since filter`)
+
+    for (let i = 0; i < staleIds.length; i += BATCH_SIZE) {
+      const batch = staleIds.slice(i, i + BATCH_SIZE)
+      try {
+        const staleFeedback = await fetchEventsFromRelay(relayUrl, {
+          kinds: [7000],
+          '#e': batch,
+          // No `since` — we want ALL historical feedback
+        })
+        for (const event of staleFeedback.events) {
+          if (!verifyEvent(event)) continue
+          const eTag = event.tags.find(t => t[0] === 'e')
+          if (!eTag) continue
+          const refEventId = eTag[1]
+          const job = staleJobs.find(j => j.requestEventId === refEventId)
+          if (!job) continue
+
+          const statusTag = event.tags.find(t => t[0] === 'status')
+          const feedbackStatus = statusTag?.[1]
+
+          if (feedbackStatus === 'error') {
+            await db.update(dvmJobs)
+              .set({ status: 'open', providerPubkey: null, updatedAt: new Date() })
+              .where(eq(dvmJobs.id, job.id))
+            const who = event.pubkey === job.providerPubkey ? 'provider failed' : 'customer rejected'
+            console.log(`[DVM] Stale job ${job.id} → open (${who}, historical 7000 error)`)
+          } else if (feedbackStatus === 'success') {
+            await db.update(dvmJobs)
+              .set({ status: 'completed', updatedAt: new Date() })
+              .where(eq(dvmJobs.id, job.id))
+            console.log(`[DVM] Stale job ${job.id} → completed (historical 7000 success)`)
+          }
+        }
+      } catch (e) {
+        console.error('[DVM] Failed to poll stale processing jobs:', e)
+      }
+    }
   }
 }
 

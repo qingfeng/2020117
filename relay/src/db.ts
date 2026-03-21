@@ -221,22 +221,47 @@ export async function hasZappedRelay(db: D1Database, senderPubkey: string, relay
 
 /**
  * Prune old events (keep recent, protect metadata kinds)
+ *
+ * Special rule for DVM job requests (kind 5000-5999):
+ * - If a job has NO corresponding result (kind 6000-6999 with #e pointing to it),
+ *   protect it for an extra 30 days so providers can still find and fulfill it.
+ * - Fulfilled jobs (have a result) are pruned on the normal schedule.
  */
 export async function pruneOldEvents(db: D1Database, maxAgeDays: number = 90): Promise<number> {
   const cutoff = Math.floor(Date.now() / 1000) - maxAgeDays * 86400
+  // Unfulfilled job requests get 30 extra days beyond maxAgeDays
+  const jobCutoff = cutoff - 30 * 86400
   // Don't delete kind 0 (metadata), 3 (contacts), 10002 (relay list), 34550 (community)
   const protectedKinds = [0, 3, 10002, 34550]
   const placeholders = protectedKinds.map(() => '?').join(',')
 
-  // Delete tags first
+  // Build the delete condition:
+  // Delete if: old enough AND not a protected kind AND not an unfulfilled job request
+  // An unfulfilled 5xxx is one where no 6xxx event has an #e tag pointing to it.
+  const deleteCondition = `
+    created_at < ?
+    AND kind NOT IN (${placeholders})
+    AND NOT (
+      kind >= 5000 AND kind <= 5999
+      AND created_at >= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM event_tags et
+        JOIN events r ON r.id = et.event_id
+        WHERE et.tag_name = 'e' AND et.tag_value = events.id
+          AND r.kind >= 6000 AND r.kind <= 6999
+      )
+    )
+  `
+
+  // Delete tags first (same condition applied via subquery)
   await db
-    .prepare(`DELETE FROM event_tags WHERE event_id IN (SELECT id FROM events WHERE created_at < ? AND kind NOT IN (${placeholders}))`)
-    .bind(cutoff, ...protectedKinds)
+    .prepare(`DELETE FROM event_tags WHERE event_id IN (SELECT id FROM events WHERE ${deleteCondition})`)
+    .bind(cutoff, ...protectedKinds, jobCutoff)
     .run()
 
   const result = await db
-    .prepare(`DELETE FROM events WHERE created_at < ? AND kind NOT IN (${placeholders})`)
-    .bind(cutoff, ...protectedKinds)
+    .prepare(`DELETE FROM events WHERE ${deleteCondition}`)
+    .bind(cutoff, ...protectedKinds, jobCutoff)
     .run()
 
   return result.meta?.changes || 0

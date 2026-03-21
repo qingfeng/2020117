@@ -737,17 +737,34 @@ ${overlays()}
   // Build result section
   const jobIsEncrypted = j.inputType === 'encrypted'
 
+  // Fetch full content for ALL 6xxx events in the activity log (including rejected ones)
+  // Batch into a single relay request so we can display each provider's submission
+  const activityResultContent = new Map<string, string>()
+  const activityResultIds = jobActivity.filter(a => a.kind >= 6100 && a.kind <= 6303).map(a => a.eventId)
+  if (activityResultIds.length > 0 && !jobIsEncrypted) {
+    try {
+      const { fetchEventsFromRelay: ferBatch } = await import('../services/relay-io')
+      const _relayUrlBatch = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+      const { events: batchEvs } = await ferBatch(_relayUrlBatch, { ids: activityResultIds, limit: activityResultIds.length })
+      for (const ev of batchEvs) activityResultContent.set(ev.id, ev.content || '')
+    } catch { /* use contentPreview fallback */ }
+  }
+
   // Fetch full result from relay using result_event_id (DB may have truncated content_preview)
   let resultText: string | null = null
   if (!jobIsEncrypted) {
     const resultEventId = j.resultEventId || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.eventId || null
     if (resultEventId) {
-      try {
-        const { fetchEventsFromRelay: fer } = await import('../services/relay-io')
-        const _relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
-        const { events: rEvs } = await fer(_relayUrl, { ids: [resultEventId], limit: 1 })
-        if (rEvs.length > 0) resultText = rEvs[0].content || null
-      } catch { /* fall back to DB */ }
+      // Already fetched in batch above if it's in activityResultIds
+      resultText = activityResultContent.get(resultEventId) || null
+      if (!resultText) {
+        try {
+          const { fetchEventsFromRelay: fer } = await import('../services/relay-io')
+          const _relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+          const { events: rEvs } = await fer(_relayUrl, { ids: [resultEventId], limit: 1 })
+          if (rEvs.length > 0) resultText = rEvs[0].content || null
+        } catch { /* fall back to DB */ }
+      }
     }
     if (!resultText) {
       resultText = j.result || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.contentPreview || null
@@ -899,7 +916,7 @@ ${overlays()}
           const tags = a.tags ? JSON.parse(a.tags) : {}
           const aTimeIso = new Date(a.eventCreatedAt * 1000).toISOString()
           const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
-          let label = '', cls = '', reason = ''
+          let label = '', cls = '', reason = '', resultPreview = ''
           if (a.kind === 7000) {
             const st = tags.status || 'update'
             const isCustomer = a.pubkey === j.customerPubkey
@@ -911,6 +928,10 @@ ${overlays()}
             else { label = st; cls = '' }
           } else if (a.kind >= 6100 && a.kind <= 6303) {
             label = t.jobSubmittedResult; cls = 'status-success'
+            if (!jobIsEncrypted) {
+              const content = activityResultContent.get(a.eventId) || a.contentPreview || ''
+              if (content) resultPreview = content.length > 500 ? content.slice(0, 500) + '…' : content
+            }
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'; label = emoji === '+' ? '❤ liked' : `${emoji} reacted`; cls = 'status-success'
           } else if (a.kind === 31117) {
@@ -919,8 +940,9 @@ ${overlays()}
           const actorHtml = skipActor ? '' : (actor.username
             ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a> `
             : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a> `)
-          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;font-style:italic;width:100%">${esc(reason.slice(0, 120))}</div>` : ''
-          return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml}<span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}</div>`
+          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:3px;font-style:italic;width:100%;padding-left:2px">${esc(reason.slice(0, 200))}</div>` : ''
+          const resultPreviewHtml = resultPreview ? `<div style="color:var(--c-text-dim);font-size:12px;margin-top:6px;padding:8px 10px;background:var(--c-surface);border-left:2px solid var(--c-border);border-radius:0 4px 4px 0;white-space:pre-wrap;max-height:160px;overflow:hidden;width:100%;line-height:1.5">${esc(resultPreview)}</div>` : ''
+          return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml}<span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}${resultPreviewHtml}</div>`
         }
         const providerEvents = jobActivity.filter(a => a.pubkey !== j.customerPubkey)
         const customerFeedback = jobActivity.filter(a => a.pubkey === j.customerPubkey && a.kind === 7000)

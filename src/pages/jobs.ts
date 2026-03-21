@@ -464,11 +464,13 @@ router.get('/jobs/:id', async (c) => {
           const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
           const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
           let label = ''
+          let reason = ''
           if (a.kind === 7000) {
             const status = at.status || 'unknown'
             const isCustomer = a.pubkey === re.pubkey
-            const resolvedLabel = (status === 'error' && isCustomer) ? t.jobRejected : (FEEDBACK_STATUS[status] || status)
-            label = resolvedLabel
+            if (status === 'error' && isCustomer) { label = t.jobRejected; reason = a.contentPreview || '' }
+            else if (status === 'error') { label = t.jobFailed; reason = a.contentPreview || '' }
+            else { label = FEEDBACK_STATUS[status] || status }
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind >= 6000 && a.kind <= 6999) {
@@ -482,7 +484,8 @@ router.get('/jobs/:id', async (c) => {
             const rating = parseInt(at.rating || '0')
             label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`
           } else { return '' }
-          return `<div class="activity-item"><span class="actor">${esc(actorLabel)}</span><span>${esc(label)}</span><span class="atime">${timeA}</span></div>`
+          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;font-style:italic">${esc(reason.slice(0, 120))}</div>` : ''
+          return `<div class="activity-item" style="flex-wrap:wrap"><span class="actor">${esc(actorLabel)}</span><span>${esc(label)}</span><span class="atime">${timeA}</span>${reasonHtml}</div>`
         }))
         activityHtml = `<div class="activity-log"><div class="section-label">${esc(t.jobActivity)}</div>${items.filter(Boolean).join('')}</div>`
       }
@@ -894,13 +897,14 @@ ${overlays()}
         const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
         let label = ''
         let cls = ''
+        let reason = ''
         if (a.kind === 7000) {
           const st = tags.status || 'update'
           const isCustomer = a.pubkey === j.customerPubkey
           if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
           else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
-          else if (st === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error' }
-          else if (st === 'error') { label = t.jobError; cls = 'status-error' }
+          else if (st === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error'; reason = a.contentPreview || '' }
+          else if (st === 'error') { label = t.jobFailed; cls = 'status-error'; reason = a.contentPreview || '' }
           else if (st === 'payment-required') { label = t.jobPaymentRequired; cls = 'status-payment' }
           else { label = st; cls = '' }
         } else if (a.kind >= 6100 && a.kind <= 6303) {
@@ -918,7 +922,8 @@ ${overlays()}
         const actorHtml = actor.username
           ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a>`
           : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a>`
-        return `<div class="activity-item">${actorHtml} <span class="${cls}">${label}</span><span class="atime">${aTime}</span></div>`
+        const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;padding-left:0;font-style:italic">${esc(reason.slice(0, 120))}</div>` : ''
+        return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml} <span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}</div>`
       }).join('\n      ')}
     </div>` : ''}
 

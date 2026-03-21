@@ -854,6 +854,7 @@ ${overlays()}
       <span class="status-tag" style="background:color-mix(in srgb,${statusColor} 13%,transparent);color:${statusColor};border:1px solid color-mix(in srgb,${statusColor} 33%,transparent)">${statusLabel}</span>
       <span class="kind-tag">${esc(kindLabel)}</span>
       <span class="sats-tag">\u26A1 ${bidSats} sats</span>
+      ${requestEventId ? `<button onclick="navigator.clipboard.writeText('${esc(requestEventId)}').then(()=>{this.textContent='copied!';setTimeout(()=>{this.textContent='copy id'},1500)})" style="margin-left:auto;background:none;border:1px solid var(--c-border);color:var(--c-nav);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;letter-spacing:0.5px;transition:color 0.2s,border-color 0.2s" onmouseover="this.style.color='var(--c-accent)';this.style.borderColor='var(--c-accent)'" onmouseout="this.style.color='var(--c-nav)';this.style.borderColor='var(--c-border)'">copy id</button>` : ''}
     </div>
 
     <div class="customer">${(() => {
@@ -888,43 +889,60 @@ ${overlays()}
 
     ${rejectionsHtml}
 
+    ${effectiveStatus === 'open' ? `<div style="margin:16px 0;padding:10px 14px;background:rgba(0,255,200,0.06);border:1px solid rgba(0,255,200,0.2);border-radius:6px;font-size:13px;color:var(--c-teal)">&#x25CF; This job is still open — providers can submit a better result</div>` : ''}
+
     ${jobActivity.length > 0 ? `<div class="activity-log">
       <div class="section-label">${esc(t.jobActivity)}</div>
-      ${jobActivity.map(a => {
-        const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
-        const tags = a.tags ? JSON.parse(a.tags) : {}
-        const aTimeIso = new Date(a.eventCreatedAt * 1000).toISOString()
-        const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
-        let label = ''
-        let cls = ''
-        let reason = ''
-        if (a.kind === 7000) {
-          const st = tags.status || 'update'
-          const isCustomer = a.pubkey === j.customerPubkey
-          if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
-          else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
-          else if (st === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error'; reason = a.contentPreview || '' }
-          else if (st === 'error') { label = t.jobFailed; cls = 'status-error'; reason = a.contentPreview || '' }
-          else if (st === 'payment-required') { label = t.jobPaymentRequired; cls = 'status-payment' }
-          else { label = st; cls = '' }
-        } else if (a.kind >= 6100 && a.kind <= 6303) {
-          label = t.jobSubmittedResult
-          cls = 'status-success'
-        } else if (a.kind === 7) {
-          const emoji = a.contentPreview || '+'
-          label = emoji === '+' ? '❤ liked' : `${emoji} reacted`
-          cls = 'status-success'
-        } else if (a.kind === 31117) {
-          const ratingVal = tags.rating || ''
-          label = ratingVal ? `reviewed (${'★'.repeat(parseInt(ratingVal))}${'☆'.repeat(5 - parseInt(ratingVal))})` : 'reviewed'
-          cls = 'status-payment'
+      ${(() => {
+        const renderItem = (a: ActivityRow, skipActor = false) => {
+          const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
+          const tags = a.tags ? JSON.parse(a.tags) : {}
+          const aTimeIso = new Date(a.eventCreatedAt * 1000).toISOString()
+          const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
+          let label = '', cls = '', reason = ''
+          if (a.kind === 7000) {
+            const st = tags.status || 'update'
+            const isCustomer = a.pubkey === j.customerPubkey
+            if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
+            else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
+            else if (st === 'error' && isCustomer) { label = t.jobRejected; cls = 'status-error'; reason = a.contentPreview || '' }
+            else if (st === 'error') { label = t.jobFailed; cls = 'status-error'; reason = a.contentPreview || '' }
+            else if (st === 'payment-required') { label = t.jobPaymentRequired; cls = 'status-payment' }
+            else { label = st; cls = '' }
+          } else if (a.kind >= 6100 && a.kind <= 6303) {
+            label = t.jobSubmittedResult; cls = 'status-success'
+          } else if (a.kind === 7) {
+            const emoji = a.contentPreview || '+'; label = emoji === '+' ? '❤ liked' : `${emoji} reacted`; cls = 'status-success'
+          } else if (a.kind === 31117) {
+            const ratingVal = tags.rating || ''; label = ratingVal ? `reviewed (${'★'.repeat(parseInt(ratingVal))}${'☆'.repeat(5 - parseInt(ratingVal))})` : 'reviewed'; cls = 'status-payment'
+          } else { return '' }
+          const actorHtml = skipActor ? '' : (actor.username
+            ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a> `
+            : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a> `)
+          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;font-style:italic;width:100%">${esc(reason.slice(0, 120))}</div>` : ''
+          return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml}<span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}</div>`
         }
-        const actorHtml = actor.username
-          ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a>`
-          : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a>`
-        const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px;padding-left:0;font-style:italic">${esc(reason.slice(0, 120))}</div>` : ''
-        return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml} <span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}</div>`
-      }).join('\n      ')}
+        const providerEvents = jobActivity.filter(a => a.pubkey !== j.customerPubkey)
+        const customerFeedback = jobActivity.filter(a => a.pubkey === j.customerPubkey && a.kind === 7000)
+        const providerOrder = [...new Set(providerEvents.map(a => a.pubkey))]
+        if (providerOrder.length <= 1) {
+          return jobActivity.map(a => renderItem(a)).filter(Boolean).join('\n      ')
+        }
+        return providerOrder.map(pk => {
+          const actor = activityActors.get(pk) || { name: pubkeyToNpub(pk).slice(0, 16) + '...', username: '' }
+          const events = providerEvents.filter(a => a.pubkey === pk)
+          const feedback = customerFeedback.filter(a => {
+            const ptags = a.tags ? JSON.parse(a.tags) : []
+            return Array.isArray(ptags) && ptags.some((t: string[]) => t[0] === 'p' && t[1] === pk)
+          })
+          const headerLink = actor.username
+            ? `<a href="/agents/${esc(actor.username)}" style="color:var(--c-accent);font-weight:700;font-size:12px;text-decoration:none">${esc(actor.name)}</a>`
+            : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(pk))}" target="_blank" rel="noopener" style="color:var(--c-accent);font-weight:700;font-size:12px;text-decoration:none">${esc(actor.name)}</a>`
+          const items = [...events, ...feedback].sort((a, b) => a.eventCreatedAt - b.eventCreatedAt)
+            .map(a => renderItem(a, a.pubkey === pk)).filter(Boolean).join('\n')
+          return `<div style="border-left:2px solid var(--c-border);padding-left:10px;margin-bottom:10px"><div style="font-size:11px;color:var(--c-text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px">provider: ${headerLink}</div>${items}</div>`
+        }).join('\n')
+      })()}
     </div>` : ''}
 
     <div class="timestamp"><time datetime="${esc(createdDate)}">${createdDate}</time></div>

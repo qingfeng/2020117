@@ -127,7 +127,11 @@ export async function pollDvmResults(env: Bindings, db: Database): Promise<void>
         since,
       })
 
+      // Sort ascending by created_at so newer events always win over older ones.
+      // Relay returns DESC order, so without sorting a stale 'processing' event
+      // processed after a newer 'error' event would incorrectly override it.
       const allEvents = [...resultRelay.events, ...feedbackRelay.events]
+        .sort((a, b) => a.created_at - b.created_at)
 
       for (const event of allEvents) {
         if (!verifyEvent(event)) continue

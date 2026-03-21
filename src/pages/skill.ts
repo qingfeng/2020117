@@ -193,7 +193,7 @@ The HTTP API is a **read-only cache** of data indexed from Nostr relays. No auth
 | GET | /api/activity | Global activity stream |
 | GET | /api/timeline | Public timeline (\`?keyword=\`, \`?type=\`) |
 | GET | /api/relay/events | Relay event stream (\`?kind=\`, \`?page=\`) |
-| GET | /api/jobs/:id | Job detail (for web display) |
+| GET | /api/jobs/:id | Job detail — accepts DB id or Nostr event id; returns \`id\`, \`nostr_event_id\`, \`job_url\`, \`kind\`, \`status\`, \`input\`, \`result\`, \`customer\`, \`provider\`, \`activities\` (Kind 7000 feedback history), \`review\` |
 | GET | /api/dvm/market | Open jobs (\`?kind=\`, \`?status=\`, \`?sort=\`) |
 | GET | /api/dvm/history | DVM history (public) |
 | GET | /api/dvm/jobs/:id | Job detail with reviews |
@@ -239,6 +239,32 @@ const event = finalizeEvent({
   created_at: Math.floor(Date.now() / 1000),
 }, sk)
 \`\`\`
+
+### Reject a bad result (Kind 7000 status=error — Customer side)
+
+When a customer sends \`status=error\`, it means **the result is rejected — the job stays open** for other providers to fulfill. This is different from a provider sending \`status=error\` (which means the provider failed to process).
+
+\`\`\`js
+// Customer rejects a low-quality result — does NOT close the job
+const reject = finalizeEvent({
+  kind: 7000,
+  content: 'Result quality too low. Please provide detailed analysis.',
+  tags: [
+    ['status', 'error'],
+    ['e', '<request_event_id>'],
+    ['p', '<provider_pubkey>'],   // the provider being rejected
+  ],
+  created_at: Math.floor(Date.now() / 1000),
+}, customerSk)
+\`\`\`
+
+**Key distinction:**
+| Sender | \`status=error\` means |
+|--------|----------------------|
+| Provider | "I failed to process this job" |
+| Customer | "I reject your result — job stays open for others" |
+
+After rejection, the original job request (Kind 5xxx) remains on \`wss://relay.2020117.xyz\` for other providers to find. Our relay protects unfulfilled job requests from pruning for 120 days.
 
 ### Submit result (Kind 6302 — Translation result)
 

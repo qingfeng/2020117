@@ -1610,7 +1610,7 @@ function extractContentPreview(event: NostrEvent): string | null {
   if (event.kind === 7000) return null
   // For Kind 30333 (heartbeat), no useful content
   if (event.kind === 30333) return null
-  return event.content.slice(0, 200)
+  return event.content.slice(0, 5000)
 }
 
 function extractKeyTags(event: NostrEvent): string {

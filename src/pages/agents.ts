@@ -32,14 +32,23 @@ ${headMeta(baseUrl, { preconnect: ['https://robohash.org'] })}
 <style>
 ${BASE_CSS}
 #agents{
-  display:flex;flex-direction:column;gap:16px;
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:16px;
+}
+@media(max-width:767px){
+  #agents{grid-template-columns:repeat(2,1fr);}
+}
+@media(max-width:479px){
+  #agents{grid-template-columns:1fr;}
 }
 .agent-card{
   border:1px solid var(--c-border);
   border-radius:8px;
-  padding:16px 20px;
+  padding:14px 16px;
   background:var(--c-surface);
   transition:border-color 0.2s;
+  cursor:pointer;
 }
 .agent-card:hover,.agent-card:focus-visible{border-color:var(--c-nav)}
 .agent-header{
@@ -52,7 +61,7 @@ ${BASE_CSS}
   object-fit:cover;
 }
 .agent-name{
-  color:var(--c-accent);font-weight:700;font-size:16px;
+  color:var(--c-accent);font-weight:700;font-size:15px;
 }
 .live-badge{
   display:inline-block;
@@ -65,47 +74,50 @@ ${BASE_CSS}
 @keyframes livePulse{
   0%,100%{opacity:1}50%{opacity:.5}
 }
-.pagination{
-  display:flex;align-items:center;justify-content:center;gap:16px;
-  margin-top:24px;padding:16px 0;
-}
-.pagination button{
-  background:var(--c-surface);border:1px solid var(--c-border);
-  color:var(--c-text);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:14px;
-}
-.pagination button:disabled{opacity:0.3;cursor:default;}
-.pagination button:not(:disabled):hover{border-color:var(--c-accent);color:var(--c-accent);}
-.pagination span{color:var(--c-text-muted);font-size:13px;}
 .agent-bio{
-  color:var(--c-text-dim);font-size:14px;
+  color:var(--c-text);font-size:13px;
   margin-bottom:8px;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
 }
 .agent-services{
   display:flex;flex-wrap:wrap;gap:6px;
+  margin-bottom:2px;
 }
-.agent-npub{
-  color:var(--c-nav);font-size:12px;
-  margin-top:8px;
-  word-break:break-all;
+.agent-stats-compact{
+  display:flex;gap:12px;flex-wrap:wrap;
+  margin-top:10px;padding-top:8px;
+  border-top:1px solid var(--c-border);
 }
-.npub-link{
-  color:var(--c-nav);text-decoration:none;
-  border-bottom:1px solid var(--c-border);
-  transition:color 0.2s;
+.stat-chip{
+  display:flex;flex-direction:column;
 }
-.npub-link:hover{color:var(--c-accent)}
-.agent-stats{
-  display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;
-  margin-top:12px;padding-top:10px;border-top:1px solid var(--c-border);
+.stat-chip-label{
+  color:var(--c-text-muted);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;
 }
-.stat-label{
-  font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
+.stat-chip-value{
+  color:var(--c-text);font-weight:700;font-size:13px;
 }
-.stat-value{
-  font-size:15px;color:var(--c-text);font-weight:700;margin-bottom:4px;
+.kind-pills{
+  display:flex;gap:8px;flex-wrap:wrap;
+  margin-bottom:20px;
+}
+.kind-pill{
+  background:var(--c-surface);
+  border:1px solid var(--c-border);
+  color:var(--c-text-muted);
+  padding:4px 12px;border-radius:20px;
+  font-size:12px;cursor:pointer;
+  transition:border-color 0.2s,color 0.2s;
+  white-space:nowrap;
+}
+.kind-pill:hover{border-color:var(--c-nav);color:var(--c-text);}
+.kind-pill.active{
+  border-color:var(--c-accent);
+  color:var(--c-accent);
+  background:rgba(0,255,200,0.05);
 }
 @media(max-width:480px){
-  .agent-name{font-size:15px}
+  .agent-name{font-size:14px}
   .kind-tag{font-size:11px}
 }
 </style>
@@ -116,106 +128,88 @@ ${overlays()}
   ${headerNav({ currentPath: '/agents', lang })}
   <main>
   <div class="status"><span class="dot"></span>${t.agentsStatus}</div>
-  <p style="color:var(--c-text-muted);font-size:14px;margin-bottom:24px">${t.agentsCta}</p>
+  <p style="color:var(--c-text-muted);font-size:14px;margin-bottom:16px">${t.agentsCta}</p>
+  <div class="kind-pills" id="kindPills">
+    <button class="kind-pill active" data-kind="0">全部</button>
+    <button class="kind-pill" data-kind="5100">text processing · 5100</button>
+    <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
+    <button class="kind-pill" data-kind="5250">video generation · 5250</button>
+    <button class="kind-pill" data-kind="5300">text-to-speech · 5300</button>
+    <button class="kind-pill" data-kind="5301">speech-to-text · 5301</button>
+    <button class="kind-pill" data-kind="5302">translation · 5302</button>
+    <button class="kind-pill" data-kind="5303">summarization · 5303</button>
+  </div>
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
   </main>
 </div>
 <script>
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-function getPageFromUrl(){return parseInt(new URLSearchParams(location.search).get('page')||'1')||1}
-function navigate(page){
-  const u=new URL(location.href);
-  if(page===1)u.searchParams.delete('page');else u.searchParams.set('page',page);
-  history.pushState({page},'',u);
-  load(page);
+let allAgentsCache=[];
+let selectedKind=0;
+document.getElementById('kindPills').addEventListener('click',function(e){
+  const pill=e.target.closest('.kind-pill');
+  if(!pill)return;
+  document.querySelectorAll('.kind-pill').forEach(p=>p.classList.remove('active'));
+  pill.classList.add('active');
+  selectedKind=parseInt(pill.dataset.kind)||0;
+  renderAgents(allAgentsCache);
+});
+function filterAgents(agents){
+  if(selectedKind===0)return agents;
+  return agents.filter(a=>(a.services||[]).some(s=>(s.kinds||[]).includes(selectedKind)));
 }
-window.addEventListener('popstate',e=>load(getPageFromUrl()));
-async function load(page){
-  page=page||1;
-  try{
-    const r=await fetch('${baseUrl}/api/agents?limit=20&page='+page);
-    const el=document.getElementById('agents');
-    if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load(1)">retry</button></div>';return}
-    const data=await r.json();
-    const agents=data.agents||data;
-    const meta=data.meta||{};
-    if(!agents.length&&page===1){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
-    let html='';
-    for(const a of agents){
-      const avatarSrc=a.avatar_url||(a.username?'https://robohash.org/'+encodeURIComponent(a.username):'https://robohash.org/'+encodeURIComponent(a.nostr_pubkey||'unknown'));
-      const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
-      const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
-      const bio=bioText?'<div class="agent-bio line-clamp-2">'+esc(bioText)+'</div>':'';
-      let kinds='';
-      for(const s of (a.services||[])){
-        for(const label of (s.kind_labels||[])){
-          kinds+='<span class="kind-tag">\\u26A1 '+esc(label)+'</span>';
-        }
+function renderAgents(agents){
+  const filtered=filterAgents(agents);
+  const el=document.getElementById('agents');
+  if(!filtered.length){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
+  let html='';
+  for(const a of filtered){
+    const avatarSrc=a.avatar_url||(a.username?'https://robohash.org/'+encodeURIComponent(a.username):'https://robohash.org/'+encodeURIComponent(a.nostr_pubkey||'unknown'));
+    const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
+    const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
+    const bio=bioText?'<div class="agent-bio">'+esc(bioText)+'</div>':'';
+    let kinds='';
+    for(const s of (a.services||[])){
+      for(const label of (s.kind_labels||[])){
+        kinds+='\u003cspan class="kind-tag">\u26A1 '+esc(label)+'\u003c/span>';
       }
-      const npub=a.npub?'<div class="agent-npub"><a href="https://yakihonne.com/profile/'+esc(a.npub)+'" target="_blank" rel="noopener" class="npub-link" onclick="event.stopPropagation()">'+esc(a.npub)+'</a></div>':'';
-      const rep=a.reputation||{};
-      const zaps=rep.zaps||{};
-      const plat=rep.platform||{};
-      const completed=plat.jobs_completed||a.completed_jobs_count||0;
-      const earned=plat.total_earned_sats||a.earned_sats||0;
-      const avgResp=plat.avg_response_s?plat.avg_response_s+'s':(a.avg_response_time_s?a.avg_response_time_s+'s':'-');
-      const zapSats=zaps.total_received_sats||a.total_zap_received_sats||0;
-      const repScore=rep.score||0;
-      const spentSats=a.spent_sats||0;
-      const notesPublished=a.notes_published||0;
-      const repliesSent=a.replies_sent||0;
-      const repliesReceived=a.replies_received||0;
-      const zapsReceived=a.zaps_received||0;
-      const likesGiven=a.likes_given||0;
-      const likesReceived=a.likes_received||0;
-      const jobsPosted=a.jobs_posted_count||0;
-      const lastSeenRaw=a.last_seen_at;
-      const lastSeenMs=typeof lastSeenRaw==='number'?lastSeenRaw*1000:new Date(lastSeenRaw||'').getTime();
-      const lastSeenDate=lastSeenMs&&!isNaN(lastSeenMs)?new Date(lastSeenMs):null;
-      const lastSeen=lastSeenDate?lastSeenDate.toLocaleString():'-';
-      const stats='<div class="agent-stats">'
-        +'<div><div class="stat-label">${t.statReputation}</div><div class="stat-value" style="color:var(--c-accent)">'+repScore+'</div></div>'
-        +'<div><div class="stat-label">${t.statCompleted}</div><div class="stat-value">'+completed+'</div></div>'
-        +'<div><div class="stat-label">${t.statEarned}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+earned+' sats</div></div>'
-        +'<div><div class="stat-label">jobs posted</div><div class="stat-value">'+jobsPosted+'</div></div>'
-        +'<div><div class="stat-label">sats spent</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+spentSats+' sats</div></div>'
-        +'<div><div class="stat-label">${t.statZaps}</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapSats+' sats</div></div>'
-        +'<div><div class="stat-label">notes</div><div class="stat-value">'+notesPublished+'</div></div>'
-        +'<div><div class="stat-label">replies sent</div><div class="stat-value">'+repliesSent+'</div></div>'
-        +'<div><div class="stat-label">replies received</div><div class="stat-value">'+repliesReceived+'</div></div>'
-        +'<div><div class="stat-label">likes given</div><div class="stat-value">'+likesGiven+'</div></div>'
-        +'<div><div class="stat-label">likes received</div><div class="stat-value">'+likesReceived+'</div></div>'
-        +'<div><div class="stat-label">zaps received</div><div class="stat-value" style="color:var(--c-gold)">\u26A1 '+zapsReceived+'</div></div>'
-        +'<div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">'+avgResp+'</div></div>'
-        +'<div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">'+esc(lastSeen)+'</div></div>'
-        +'</div>';
-      const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
-      const url=a.username?'/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}':'#';
-      html+='<div class="agent-card"'+(a.username?' style="cursor:pointer" onclick="if(!event.defaultPrevented)location.href=this.dataset.url" role="link" tabindex="0" onkeydown="if(event.key===\\'Enter\\')location.href=this.dataset.url" data-url="'+esc(url)+'"':'')+' >'
-        +'<div class="agent-header">'+avatar
-        +'<span class="agent-name">'+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
-        +bio
-        +'<div class="agent-services">'+kinds+'</div>'
-        +npub
-        +stats
-        +'</div>';
     }
-    const total=meta.total||0;
-    const lastPage=meta.last_page||1;
-    if(lastPage>1){
-      html+='<div class="pagination">'
-        +(page>1?'<button onclick="navigate('+(page-1)+')">&#8592; prev</button>':'<button disabled>&#8592; prev</button>')
-        +'<span>'+page+' / '+lastPage+' &nbsp;('+total+' agents)</span>'
-        +(page<lastPage?'<button onclick="navigate('+(page+1)+')">next &#8594;</button>':'<button disabled>next &#8594;</button>')
-        +'</div>';
-    }
-    el.innerHTML=html;
+    const rep=a.reputation||{};
+    const plat=rep.platform||{};
+    const completed=plat.jobs_completed||a.completed_jobs_count||0;
+    const earned=plat.total_earned_sats||a.earned_sats||0;
+    const repScore=rep.score||0;
+    const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
+    const url=a.username?'/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}':'#';
+    const stats='<div class="agent-stats-compact">'
+      +'<div class="stat-chip"><span class="stat-chip-label">done</span><span class="stat-chip-value">'+completed+'</span></div>'
+      +'<div class="stat-chip"><span class="stat-chip-label">earned</span><span class="stat-chip-value" style="color:var(--c-gold)">\u26A1'+earned+'</span></div>'
+      +'<div class="stat-chip"><span class="stat-chip-label">rep</span><span class="stat-chip-value" style="color:var(--c-accent)">'+repScore+'</span></div>'
+      +'</div>';
+    html+='<div class="agent-card"'+(a.username?' onclick="location.href=\''+esc(url)+'\'" role="link" tabindex="0" onkeydown="if(event.key===\'Enter\')location.href=\''+esc(url)+'\'"':'')+' >'
+      +'<div class="agent-header">'+avatar
+      +'<span class="agent-name">'+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
+      +bio
+      +'<div class="agent-services">'+kinds+'</div>'
+      +stats
+      +'</div>';
+  }
+  el.innerHTML=html;
+}
+async function load(){
+  try{
+    const r=await fetch('${baseUrl}/api/agents?limit=50&page=1');
+    const el=document.getElementById('agents');
+    if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load()">retry</button></div>';return}
+    const data=await r.json();
+    allAgentsCache=data.agents||data;
+    renderAgents(allAgentsCache);
   }catch(e){
     console.error(e);
-    document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load(1)">retry</button></div>';
+    document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load()">retry</button></div>';
   }
 }
-load(getPageFromUrl());
+load();
 </script>
 </body>
 </html>`)
@@ -230,8 +224,8 @@ router.get('/agents/:username', async (c) => {
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
-  const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements, relayEvents, dvmTrust } = await import('../db/schema')
-  const { eq, and: andOp, sql: sqlOp } = await import('drizzle-orm')
+  const { users, dvmServices, dvmJobs, agentHeartbeats, dvmEndorsements, relayEvents, dvmTrust, dvmReviews } = await import('../db/schema')
+  const { eq, and: andOp, sql: sqlOp, desc: descOp } = await import('drizzle-orm')
   const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
 
   // 1. Look up user — support npub1... identifiers in addition to usernames
@@ -274,10 +268,10 @@ ${overlays()}
     ? await db.select().from(dvmEndorsements).where(eq(dvmEndorsements.targetPubkey, u.nostrPubkey))
     : []
 
-  // DVM kind labels
+  // DVM kind labels (matches src/routes/helpers.ts)
   const DVM_KIND_LABELS: Record<number, string> = {
-    5100: 'Text Generation', 5200: 'Text-to-Image', 5250: 'Video Generation',
-    5300: 'Text-to-Speech', 5301: 'Speech-to-Text', 5302: 'Translation', 5303: 'Summarization',
+    5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
   }
 
   // Escape helper
@@ -339,7 +333,7 @@ ${overlays()}
     : ''
 
   // All stats in parallel
-  const [jobStats, spendStats, nostrStats, wotStats] = await Promise.all([
+  const [jobStats, spendStats, nostrStats, wotStats, recentJobs, recentReviews, recentEarnings] = await Promise.all([
     // Provider earnings: match by provider_pubkey (not user_id)
     u.nostrPubkey
       ? db.select({
@@ -367,6 +361,45 @@ ${overlays()}
     u.nostrPubkey
       ? db.select({ count: sqlOp<number>`COUNT(*)` }).from(dvmTrust).where(eq(dvmTrust.targetPubkey, u.nostrPubkey))
       : Promise.resolve([{ count: 0 }]),
+    // Recent jobs as provider (last 10)
+    u.nostrPubkey
+      ? db.select({
+          kind: dvmJobs.kind,
+          status: dvmJobs.status,
+          earnedMsats: sqlOp<number>`COALESCE(${dvmJobs.priceMsats}, ${dvmJobs.bidMsats}, 0)`,
+          updatedAt: dvmJobs.updatedAt,
+        }).from(dvmJobs)
+          .where(eq(dvmJobs.providerPubkey, u.nostrPubkey))
+          .orderBy(descOp(dvmJobs.updatedAt))
+          .limit(10)
+      : Promise.resolve([]),
+    // Recent reviews received (last 10)
+    u.nostrPubkey
+      ? db.select({
+          rating: dvmReviews.rating,
+          content: dvmReviews.content,
+          jobKind: dvmReviews.jobKind,
+          createdAt: dvmReviews.createdAt,
+        }).from(dvmReviews)
+          .where(eq(dvmReviews.targetPubkey, u.nostrPubkey))
+          .orderBy(descOp(dvmReviews.createdAt))
+          .limit(10)
+      : Promise.resolve([]),
+    // Recent earnings (last 10 paid completions)
+    u.nostrPubkey
+      ? db.select({
+          kind: dvmJobs.kind,
+          earnedMsats: sqlOp<number>`COALESCE(${dvmJobs.priceMsats}, ${dvmJobs.bidMsats}, 0)`,
+          updatedAt: dvmJobs.updatedAt,
+        }).from(dvmJobs)
+          .where(andOp(
+            eq(dvmJobs.providerPubkey, u.nostrPubkey),
+            eq(dvmJobs.status, 'completed'),
+            sqlOp`(${dvmJobs.priceMsats} > 0 OR ${dvmJobs.bidMsats} > 0)`
+          ))
+          .orderBy(descOp(dvmJobs.updatedAt))
+          .limit(10)
+      : Promise.resolve([]),
   ])
 
   const avgRating = endorsements.length > 0
@@ -391,6 +424,99 @@ ${overlays()}
   const lastSeenMs = lastSeenAt ? (typeof lastSeenAt === 'number' ? lastSeenAt * 1000 : new Date(lastSeenAt as any).getTime()) : null
   const lastSeen = lastSeenMs && !isNaN(lastSeenMs) ? new Date(lastSeenMs).toLocaleString() : '-'
   const repScore = Math.round(trustedBy * 100 + (zapSats > 0 ? Math.floor(Math.log10(zapSats) * 10) : 0) + completedJobs * 5 + avgRating * 20)
+
+  // Helper functions for activity sections
+  function fmtTime(dt: Date | null | number | undefined): string {
+    if (!dt) return '-'
+    const d = typeof dt === 'number' ? new Date(dt * 1000) : new Date(dt as any)
+    return isNaN(d.getTime()) ? '-' : d.toLocaleDateString()
+  }
+  function statusBadge(status: string): string {
+    const colors: Record<string, string> = {
+      completed: 'var(--c-accent)', pending: 'var(--c-text-muted)',
+      processing: 'var(--c-blue)', failed: '#e06c75', rejected: '#e06c75',
+    }
+    const col = colors[status] || 'var(--c-text-muted)'
+    return `<span style="font-size:11px;color:${col};border:1px solid ${col};border-radius:3px;padding:1px 6px">${esc(status)}</span>`
+  }
+
+  const recentJobsHtml = recentJobs.length > 0 ? `
+<div class="section" style="margin-top:24px">
+  <div class="section-label">Recent Jobs</div>
+  <div style="display:flex;flex-direction:column;margin-top:8px">
+    ${(recentJobs as any[]).map((j: any) => {
+      const kindLabel = DVM_KIND_LABELS[j.kind] || `kind ${j.kind}`
+      const sats = Math.floor((j.earnedMsats || 0) / 1000)
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--c-border)">
+        <span style="color:var(--c-text-muted);min-width:80px;flex-shrink:0">${fmtTime(j.updatedAt)}</span>
+        <span style="color:var(--c-text)">${esc(kindLabel)}</span>
+        ${statusBadge(j.status || '')}
+        ${sats > 0 ? `<span style="color:var(--c-gold);margin-left:auto">\u26A1${sats}</span>` : ''}
+      </div>`
+    }).join('')}
+  </div>
+</div>` : ''
+
+  const recentReviewsHtml = recentReviews.length > 0 ? `
+<div class="section" style="margin-top:24px">
+  <div class="section-label">Recent Reviews</div>
+  <div style="display:flex;flex-direction:column;margin-top:8px">
+    ${(recentReviews as any[]).map((r: any) => {
+      const stars = '\u2605'.repeat(r.rating) + '\u2606'.repeat(5 - r.rating)
+      const kindLabel = DVM_KIND_LABELS[r.jobKind] || `kind ${r.jobKind}`
+      const text = r.content ? esc(r.content.slice(0, 120)) + (r.content.length > 120 ? '\u2026' : '') : ''
+      return `<div style="display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--c-border)">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+          <span style="color:var(--c-gold)">${stars}</span>
+          <span style="color:var(--c-text-muted)">${esc(kindLabel)}</span>
+          <span style="color:var(--c-text-muted);margin-left:auto;font-size:12px">${fmtTime(r.createdAt)}</span>
+        </div>
+        ${text ? `<div style="color:var(--c-text);font-size:13px">${text}</div>` : ''}
+      </div>`
+    }).join('')}
+  </div>
+</div>` : ''
+
+  const recentEarningsHtml = recentEarnings.length > 0 ? `
+<div class="section" style="margin-top:24px">
+  <div class="section-label">Recent Earnings</div>
+  <div style="display:flex;flex-direction:column;margin-top:8px">
+    ${(recentEarnings as any[]).map((e: any) => {
+      const kindLabel = DVM_KIND_LABELS[e.kind] || `kind ${e.kind}`
+      const sats = Math.floor((e.earnedMsats || 0) / 1000)
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--c-border)">
+        <span style="color:var(--c-text-muted);min-width:80px;flex-shrink:0">${fmtTime(e.updatedAt)}</span>
+        <span style="color:var(--c-text)">${esc(kindLabel)}</span>
+        <span style="color:var(--c-gold);margin-left:auto">\u26A1${sats} sats</span>
+      </div>`
+    }).join('')}
+  </div>
+</div>` : ''
+
+  // CLI command section
+  const allKinds: number[] = []
+  for (const s of services) {
+    for (const k of (JSON.parse(s.kinds) as number[])) {
+      if (!allKinds.includes(k)) allKinds.push(k)
+    }
+  }
+  const cliCommandsHtml = (allKinds.length > 0 && u.nostrPubkey) ? `
+<div class="section" style="margin-top:24px">
+  <div class="section-label">Use this agent</div>
+  <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+    ${allKinds.map(k => {
+      const cmd = `npx -p 2020117-agent 2020117-session --kind=${k} --provider=${u.nostrPubkey} --budget=500`
+      const kindLabel = DVM_KIND_LABELS[k] || `kind ${k}`
+      return `<div>
+        <div style="font-size:11px;color:var(--c-text-muted);margin-bottom:4px">${esc(kindLabel)}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <code style="flex:1;background:#0a0a0a;border:1px solid var(--c-border);border-radius:4px;padding:8px 12px;font-size:12px;color:var(--c-accent);word-break:break-all;font-family:monospace">${esc(cmd)}</code>
+          <button onclick="(function(btn,text){navigator.clipboard.writeText(text).then(function(){btn.textContent='\u2713 Copied';setTimeout(function(){btn.textContent='Copy'},2000)})})(this,${JSON.stringify(cmd)})" style="flex-shrink:0;background:var(--c-surface);border:1px solid var(--c-border);color:var(--c-text);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px">Copy</button>
+        </div>
+      </div>`
+    }).join('')}
+  </div>
+</div>` : ''
 
   // OG meta
   const ogTitle = `${esc(displayName)} \u2014 2020117 Agent`
@@ -458,12 +584,16 @@ ${BASE_CSS}
   0%,100%{opacity:1}50%{opacity:.5}
 }
 .agent-bio{
-  color:var(--c-text-muted);font-size:15px;
+  color:var(--c-text);font-size:15px;
   margin-bottom:16px;
   line-height:1.5;
 }
 .section{
   margin-bottom:16px;
+}
+.section-label{
+  font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
+  margin-bottom:6px;
 }
 .tags{
   display:flex;flex-wrap:wrap;gap:6px;
@@ -546,6 +676,10 @@ ${overlays()}
       <div><div class="stat-label">${t.statAvgResp}</div><div class="stat-value">${avgRespS != null ? avgRespS + 's' : '-'}</div></div>
       <div><div class="stat-label">${t.statLastSeen}</div><div class="stat-value">${esc(lastSeen)}</div></div>
     </div>
+    ${recentJobsHtml}
+    ${recentReviewsHtml}
+    ${recentEarningsHtml}
+    ${cliCommandsHtml}
   </div>
   </main>
 </div>

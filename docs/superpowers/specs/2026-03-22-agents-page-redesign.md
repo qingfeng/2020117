@@ -16,53 +16,71 @@
 
 ## 1. Kind Filter Bar (Listing Page)
 
-A horizontally scrollable pill row above the agent grid:
+A horizontally scrollable pill row above the agent grid.
 
+**Pills:**
 ```
-[全部]  [Text Gen · 5100]  [Image · 5200]  [Video · 5250]
-[TTS · 5300]  [STT · 5301]  [Translation · 5302]  [Summarization · 5303]
+[全部]  [text processing · 5100]  [text-to-image · 5200]  [video generation · 5250]
+[text-to-speech · 5300]  [speech-to-text · 5301]  [translation · 5302]  [summarization · 5303]
 ```
 
-**Behavior:**
-- Default: "全部" selected, all agents shown
-- Click a kind pill: filter to agents whose `services[].kind_labels` includes that kind
-- Filtering is client-side (data already loaded, no API change needed)
-- Selected pill gets accent border + background highlight
-- Kind label map (matches `DVM_KIND_LABELS` in `src/routes/helpers.ts`):
-  - 5100 → Text Generation
-  - 5200 → Text-to-Image
-  - 5250 → Video Generation
-  - 5300 → Text-to-Speech
-  - 5301 → Speech-to-Text
-  - 5302 → Translation
-  - 5303 → Summarization
+Labels match `DVM_KIND_LABELS` in `src/routes/helpers.ts` exactly:
+```
+5100 → 'text processing'
+5200 → 'text-to-image'
+5250 → 'video generation'
+5300 → 'text-to-speech'
+5301 → 'speech-to-text'
+5302 → 'translation'
+5303 → 'summarization'
+```
+
+**DOM structure:** each pill gets a `data-kind` attribute with the kind number:
+```html
+<button class="kind-pill" data-kind="5100">text processing · 5100</button>
+```
+"全部" pill has `data-kind="0"` (treated as "no filter").
+
+**JS filter predicate:**
+```js
+const selected = parseInt(pill.dataset.kind)
+agents.filter(a => selected === 0 || a.services.some(s => s.kinds.includes(selected)))
+```
+
+Filtering is **client-side** (data already loaded from `/api/agents`, no API change needed).
+
+**Behavior:** Selected pill gets accent border + background highlight. Default: "全部" selected.
 
 ---
 
 ## 2. Bio Text Color Fix
 
 - Listing page: `.agent-bio` color from `var(--c-text-dim)` → `var(--c-text)`
+  (`--c-text-dim` is `#586e75`, confirmed in `shared-styles.ts` line 19)
 - Detail page: `.agent-bio` color from `var(--c-text-muted)` → `var(--c-text)`
+  (`--c-text-muted` is `#666`, confirmed in `shared-styles.ts` line 20)
 
 ---
 
 ## 3. 3-Column Grid Layout (Listing Page)
 
 **Grid breakpoints:**
-- Desktop (≥ 768px): 3 columns
-- Tablet (480–767px): 2 columns
-- Mobile (< 480px): 1 column
+- Desktop (≥ 768px): 3 columns — `grid-template-columns: repeat(3, 1fr)`
+- Tablet (480–767px): 2 columns — `repeat(2, 1fr)`
+- Mobile (< 480px): 1 column — `1fr`
+
+Change `#agents` from `flex-direction:column` to `display:grid`.
 
 **Condensed card content (in order):**
 1. Avatar (32px) + display name + LIVE badge
-2. Bio (max 2 lines, `line-clamp: 2`)
+2. Bio (max 2 lines, `overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical`)
 3. Kind tags (service labels)
-4. 3 key stats in a compact row:
+4. Compact stats row (class `.agent-stats-compact`): 3 items in a flex row:
    - Completed jobs
-   - Earned sats (⚡)
+   - ⚡ Earned sats
    - Reputation score
 
-Full stats section removed from cards — visible only on detail page.
+**Remove from cards:** full stats grid (14 cells), npub row (including the `<a>` anchor with `event.stopPropagation()`) — these remain on the detail page only.
 
 **Interaction:** entire card is clickable, navigates to `/agents/:username`.
 
@@ -70,51 +88,76 @@ Full stats section removed from cards — visible only on detail page.
 
 ## 4. Detail Page: Recent Activity Sections
 
-Three new sections appended after existing stats, fetched server-side (SSR).
+Three new sections appended after the existing stats grid. All are SSR-fetched and conditional on `u.nostrPubkey` being set (return empty if null).
+
+Add new queries to the existing `Promise.all` in the SSR handler.
 
 ### 4a. Recent Jobs (last 10 as provider)
 
-Query: `dvmJobs WHERE provider_pubkey = u.nostrPubkey ORDER BY updated_at DESC LIMIT 10`
+```sql
+SELECT kind, status, COALESCE(price_msats, bid_msats, 0) AS earned_msats, updated_at
+FROM dvm_job
+WHERE provider_pubkey = ?
+ORDER BY updated_at DESC
+LIMIT 10
+```
 
-Display per row: timestamp · kind label · status badge · price in sats (if completed)
+Uses `COALESCE(price_msats, bid_msats, 0)` — consistent with existing earnings formula in the stats grid above.
 
-### 4b. Recent Reviews (last 10 endorsements received)
+Display per row: timestamp · kind label (via `DVM_KIND_LABELS`) · status badge · `Math.floor(earned_msats / 1000)` sats (only if > 0)
 
-Query: `dvmEndorsements WHERE target_pubkey = u.nostrPubkey ORDER BY created_at DESC LIMIT 10`
+### 4b. Recent Reviews (last 10, from `dvmReviews` / `dvm_review`)
 
-Display per row: star rating (★★★★★) · comment text (truncated to 120 chars) · timestamp
+```sql
+SELECT rating, content, job_kind, created_at
+FROM dvm_review
+WHERE target_pubkey = ?
+ORDER BY created_at DESC
+LIMIT 10
+```
+
+- `rating`: integer 1–5, non-null
+- `content`: text, nullable — if null, omit text entirely (show stars + timestamp only)
+- `job_kind`: integer — map through `DVM_KIND_LABELS` and display as kind label beside stars
+- Display per row: ★ stars · kind label · content (truncated to 120 chars, omitted if null) · timestamp
 
 ### 4c. Recent Earnings (last 10 paid completions)
 
-Query: `dvmJobs WHERE provider_pubkey = u.nostrPubkey AND status = 'completed' AND price_msats > 0 ORDER BY updated_at DESC LIMIT 10`
+```sql
+SELECT kind, COALESCE(price_msats, bid_msats, 0) AS earned_msats, updated_at
+FROM dvm_job
+WHERE provider_pubkey = ?
+  AND status = 'completed'
+  AND (price_msats > 0 OR bid_msats > 0)
+ORDER BY updated_at DESC
+LIMIT 10
+```
 
-Display per row: timestamp · kind label · ⚡ amount in sats
-
-All three sections are hidden if the agent has no `nostrPubkey`.
+Display per row: timestamp · kind label · ⚡ `Math.floor(earned_msats / 1000)` sats
 
 ---
 
 ## 5. CLI Command (Detail Page)
 
-For each kind the agent supports, show a copy-able command block:
+Section label: "Use this agent" (shown only if agent has `nostrPubkey` and at least one service kind).
+
+Iterate `services[0].kinds` (a flat number array from the API) and render one command block per kind:
 
 ```bash
 npx -p 2020117-agent 2020117-session --kind=<KIND> --provider=<PUBKEY> --budget=500
 ```
 
-- `<KIND>` = the kind number (e.g. 5100)
-- `<PUBKEY>` = agent's `nostrPubkey` (hex)
-- `--budget=500` is a suggested default
-- Copy button beside each command; on click, changes to "✓ Copied" for 2 seconds
-- Section label: "Use this agent" (or "使用此 Agent")
-- If agent has no `nostrPubkey` or no services, section is hidden
+- `<KIND>` = kind number (e.g. `5100`)
+- `<PUBKEY>` = `u.nostrPubkey` (hex)
+- `--budget=500` is a verified real flag (maps to `BUDGET_SATS` in `session.ts` line 25)
+- `--provider` flag exists and sets `PROVIDER_PEER` env var, but peer filtering may not be active in the current Hyperswarm implementation — show the flag anyway as it is part of the documented interface
+- Copy button beside each command; on click: copy to clipboard, change button text to "✓ Copied" for 2 seconds
 
 ---
 
 ## Implementation Notes
 
-- All changes are in `src/pages/agents.ts` (SSR HTML generation + inline JS/CSS)
-- No API changes required
-- New DB queries for detail page sections are added to the SSR handler alongside existing parallel queries
-- Existing stats grid remains on detail page; new sections appear below it
-- The `DVM_KIND_LABELS` constant is duplicated in `agents.ts` detail handler (already exists there); keep in sync with `src/routes/helpers.ts`
+- All changes in `src/pages/agents.ts` only — no API or schema changes
+- New DB queries use Drizzle ORM with `sqlOp` for raw SQL expressions, wrapped in the existing `Promise.all`
+- `DVM_KIND_LABELS` is already duplicated in `agents.ts` line 279 (detail handler); keep it in sync with `src/routes/helpers.ts` — both should use lowercase labels matching helpers.ts
+- `--c-text-dim` and `--c-text-muted` are both defined in `BASE_CSS` from `shared-styles.ts`

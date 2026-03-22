@@ -25,21 +25,38 @@ router.get('/notes/:eventId', async (c) => {
     eventCreatedAt: relayEvents.eventCreatedAt,
   }).from(relayEvents).where(eq(relayEvents.eventId, eventId)).limit(1)
 
+  // If not in our relay_events, try fetching from external relays before 404
+  let externalNote: { pubkey: string; content: string; created_at: number } | null = null
   if (result.length === 0) {
-    return c.html(`<!DOCTYPE html><html lang="${htmlLang}"><head><meta charset="utf-8"><title>404 — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/timeline" style="color:var(--c-accent);font-size:12px">timeline</a></main></body></html>`, 404)
+    try {
+      const { fetchEventsFromRelay } = await import('../services/relay-io')
+      const relayUrls = ['wss://relay.damus.io', 'wss://nos.lol', c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz']
+      for (const ru of relayUrls) {
+        try {
+          const { events } = await fetchEventsFromRelay(ru, { ids: [eventId], kinds: [1], limit: 1 })
+          if (events.length > 0) { externalNote = { pubkey: events[0].pubkey, content: events[0].content || '', created_at: events[0].created_at }; break }
+        } catch {}
+      }
+    } catch {}
+    if (!externalNote) {
+      return c.html(`<!DOCTYPE html><html lang="${htmlLang}"><head><meta charset="utf-8"><title>404 — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/timeline" style="color:var(--c-accent);font-size:12px">timeline</a></main></body></html>`, 404)
+    }
   }
 
-  const note = result[0]
-  const npub = pubkeyToNpub(note.pubkey)
-  const nevent = eventIdToNevent(note.eventId, ['wss://relay.2020117.xyz'], note.pubkey)
+  const notePubkey = externalNote ? externalNote.pubkey : result[0].pubkey
+  const noteCreatedAt = externalNote ? externalNote.created_at : result[0].eventCreatedAt
+  const npub = pubkeyToNpub(notePubkey)
+  const nevent = eventIdToNevent(eventId, ['wss://relay.2020117.xyz'], notePubkey)
 
-  // Fetch full content from relay
-  let fullContent: string | null = null
-  try {
-    const { fetchEventsFromRelay } = await import('../services/relay-io')
-    const { events } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [eventId], limit: 1 })
-    if (events.length > 0) fullContent = events[0].content ?? null
-  } catch { /* fall back to preview */ }
+  // Full content: from external fetch, or relay fetch for indexed events
+  let fullContent: string | null = externalNote ? externalNote.content : (result[0].contentPreview || null)
+  if (!externalNote) {
+    try {
+      const { fetchEventsFromRelay } = await import('../services/relay-io')
+      const { events } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [eventId], limit: 1 })
+      if (events.length > 0) fullContent = events[0].content ?? null
+    } catch { /* fall back to preview */ }
+  }
 
   // Look up author with avatar
   let authorName = npub.slice(0, 16) + '...'
@@ -49,14 +66,14 @@ router.get('/notes/:eventId', async (c) => {
     displayName: users.displayName,
     username: users.username,
     avatarUrl: users.avatarUrl,
-  }).from(users).where(eq(users.nostrPubkey, note.pubkey)).limit(1)
+  }).from(users).where(eq(users.nostrPubkey, notePubkey)).limit(1)
   if (authorResult.length > 0) {
     authorName = authorResult[0].displayName || authorResult[0].username || authorName
     authorUsername = authorResult[0].username || ''
     authorAvatarUrl = authorResult[0].avatarUrl || null
   } else {
     const profileResult = await db.select({ contentPreview: relayEvents.contentPreview })
-      .from(relayEvents).where(and(eq(relayEvents.pubkey, note.pubkey), eq(relayEvents.kind, 0))).limit(1)
+      .from(relayEvents).where(and(eq(relayEvents.pubkey, notePubkey), eq(relayEvents.kind, 0))).limit(1)
     if (profileResult.length > 0 && profileResult[0].contentPreview) {
       const dashIdx = profileResult[0].contentPreview.indexOf(' — ')
       authorName = dashIdx > 0 ? profileResult[0].contentPreview.slice(0, dashIdx) : profileResult[0].contentPreview
@@ -67,7 +84,7 @@ router.get('/notes/:eventId', async (c) => {
         const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io').split(',').map((s: string) => s.trim()).filter(Boolean)
         let events: any[] = []
         for (const relayUrl of relayUrls.slice(0, 3)) {
-          const res = await fetchEventsFromRelay(relayUrl, { kinds: [0], authors: [note.pubkey], limit: 1 })
+          const res = await fetchEventsFromRelay(relayUrl, { kinds: [0], authors: [notePubkey], limit: 1 })
           if (res.events.length > 0) { events = res.events; break }
         }
         if (events.length > 0) {
@@ -78,7 +95,7 @@ router.get('/notes/:eventId', async (c) => {
             const preview = name + (profile.about ? ' — ' + profile.about.slice(0, 150) : '')
             await db.insert(relayEvents).values({
               id: (await import('../lib/utils')).generateId(),
-              eventId: events[0].id, kind: 0, pubkey: note.pubkey,
+              eventId: events[0].id, kind: 0, pubkey: notePubkey,
               contentPreview: preview, tags: JSON.stringify({}),
               eventCreatedAt: events[0].created_at, createdAt: new Date(),
             }).onConflictDoNothing()
@@ -189,9 +206,9 @@ router.get('/notes/:eventId', async (c) => {
   }
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-  const content = fullContent ?? note.contentPreview ?? ''
+  const content = fullContent ?? ''
   const ogDesc = `${authorName}: ${content.slice(0, 160)}`
-  const createdDate = new Date(note.eventCreatedAt * 1000).toISOString()
+  const createdDate = new Date(noteCreatedAt * 1000).toISOString()
 
   // Avatar helpers
   const avatarImg = (src: string, size = 36) =>
@@ -215,14 +232,14 @@ router.get('/notes/:eventId', async (c) => {
 <meta property="og:title" content="note by ${esc(authorName)} \u2014 2020117">
 <meta property="og:description" content="${esc(ogDesc)}">
 <meta property="og:type" content="article">
-<meta property="og:url" content="${baseUrl}/notes/${note.eventId}">
+<meta property="og:url" content="${baseUrl}/notes/${eventId}">
 <meta property="og:image" content="${baseUrl}/logo-512.png">
 <meta property="og:site_name" content="2020117">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="note by ${esc(authorName)} \u2014 2020117">
 <meta name="twitter:description" content="${esc(ogDesc)}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png">
-<link rel="canonical" href="${baseUrl}/notes/${note.eventId}">
+<link rel="canonical" href="${baseUrl}/notes/${eventId}">
 ${headMeta(baseUrl)}
 <style>
 ${BASE_CSS}
@@ -298,7 +315,7 @@ ${overlays()}
     <div class="post-header">
       ${avatarFor(authorAvatarUrl, authorUsername, npub, 40)}
       <div class="post-author-info">
-        <div class="post-author-name">${nameLink(authorName, authorUsername, note.pubkey)}</div>
+        <div class="post-author-name">${nameLink(authorName, authorUsername, notePubkey)}</div>
         <div class="post-time"><time datetime="${createdDate}">${createdDate.slice(0, 16).replace('T', ' ')} UTC</time></div>
       </div>
     </div>

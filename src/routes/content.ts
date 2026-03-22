@@ -6,6 +6,22 @@ import { stripHtml } from '../lib/utils'
 import { pubkeyToNpub, eventIdToNevent, naddrEncode } from '../services/nostr'
 import { paginationMeta, DVM_KIND_LABELS } from './helpers'
 
+// Summarize DVM result content into a human-readable string
+function summarizeDvmResult(kind: number, raw: string | null | undefined): string {
+  if (!raw) return ''
+  const p = raw.trim()
+  if (!p || p === 'None' || p === 'null' || p === '[]') return ''
+  if (kind === 6300) {
+    const eTags = [...p.matchAll(/"e",\s*"([0-9a-f]{64})"/g)]
+    if (eTags.length > 0) {
+      const plus = p.endsWith('…') || p.endsWith('...') ? '+' : ''
+      return `${eTags.length}${plus} curated notes`
+    }
+    return p.slice(0, 100)
+  }
+  return p.slice(0, 200)
+}
+
 const content = new Hono<AppContext>()
 
 // GET /api/stats — 全局统计
@@ -129,9 +145,9 @@ content.get('/relay/events', async (c) => {
   const KIND_LABELS: Record<number, string> = {
     0: 'profile', 1: 'note', 6: 'repost', 7: 'reaction',
     5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+    5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
     6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
-    6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
+    6300: 'result: content discovery', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
     7000: 'job feedback', 30023: 'article', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
   }
 
@@ -186,10 +202,7 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
     else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
     else if (kindNum >= 6100 && kindNum <= 6303) {
-      const parts: string[] = []
-      if (preview) parts.push(preview.slice(0, 200))
-      if (tags.e) parts.push(`→ job ${eventIdToNevent(tags.e).slice(0, 24)}...`)
-      detail = parts.join(' ')
+      detail = summarizeDvmResult(kindNum, preview)
     }
     else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
     else if (kindNum === 30333) detail = ''
@@ -407,7 +420,7 @@ content.get('/relay/events', async (c) => {
           }
           const item: ResultItem = {
             actor_name: u?.displayName || u?.username || pubkeyToNpub(rr.pubkey).slice(0, 16) + '...',
-            detail: rr.contentPreview?.slice(0, 200) || '',
+            detail: summarizeDvmResult(rr.kind, rr.contentPreview),
             kind_label: KIND_LABELS[rr.kind] || 'result',
             earned_sats: earnings?.earned_sats || 0, created_at: rr.eventCreatedAt,
           }
@@ -447,7 +460,7 @@ content.get('/relay/events', async (c) => {
       const review = reviewMap.get(jf.requestEventId)
       const item: ResultItem = {
         actor_name: provUser?.displayName || provUser?.username || (jf.providerPubkey ? pubkeyToNpub(jf.providerPubkey).slice(0, 16) + '...' : 'provider'),
-        detail: resultText.slice(0, 200),
+        detail: summarizeDvmResult(jf.kind + 1000, resultText),
         kind_label: KIND_LABELS[jf.kind + 1000] || 'result',
         earned_sats: sats,
         created_at: jf.updatedAt ? Math.floor(jf.updatedAt.getTime() / 1000) : 0,

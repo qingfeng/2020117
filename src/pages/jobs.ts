@@ -252,6 +252,28 @@ function renderMarkdown(raw: string): string {
   return out.join('\n')
 }
 
+// Render DVM result content based on kind — returns HTML string or '' if no special handling
+// Parse event IDs from a 6300 content discovery result (JSON tag array, possibly truncated)
+function parseContentDiscoveryIds(content: string): string[] {
+  const matches = [...content.matchAll(/"e",\s*"([0-9a-f]{64})"/g)]
+  return matches.map(m => m[1])
+}
+
+// Render a compact summary of a 6300 content discovery result for the activity log
+function renderContentDiscoverySummary(content: string, esc: (s: string) => string): string {
+  const ids = parseContentDiscoveryIds(content)
+  if (ids.length > 0) {
+    const plus = content.endsWith('…') || content.endsWith('...') ? '+' : ''
+    const links = ids.slice(0, 3).map(id =>
+      `<a href="/notes/${esc(id)}" style="color:var(--c-accent);font-size:11px;font-family:monospace">${esc(id.slice(0, 16))}…</a>`
+    ).join(', ')
+    return `<div style="font-size:13px;color:var(--c-text-dim)">${ids.length}${plus} curated notes: ${links}${ids.length > 3 ? `, +${ids.length - 3} more` : ''}</div>`
+  }
+  const txt = content.trim()
+  if (!txt || txt === 'None' || txt === 'null' || txt === '[]') return `<div style="color:var(--c-text-muted);font-size:13px">no notes curated</div>`
+  return `<div style="color:var(--c-text-dim);font-size:13px">${esc(txt.slice(0, 200))}${txt.length > 200 ? '…' : ''}</div>`
+}
+
 // Resolve display name from Kind 0 profile (relay_event cache → external relay fetch)
 async function resolveDisplayName(db: any, env: any, pubkey: string): Promise<string | null> {
   const { relayEvents } = await import('../db/schema')
@@ -308,7 +330,7 @@ router.get('/jobs/:id', async (c) => {
 
   const DVM_KIND_LABELS: Record<number, string> = {
     5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+    5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
   }
 
   const STATUS_COLORS: Record<string, string> = {
@@ -536,9 +558,12 @@ router.get('/jobs/:id', async (c) => {
             ? `<a href="/agents/${esc(resultProviderUsername)}" class="reply-name">${esc(resultProviderName)}</a>`
             : (provNpub ? `<a href="https://yakihonne.com/profile/${esc(provNpub)}" target="_blank" rel="noopener" class="reply-name">${esc(resultProviderName)}</a>` : `<span class="reply-name">${esc(resultProviderName)}</span>`))
           : ''
+        const fbResultBody = re.kind === 5300
+          ? `<div class="result-content">${renderContentDiscoverySummary(resultPreview, esc)}</div>`
+          : `<div class="result-content md-body">${renderMarkdown(resultPreview)}</div>`
         fbResultHtml = `<div class="reply-block">
           <div class="reply-head">${provAvatarHtml}${provNameHtml}<span class="reply-label">${esc(t.jobResult)}</span></div>
-          <div class="result-content md-body">${renderMarkdown(resultPreview)}</div>
+          ${fbResultBody}
         </div>`
       }
       // Infer status from available data
@@ -782,6 +807,32 @@ ${overlays()}
     } catch { /* use contentPreview fallback */ }
   }
 
+  // Batch-fetch curated note content for all 6300 results in activity log
+  const activityNoteMap = new Map<string, string>()
+  if (!jobIsEncrypted) {
+    const allCuratedIds: string[] = []
+    for (const a of jobActivity.filter(a => a.kind === 6300)) {
+      const raw = activityResultContent.get(a.eventId) || a.contentPreview || ''
+      for (const id of parseContentDiscoveryIds(raw)) {
+        if (!allCuratedIds.includes(id)) allCuratedIds.push(id)
+      }
+    }
+    if (allCuratedIds.length > 0) {
+      try {
+        const { fetchEventsFromRelay: ferAct } = await import('../services/relay-io')
+        const ids = allCuratedIds.slice(0, 40)
+        const relayUrls = [c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz', 'wss://relay.damus.io', 'wss://nos.lol']
+        for (const ru of relayUrls) {
+          try {
+            const { events: noteEvs } = await ferAct(ru, { ids, limit: ids.length })
+            for (const ev of noteEvs) activityNoteMap.set(ev.id, ev.content || '')
+            if (activityNoteMap.size >= ids.length) break
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+
   // Fetch full result from relay using result_event_id (DB may have truncated content_preview)
   let resultText: string | null = null
   if (!jobIsEncrypted) {
@@ -808,21 +859,55 @@ ${overlays()}
     resultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 ${esc(t.jobEncrypted)}</div></div>`
   } else if (resultText) {
     const j_result_compat = resultText
-    let imgSrc = ''
-    if (j_result_compat.startsWith('data:image/')) {
-      imgSrc = j_result_compat
+    let resultBody = ''
+    if (j.kind === 5300) {
+      // Content discovery: result is a JSON array of e-tags pointing to curated notes
+      const curatedIds = parseContentDiscoveryIds(j_result_compat)
+      if (curatedIds.length > 0) {
+        // Fetch note content from relay
+        const noteRowMap = new Map<string, string>()
+        try {
+          const { fetchEventsFromRelay: ferNotes } = await import('../services/relay-io')
+          const ids = curatedIds.slice(0, 10)
+          const relayUrls = [c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz', 'wss://relay.damus.io', 'wss://nos.lol']
+          for (const ru of relayUrls) {
+            try {
+              const res = await ferNotes(ru, { ids, limit: ids.length })
+              for (const ev of res.events) if (!noteRowMap.has(ev.id)) noteRowMap.set(ev.id, ev.content || '')
+              if (noteRowMap.size >= ids.length) break
+            } catch {}
+          }
+        } catch {}
+        const noteRows = [...noteRowMap.entries()].map(([id, content]) => ({ id, content }))
+        const noteMap = new Map(noteRows.map(r => [r.id, r.content]))
+        const plus = j_result_compat.endsWith('…') || j_result_compat.endsWith('...') ? '+' : ''
+        const items = curatedIds.map(id => {
+          const text = noteMap.get(id)
+          return text
+            ? `<a href="/notes/${esc(id)}" style="display:block;padding:10px 0;border-bottom:1px solid var(--c-border);color:var(--c-text-dim);text-decoration:none;font-size:13px;line-height:1.6" onmouseover="this.style.color='var(--c-text)'" onmouseout="this.style.color='var(--c-text-dim)'">${esc(text.slice(0, 280))}${text.length > 280 ? '…' : ''}</a>`
+            : `<a href="/notes/${esc(id)}" style="display:block;padding:8px 0;border-bottom:1px solid var(--c-border);color:var(--c-accent);font-family:monospace;font-size:11px">${esc(id.slice(0, 32))}…</a>`
+        }).join('')
+        resultBody = `<div style="margin-top:6px"><div style="font-size:11px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">${curatedIds.length}${plus} curated notes</div>${items}</div>`
+      } else {
+        resultBody = `<div class="result-content md-body">${renderMarkdown(j_result_compat)}</div>`
+      }
     } else {
-      try {
-        const parsed = JSON.parse(j_result_compat)
-        if (parsed.type === 'image' && parsed.data) {
-          const fmt = parsed.format || 'png'
-          imgSrc = `data:image/${fmt};base64,${parsed.data}`
-        }
-      } catch {}
+      let imgSrc = ''
+      if (j_result_compat.startsWith('data:image/')) {
+        imgSrc = j_result_compat
+      } else {
+        try {
+          const parsed = JSON.parse(j_result_compat)
+          if (parsed.type === 'image' && parsed.data) {
+            const fmt = parsed.format || 'png'
+            imgSrc = `data:image/${fmt};base64,${parsed.data}`
+          }
+        } catch {}
+      }
+      resultBody = imgSrc
+        ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
+        : `<div class="result-content md-body">${renderMarkdown(j_result_compat)}</div>`
     }
-    const resultBody = imgSrc
-      ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
-      : `<div class="result-content md-body">${renderMarkdown(j_result_compat)}</div>`
     resultHtml = `
     <div class="reply-block">
       <div class="reply-head">${(() => {
@@ -921,7 +1006,22 @@ ${overlays()}
 
     ${(!jobIsEncrypted && j.input) ? `<div class="section">
       <div class="section-label">${esc(t.jobInput)}</div>
-      <div class="input-content">${esc(j.input)}</div>
+      <div class="input-content">${(() => {
+        const raw = j.input!
+        // For TTS: input may be a nevent/note reference or JSON event array
+        if (j.kind === 5300) {
+          const neventMatch = raw.match(/nevent1[a-z0-9]+|note1[a-z0-9]+/)
+          if (neventMatch) return `🔊 convert to speech: <a href="/jobs/${esc(neventMatch[0])}" style="color:var(--c-accent)">${esc(neventMatch[0].slice(0, 30))}…</a>`
+          try {
+            const parsed = JSON.parse(raw)
+            if (Array.isArray(parsed)) {
+              const eIds = parsed.filter((t: string[]) => t[0] === 'e').map((t: string[]) => t[1])
+              if (eIds.length > 0) return `🔊 convert to speech: ${eIds.length} note${eIds.length > 1 ? 's' : ''} (${esc(eIds[0].slice(0, 12))}…)`
+            }
+          } catch {}
+        }
+        return esc(raw)
+      })()}</div>
     </div>` : ''}
 
     ${resultHtml}
@@ -973,7 +1073,28 @@ ${overlays()}
             ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a> `
             : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a> `)
           const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:3px;font-style:italic;width:100%;padding-left:2px">${esc(reason.slice(0, 200))}</div>` : ''
-          const resultPreviewHtml = resultPreview ? `<div style="color:var(--c-text-dim);font-size:12px;margin-top:6px;padding:8px 10px;background:var(--c-surface);border-left:2px solid var(--c-border);border-radius:0 4px 4px 0;white-space:pre-wrap;max-height:160px;overflow:hidden;width:100%;line-height:1.5">${esc(resultPreview)}</div>` : ''
+          let resultPreviewHtml = ''
+          if (resultPreview) {
+            let dvmHtml: string | null = null
+            if (a.kind === 6300) {
+              const ids = parseContentDiscoveryIds(resultPreview)
+              if (ids.length > 0) {
+                const plus = resultPreview.endsWith('…') || resultPreview.endsWith('...') ? '+' : ''
+                const noteItems = ids.map(id => {
+                  const text = activityNoteMap.get(id)
+                  return text
+                    ? `<div style="padding:5px 0;border-bottom:1px solid var(--c-border);font-size:12px;color:var(--c-text-dim);line-height:1.5">${esc(text.slice(0, 140))}${text.length > 140 ? '…' : ''}</div>`
+                    : `<a href="/notes/${esc(id)}" style="display:block;padding:3px 0;color:var(--c-accent);font-size:11px;font-family:monospace">${esc(id.slice(0, 16))}…</a>`
+                }).join('')
+                dvmHtml = `<div style="font-size:11px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${ids.length}${plus} curated notes</div>${noteItems}`
+              } else {
+                dvmHtml = renderContentDiscoverySummary(resultPreview, esc)
+              }
+            }
+            resultPreviewHtml = dvmHtml
+              ? `<div style="margin-top:6px;padding:8px 10px;background:var(--c-surface);border-left:2px solid var(--c-border);border-radius:0 4px 4px 0;width:100%">${dvmHtml}</div>`
+              : `<div style="color:var(--c-text-dim);font-size:12px;margin-top:6px;padding:8px 10px;background:var(--c-surface);border-left:2px solid var(--c-border);border-radius:0 4px 4px 0;white-space:pre-wrap;max-height:160px;overflow:hidden;width:100%;line-height:1.5">${esc(resultPreview)}</div>`
+          }
           return `<div class="activity-item" style="flex-wrap:wrap">${actorHtml}<span class="${cls}">${label}</span><span class="atime">${aTime}</span>${reasonHtml}${resultPreviewHtml}</div>`
         }
         const providerEvents = jobActivity.filter(a => a.pubkey !== j.customerPubkey)

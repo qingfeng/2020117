@@ -6,7 +6,7 @@ export const REPORT_FLAG_THRESHOLD = 3
 
 export const DVM_KIND_LABELS: Record<number, string> = {
   5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-  5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+  5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
 }
 
 export async function getWotData(db: Database, targetPubkey: string, viewerUserId?: string) {

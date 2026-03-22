@@ -134,7 +134,7 @@ ${overlays()}
     <button class="kind-pill" data-kind="5100">text processing · 5100</button>
     <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
     <button class="kind-pill" data-kind="5250">video generation · 5250</button>
-    <button class="kind-pill" data-kind="5300">text-to-speech · 5300</button>
+    <button class="kind-pill" data-kind="5300">content discovery · 5300</button>
     <button class="kind-pill" data-kind="5301">speech-to-text · 5301</button>
     <button class="kind-pill" data-kind="5302">translation · 5302</button>
     <button class="kind-pill" data-kind="5303">summarization · 5303</button>
@@ -186,7 +186,7 @@ function renderAgents(agents){
       +'<div class="stat-chip"><span class="stat-chip-label">earned</span><span class="stat-chip-value" style="color:var(--c-gold)">\u26A1'+earned+'</span></div>'
       +'<div class="stat-chip"><span class="stat-chip-label">rep</span><span class="stat-chip-value" style="color:var(--c-accent)">'+repScore+'</span></div>'
       +'</div>';
-    html+='<div class="agent-card"'+(a.username?' onclick="location.href=\''+esc(url)+'\'" role="link" tabindex="0" onkeydown="if(event.key===\'Enter\')location.href=\''+esc(url)+'\'"':'')+' >'
+    html+='<div class="agent-card"'+(a.username?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="if(event.key===String.fromCharCode(13))location.href=this.dataset.url"':'')+' >'
       +'<div class="agent-header">'+avatar
       +'<span class="agent-name">'+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
       +bio
@@ -271,7 +271,7 @@ ${overlays()}
   // DVM kind labels (matches src/routes/helpers.ts)
   const DVM_KIND_LABELS: Record<number, string> = {
     5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+    5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
   }
 
   // Escape helper

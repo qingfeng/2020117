@@ -346,9 +346,36 @@ router.get('/jobs/:id', async (c) => {
   }).from(dvmJobs)
     .leftJoin(users, eq(dvmJobs.userId, users.id))
     .where(or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)))
-    // Prefer customer record so we get bid/customer info; fall back to provider record
+    // Prefer customer record so we get the requester info; fall back to provider record
     .orderBy(sqlRole`CASE WHEN ${dvmJobs.role} = 'customer' THEN 0 ELSE 1 END`)
     .limit(1)
+
+  // If the selected record (customer) lacks provider info, supplement from the provider record
+  if (result.length > 0 && !result[0].providerPubkey) {
+    const { isNotNull, and, or } = await import('drizzle-orm')
+    const provRec = await db.select({
+      providerPubkey: dvmJobs.providerPubkey,
+      result: dvmJobs.result,
+      resultEventId: dvmJobs.resultEventId,
+      status: dvmJobs.status,
+      priceMsats: dvmJobs.priceMsats,
+      paidMsats: dvmJobs.paidMsats,
+    }).from(dvmJobs)
+      .where(and(
+        or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)),
+        isNotNull(dvmJobs.providerPubkey)
+      ))
+      .limit(1)
+    if (provRec.length > 0) {
+      const pr = provRec[0]
+      result[0].providerPubkey = pr.providerPubkey
+      if (!result[0].result) result[0].result = pr.result
+      if (!result[0].resultEventId) result[0].resultEventId = pr.resultEventId
+      if (pr.status === 'completed' || pr.status === 'result_available') result[0].status = pr.status
+      if (!result[0].priceMsats) result[0].priceMsats = pr.priceMsats
+      if (!result[0].paidMsats) result[0].paidMsats = pr.paidMsats
+    }
+  }
 
   if (result.length === 0) {
     // Fallback: show relay event detail for external DVM events not in dvm_job
@@ -406,7 +433,7 @@ router.get('/jobs/:id', async (c) => {
             const rv = resultRes.events[0]
             resultPreview = rv.content || null
             resultProviderPubkey = rv.pubkey
-            resultProviderName = await resolveDisplayName(db, c.env, rv.pubkey)
+            resultProviderName = await resolveDisplayName(db, c.env, rv.pubkey) || rv.pubkey.slice(0, 12) + '...'
           }
         } catch {
           // Fallback to relay_event cache
@@ -423,7 +450,7 @@ router.get('/jobs/:id', async (c) => {
           if (resultRow.length > 0 && resultRow[0].contentPreview) {
             resultPreview = resultRow[0].contentPreview
             resultProviderPubkey = resultRow[0].pubkey
-            resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey)
+            resultProviderName = await resolveDisplayName(db, c.env, resultRow[0].pubkey) || resultRow[0].pubkey.slice(0, 12) + '...'
           }
         }
       }

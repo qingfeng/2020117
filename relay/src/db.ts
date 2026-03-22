@@ -9,12 +9,14 @@ export async function saveEvent(db: D1Database, event: NostrEvent): Promise<bool
   // Don't store ephemeral events
   if (isEphemeral(event.kind)) return false
 
-  // Check duplicate
+  // Check duplicate (pre-flight to avoid unnecessary work downstream)
   const existing = await db
     .prepare('SELECT id FROM events WHERE id = ?')
     .bind(event.id)
     .first()
   if (existing) return false
+
+
 
   // Replaceable events: delete older versions
   if (isReplaceable(event.kind)) {
@@ -56,11 +58,12 @@ export async function saveEvent(db: D1Database, event: NostrEvent): Promise<bool
     await processDeletion(db, event)
   }
 
-  // Insert event
-  await db
-    .prepare('INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  // Insert event — use OR IGNORE to handle race conditions between concurrent connections
+  const insertResult = await db
+    .prepare('INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig)
     .run()
+  if (!insertResult.meta.changes) return false // another connection won the race
 
   // Index tags (single-letter tags with values)
   const tagInserts: D1PreparedStatement[] = []

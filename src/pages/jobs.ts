@@ -274,12 +274,20 @@ function renderContentDiscoverySummary(content: string, esc: (s: string) => stri
   return `<div style="color:var(--c-text-dim);font-size:13px">${esc(txt.slice(0, 200))}${txt.length > 200 ? '…' : ''}</div>`
 }
 
-// Resolve display name from Kind 0 profile (relay_event cache → external relay fetch)
+// Resolve display name from Kind 0 profile (users table → relay_event cache → external relay fetch)
 async function resolveDisplayName(db: any, env: any, pubkey: string): Promise<string | null> {
-  const { relayEvents } = await import('../db/schema')
+  const { relayEvents, users: usersTable } = await import('../db/schema')
   const { and } = await import('drizzle-orm')
 
-  // 1. Check local Kind 0 cache
+  // 1. Check users table first — most authoritative and up-to-date
+  const userResult = await db.select({ displayName: usersTable.displayName, username: usersTable.username })
+    .from(usersTable).where(eq(usersTable.nostrPubkey, pubkey)).limit(1)
+  if (userResult.length > 0) {
+    const name = userResult[0].displayName || userResult[0].username
+    if (name) return name
+  }
+
+  // 2. Check local Kind 0 cache
   const profileResult = await db.select({
     contentPreview: relayEvents.contentPreview,
   }).from(relayEvents).where(and(eq(relayEvents.pubkey, pubkey), eq(relayEvents.kind, 0))).limit(1)
@@ -363,13 +371,17 @@ router.get('/jobs/:id', async (c) => {
     updatedAt: dvmJobs.updatedAt,
     customerName: users.displayName,
     customerUsername: users.username,
+    // customerPubkeyDirect: the canonical customer pubkey stored on the job record itself
+    // (more reliable than users.nostrPubkey which is the job-owner's pubkey via userId join,
+    //  and can be wrong when no customer role record exists)
+    customerPubkeyDirect: dvmJobs.customerPubkey,
     customerPubkey: users.nostrPubkey,
     customerAvatarUrl: users.avatarUrl,
   }).from(dvmJobs)
     .leftJoin(users, eq(dvmJobs.userId, users.id))
     .where(or(eq(dvmJobs.id, jobId), eq(dvmJobs.eventId, jobId), eq(dvmJobs.requestEventId, jobId)))
-    // Prefer customer record so we get the requester info; fall back to provider record
-    .orderBy(sqlRole`CASE WHEN ${dvmJobs.role} = 'customer' THEN 0 ELSE 1 END`)
+    // Prefer: 1) customer role records, 2) provider records with known customer_pubkey
+    .orderBy(sqlRole`CASE WHEN ${dvmJobs.role} = 'customer' THEN 0 WHEN ${dvmJobs.customerPubkey} IS NOT NULL THEN 1 ELSE 2 END`)
     .limit(1)
 
   // If the selected record (customer) lacks provider info, supplement from the provider record
@@ -396,6 +408,24 @@ router.get('/jobs/:id', async (c) => {
       if (pr.status === 'completed' || pr.status === 'result_available') result[0].status = pr.status
       if (!result[0].priceMsats) result[0].priceMsats = pr.priceMsats
       if (!result[0].paidMsats) result[0].paidMsats = pr.paidMsats
+    }
+  }
+
+  // Normalise customer pubkey: prefer dvmJobs.customerPubkey (the canonical field) over
+  // users.nostrPubkey (which is the job-owner pubkey and wrong when no customer role record exists)
+  if (result.length > 0) {
+    const r = result[0]
+    if (r.customerPubkeyDirect && r.customerPubkeyDirect !== r.customerPubkey) {
+      // customerPubkey (from users join) is the provider's pubkey — look up the real customer
+      const realCustomer = await db.select({
+        displayName: users.displayName,
+        username: users.username,
+        avatarUrl: users.avatarUrl,
+      }).from(users).where(eq(users.nostrPubkey, r.customerPubkeyDirect)).limit(1)
+      r.customerPubkey = r.customerPubkeyDirect
+      r.customerName = realCustomer[0]?.displayName || null
+      r.customerUsername = realCustomer[0]?.username || ''
+      r.customerAvatarUrl = realCustomer[0]?.avatarUrl || null
     }
   }
 
@@ -642,12 +672,13 @@ ${overlays()}
   const paidSats = j.paidMsats ? Math.floor(j.paidMsats / 1000) : (j.priceMsats ? Math.floor(j.priceMsats / 1000) : 0)
   // Status display will be determined after review check
   let effectiveStatus = j.status
-  let customerName = j.customerName || j.customerUsername || 'unknown'
-  // If customer name is a placeholder (nostr:xxx...), try to resolve from Kind 0
-  if (customerName.startsWith('nostr:') && j.customerPubkey) {
+  let customerName = j.customerName || j.customerUsername || ''
+  // Resolve name from DB/relay if missing or a placeholder
+  if ((!customerName || customerName.startsWith('nostr:')) && j.customerPubkey) {
     const resolved = await resolveDisplayName(db, c.env, j.customerPubkey)
     if (resolved) customerName = resolved
   }
+  if (!customerName) customerName = 'unknown'
 
   // Look up provider
   let providerName = ''

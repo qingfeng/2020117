@@ -1807,13 +1807,48 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
         if (existing.length > 0) continue
 
         // Look up customer job for context (input, customerPubkey)
-        const customerJob = await db.select({
+        let customerJob = await db.select({
           input: dvmJobs.input,
           inputType: dvmJobs.inputType,
           customerPubkey: dvmJobs.customerPubkey,
         }).from(dvmJobs)
           .where(and(eq(dvmJobs.requestEventId, requestEventId), eq(dvmJobs.role, 'customer')))
           .limit(1)
+
+        // If no customer record exists, fetch the request event from relay and backfill it
+        if (customerJob.length === 0) {
+          try {
+            const { events: reqEvs } = await fetchEventsFromRelay(relayUrl, { ids: [requestEventId], limit: 1 })
+            if (reqEvs.length > 0) {
+              const reqEv = reqEvs[0]
+              const custUserId = await ensureUserForPubkey(db, reqEv.pubkey)
+              if (custUserId) {
+                const iTag = reqEv.tags?.find((t: string[]) => t[0] === 'i')
+                const bidTag = reqEv.tags?.find((t: string[]) => t[0] === 'bid')
+                const cInput = iTag?.[1] || reqEv.content || null
+                const cInputType = iTag?.[2] || 'text'
+                await db.insert(dvmJobs).values({
+                  id: generateId(),
+                  userId: custUserId,
+                  role: 'customer',
+                  kind: reqEv.kind,
+                  status: 'result_available',
+                  input: cInput,
+                  inputType: cInputType,
+                  bidMsats: bidTag ? parseInt(bidTag[1]) : null,
+                  customerPubkey: reqEv.pubkey,
+                  requestEventId,
+                  createdAt: new Date(reqEv.created_at * 1000),
+                  updatedAt: new Date(),
+                })
+                customerJob = [{ input: cInput, inputType: cInputType, customerPubkey: reqEv.pubkey }]
+                console.log(`[ExtProvider] Backfilled missing customer job for request ${requestEventId.slice(0, 8)}...`)
+              }
+            }
+          } catch (e) {
+            console.error(`[ExtProvider] Failed to backfill customer job for ${requestEventId.slice(0, 8)}...:`, e)
+          }
+        }
 
         try {
           const userId = await ensureUserForPubkey(db, re.pubkey)

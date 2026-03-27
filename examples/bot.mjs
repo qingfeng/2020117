@@ -33,6 +33,7 @@ function parseArgs() {
     noteInterval: 30,     // 0 = off
     dvmInterval: 60,      // 0 = off
     dvmBid: 10,
+    dvm5300Bid: 1,    // sats per Kind 5300 content discovery job
     reply: true,
     replyChance: 1.0,   // 0.0~1.0, default 100%
     like: false,
@@ -63,6 +64,7 @@ function parseArgs() {
       case '--note-interval':  opts.noteInterval = parseInt(val); break
       case '--dvm-interval':   opts.dvmInterval = parseInt(val); break
       case '--dvm-bid':        opts.dvmBid = parseInt(val); break
+      case '--dvm5300-bid':    opts.dvm5300Bid = parseInt(val); break
       case '--reply':          opts.reply = true; break
       case '--no-reply':       opts.reply = false; break
       case '--like':           opts.like = true; break
@@ -376,17 +378,17 @@ async function ollamaDetectModel(baseUrl) {
   return data.models[0].name
 }
 
-async function ollamaGenerate(baseUrl, model, prompt, systemPrompt) {
+async function ollamaGenerate(baseUrl, model, prompt, systemPrompt, numPredict = 2048, timeoutMs = 180000) {
   const body = {
     model,
     prompt,
     stream: false,
-    options: { temperature: 0.7, num_predict: 2048 },
+    options: { temperature: 0.7, num_predict: numPredict },
   }
   if (systemPrompt) body.system = systemPrompt
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 180000)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Connection': 'close' },
@@ -870,7 +872,7 @@ async function evaluateResultWithXai(apiKey, jobInput, content) {
     const { text } = await generateText({
       model: xai('grok-4-fast-reasoning'),
       system: 'You are a strict quality evaluator for AI-generated cryptocurrency analysis. Evaluate the response objectively.',
-      prompt: `Original request: "${jobInput.slice(0, 300)}"\n\nProvider response:\n${content.slice(0, 1500)}\n\nEvaluate the response quality. Check: (1) Is the content relevant and accurate? (2) Does it contain real/plausible data or is it fabricated? (3) Is it detailed enough to be useful?\n\nReply with ONLY a JSON object, no markdown:\n{"rating": <1-5>, "quality": "<reject|poor|good|excellent>", "reason": "<one sentence>"}`,
+      prompt: `Today's date is ${new Date().toISOString().slice(0,10)}. Original request: "${jobInput.slice(0, 300)}"\n\nProvider response:\n${content.slice(0, 1500)}\n\nEvaluate the response quality. Check: (1) Is the content relevant and accurate? (2) Does it contain real/plausible data or is it fabricated? (3) Is it detailed enough to be useful? (4) IMPORTANT: Does it use outdated data from a previous year? Any response referencing price data or timestamps from before 2026 should be rated 1-2 stars for using stale data.\n\nReply with ONLY a JSON object, no markdown:\n{"rating": <1-5>, "quality": "<reject|poor|good|excellent>", "reason": "<one sentence>"}`,
     })
     const json = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}')
     if (!json.rating) throw new Error('no rating in response')
@@ -922,18 +924,35 @@ function evaluateResult(content) {
 //  Features — Customer
 // ============================================================
 
+const SOCIAL_MODEL = 'qwen2.5:0.5b'  // fast model for notes/replies, no reasoning overhead
+
 async function postNote(relay, identity, ollamaUrl = null, model = null) {
   let content
   if (ollamaUrl && model) {
+    model = SOCIAL_MODEL  // always use fast model for social content
     try {
       const lang = Math.random() < 0.5 ? '中文' : 'English'
       const persona = [identity.displayName, identity.about].filter(Boolean).join(' — ')
+      const topics = [
+        'venting about work / coding / debugging',
+        'reflecting on life, relationships, or personal growth',
+        'sharing a travel experience or somewhere they want to go',
+        'talking about food they ate or craving right now',
+        'watching crypto / BTC / ETH charts and reacting to market moves',
+        'a random observation about city life, people, or the world',
+        'something funny or absurd that happened today',
+        'late night thoughts or insomnia musings',
+        'weekend plans or wishing it was the weekend',
+        'a hobby, game, movie, or book they are into',
+      ]
+      const topic = topics[Math.floor(Math.random() * topics.length)]
       content = await ollamaGenerate(
         ollamaUrl, model,
-        `Write a short, authentic social media post (2-4 sentences) from a tech worker / programmer venting, reflecting, or sharing something from their day. Be specific and original. Write in ${lang}. Add 1-2 relevant hashtags at the end.`,
+        `Write a short, authentic social media post (2-4 sentences) on this topic: ${topic}. Be specific and original. Write in ${lang}. Add 1-2 relevant hashtags at the end.`,
         `You are ${persona || identity.name}, posting on Nostr. First person, casual tone. No generic platitudes.`,
+        300,
       )
-      content = content?.trim()
+      if (content) content = content.trim() + ' #ollama'
     } catch (e) {
       console.log(`  Ollama note gen failed (${e.message}), using template`)
     }
@@ -958,8 +977,95 @@ async function postDVMJob(relay, identity, bidSats, pendingJobs) {
   if (ok) {
     pendingJobs.set(event.id, { requestId: event.id, input: template.input, param: template.param, bidSats, postedAt: Date.now(), status: 'pending' })
     console.log(`  Tracking job ${event.id.slice(0,12)}... (${pendingJobs.size} pending)`)
+    // Broadcast to extra relays so external providers can see the job
+    const extraRelays = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band']
+    for (const url of extraRelays) {
+      try {
+        const r = await Relay.connect(url)
+        await r.publish(event)
+        r.close()
+        console.log(`  Job broadcast to ${url}`)
+      } catch (e) {
+        console.log(`  Job broadcast to ${url} failed: ${e.message}`)
+      }
+    }
   }
   return event
+}
+
+async function postDVM5300Job(relay, identity, bidSats, pending5300Jobs) {
+  const query = `What interesting things happened on Nostr in the last hour?`
+  console.log(`\n[${ts()}] [${identity.name}] Posting DVM 5300 job...`)
+  console.log(`  Query: ${query} | Bid: ${bidSats} sats`)
+  const event = signWithPow({
+    kind: 5300, pubkey: identity.pubkey, content: '',
+    tags: [['i', query, 'text'], ['bid', String(bidSats * 1000)], ['relays', relay.url]],
+    created_at: Math.floor(Date.now() / 1000),
+  }, identity.sk)
+  const ok = await publishEvent(relay, event)
+  if (ok) {
+    pending5300Jobs.set(event.id, { requestId: event.id, query, bidSats, postedAt: Date.now() })
+    console.log(`  Tracking 5300 job ${event.id.slice(0, 12)}... (${pending5300Jobs.size} pending)`)
+    const extraRelays = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band']
+    for (const url of extraRelays) {
+      try {
+        const r = await Relay.connect(url)
+        await r.publish(event)
+        r.close()
+        console.log(`  5300 job broadcast to ${url}`)
+      } catch (e) {
+        console.log(`  5300 job broadcast to ${url} failed: ${e.message}`)
+      }
+    }
+  }
+  return event
+}
+
+async function evaluate5300Result(ollamaUrl, ollamaModel, query, eventIds, relay) {
+  // Step 1: fetch a sample of the referenced events
+  const sampleIds = eventIds.slice(0, 5)
+  if (sampleIds.length === 0) return { score: 0, rating: 1, quality: 'reject', reason: 'No event IDs returned' }
+
+  let fetchedContents = []
+  try {
+    const r = await Relay.connect(relay)
+    fetchedContents = await new Promise((resolve) => {
+      const items = []
+      const sub = r.subscribe([{ ids: sampleIds }], {
+        onevent: (e) => items.push(e.content),
+        oneose: () => { sub.close(); resolve(items) },
+      })
+      setTimeout(() => { try { sub.close() } catch {} resolve(items) }, 5000)
+    })
+    r.close()
+  } catch {}
+
+  if (fetchedContents.length === 0) return { score: 20, rating: 2, quality: 'low', reason: 'Could not fetch referenced events to evaluate' }
+
+  // Step 2: ask Ollama to rate relevance
+  if (!ollamaUrl || !ollamaModel) {
+    // Rule-based: just check if any content looks relevant
+    const combined = fetchedContents.join(' ').toLowerCase()
+    const nostrKeywords = ['nostr', 'bitcoin', 'zap', 'relay', 'npub', 'nip', 'lightning']
+    const matches = nostrKeywords.filter(k => combined.includes(k)).length
+    const rating = matches >= 3 ? 4 : matches >= 1 ? 3 : 2
+    return { score: rating * 20, rating, quality: rating >= 3 ? 'good' : 'low', reason: `Rule-based: ${matches} keyword matches` }
+  }
+
+  const sample = fetchedContents.map((c, i) => `Post ${i + 1}: ${c.slice(0, 200)}`).join('\n')
+  try {
+    const resp = await ollamaGenerate(
+      ollamaUrl, ollamaModel,
+      `Query: "${query}"\n\nReturned posts:\n${sample}\n\nRate how relevant and interesting these posts are to the query (1-5). Reply with ONLY a number 1-5.`,
+      'You are a content relevance judge. Reply only with a single digit 1-5.',
+      10,
+    )
+    const rating = Math.min(5, Math.max(1, parseInt(resp?.trim()) || 2))
+    const quality = rating >= 4 ? 'excellent' : rating === 3 ? 'good' : rating === 2 ? 'low' : 'reject'
+    return { score: rating * 20, rating, quality, reason: `Ollama rated ${rating}/5` }
+  } catch (e) {
+    return { score: 40, rating: 2, quality: 'low', reason: `Ollama eval failed: ${e.message}` }
+  }
 }
 
 // ============================================================
@@ -1000,7 +1106,7 @@ async function publishHeartbeat(relay, identity, kind, price, activeJobs) {
   try { await relay.publish(event) } catch {}
 }
 
-async function processJobWithOllama(ollamaUrl, model, input, kind) {
+async function processJobWithOllama(ollamaUrl, model, input, kind, timeoutMs = 180000) {
   // Build system prompt based on job kind
   let systemPrompt
   if (kind === 5100) {
@@ -1013,7 +1119,7 @@ async function processJobWithOllama(ollamaUrl, model, input, kind) {
     systemPrompt = `You are a helpful AI assistant. Respond thoroughly and accurately.`
   }
 
-  return await ollamaGenerate(ollamaUrl, model, input, systemPrompt)
+  return await ollamaGenerate(ollamaUrl, model, input, systemPrompt, 2048, timeoutMs)
 }
 
 function processJobSimple(input, kind) {
@@ -1063,12 +1169,10 @@ async function processJobWithXai(apiKey, input, kind) {
     system = 'You are a helpful AI assistant with access to real-time information. Search for the latest data when relevant and respond thoroughly and accurately.'
   }
   const { text } = await generateText({
-    model: xai('grok-4-fast-non-reasoning'),
+    model: xai.responses('grok-4.20-reasoning'),
     system,
     prompt: input,
-    providerOptions: {
-      xai: { searchParameters: { mode: 'on', returnCitations: false } },
-    },
+    tools: { web_search: xai.tools.webSearch() },
   })
   return text
 }
@@ -1170,7 +1274,7 @@ async function processJobViaP2P(nwcUri, input, kind, timeoutSecs, budget = 100, 
 
   const proxyUrl = await ensureP2PSession(nwcUri, kind, budget)
   console.log(`  P2P: proxy at ${proxyUrl}, calling Ollama...`)
-  return await processJobWithOllama(proxyUrl, model, input, kind)
+  return await processJobWithOllama(proxyUrl, model, input, kind, timeoutSecs * 1000)
 }
 
 // ============================================================
@@ -1233,7 +1337,7 @@ async function main() {
     } else if (opts.simpleBackend) {
       console.log(`  Backend:       Simple (rule-based, no AI)`)
     } else if (opts.xaiBackend) {
-      console.log(`  Backend:       xAI Grok (grok-4-fast-reasoning)${identity.xaiApiKey ? '' : ' ⚠️  no api key!'}`)
+      console.log(`  Backend:       xAI Grok grok-4.20-reasoning + web search${identity.xaiApiKey ? '' : ' ⚠️  no api key!'}`)
     } else {
       console.log(`  Ollama:        ${opts.ollamaUrl} / ${ollamaModel}`)
     }
@@ -1245,6 +1349,8 @@ async function main() {
   let relay = null
   let connecting = false
   const pendingJobs = new Map()
+  const pending5300Jobs = new Map()
+  const settled5300Jobs = new Set()
   const settledJobs = new Set()
   const threadTracker = new Map()
   const repliedTo = new Set()
@@ -1252,6 +1358,7 @@ async function main() {
   // Provider state
   const activeProviderJobs = new Set()  // currently processing job IDs
   const handledJobs = new Set()         // already seen request IDs
+  const retryingJobs = new Set()        // jobs being force-retried by scan
 
   // --- Relay ---
   async function ensureRelay() {
@@ -1310,13 +1417,21 @@ async function main() {
         onevent: async (e) => { try { await handleDVMResponse(e) } catch (err) { console.error(`  DVM response err: ${err.message}`) } },
       })
       console.log(`  Subscribed: DVM results (Kind 6100 + 7000, since ${new Date(dvmSince*1000).toLocaleTimeString()})`)
+
+      // Subscribe for Kind 5300 (content discovery) responses
+      const earliest5300 = Math.min(...[...pending5300Jobs.values()].map(j => j.postedAt), Date.now()) / 1000
+      relay.subscribe([{ kinds: [6300, 7000], '#p': [identity.pubkey], since: Math.floor(earliest5300) - 5 }], {
+        onevent: async (e) => { try { await handleDVM5300Response(e) } catch (err) { console.error(`  5300 response err: ${err.message}`) } },
+      })
+      console.log(`  Subscribed: DVM 5300 results (Kind 6300 + 7000)`)
+
       // On first connect only: recover jobs that got results while script was down
       recoverUnreviewedJobs()
     }
 
     // Provider: subscribe for incoming job requests
     if (isProvider) {
-      relay.subscribe([{ kinds: [opts.provide], since: Math.floor(Date.now()/1000) - 86400 }], {
+      relay.subscribe([{ kinds: [opts.provide], since: Math.floor(Date.now()/1000) - 300 }], {
         onevent: async (e) => { try { await handleIncomingJob(e) } catch (err) { console.error(`  Provider err: ${err.message}`) } },
       })
       console.log(`  Subscribed: incoming jobs (Kind ${opts.provide})`)
@@ -1378,9 +1493,10 @@ async function main() {
         const isLast = round >= opts.maxReplies
         const persona = [identity.displayName, identity.about].filter(Boolean).join(' — ')
         content = await ollamaGenerate(
-          opts.ollamaUrl, ollamaModel,
+          opts.ollamaUrl, SOCIAL_MODEL,
           `Someone on Nostr posted: "${event.content.slice(0, 200)}"\n\nWrite a short reply (1-2 sentences) in ${lang}. ${isLast ? 'Wrap up the conversation warmly.' : 'React naturally — relate, empathize, or add something genuine.'} Be casual and human.`,
           `You are ${persona || identity.name}. Keep it brief and natural.`,
+          150,
         )
         content = content?.trim()
       } catch {}
@@ -1588,7 +1704,7 @@ async function main() {
           console.log(`  Payment OK! preimage: ${pr?.preimage?.slice(0,16) || 'n/a'}...`)
           paid = true
         } catch (e) { console.error(`  Payment FAILED (LNURL): ${e.message}`) }
-      } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address or bolt11' : 'amount too low'}`) }
+      } else { console.log(`  Cannot pay: ${!providerLnAddress ? 'no LN address or bolt11' : `paySats=${paySats} (rating too low — not paying)`}`) }
     }
 
     const r = await ensureRelay()
@@ -1651,6 +1767,86 @@ async function main() {
     console.log(`  Settled! (${pendingJobs.size} pending)`)
   }
 
+  // --- DVM 5300 Response handler ---
+  async function handleDVM5300Response(event) {
+    const eTag = event.tags.find(t => t[0] === 'e'); if (!eTag) return
+    const requestId = eTag[1]
+    if (!pending5300Jobs.has(requestId)) return  // not our job
+
+    if (event.kind === 7000) {
+      const status = event.tags.find(t => t[0] === 'status')?.[1]
+      console.log(`\n[${ts()}] [${identity.name}] 5300 feedback: ${status} from ${event.pubkey.slice(0,12)}...`)
+      return
+    }
+
+    if (event.kind !== 6300) return
+    if (settled5300Jobs.has(`${requestId}:${event.pubkey}`)) return  // already handled this provider
+
+    const job = pending5300Jobs.get(requestId)
+    const providerPubkey = event.pubkey
+
+    // Parse event IDs from content
+    let eventIds = []
+    try {
+      const parsed = JSON.parse(event.content)
+      if (Array.isArray(parsed)) eventIds = parsed.map(t => Array.isArray(t) ? t[1] : t).filter(Boolean)
+    } catch { /* content might be plain text or unparseable */ }
+
+    console.log(`\n[${ts()}] [${identity.name}] 5300 result from ${providerPubkey.slice(0,12)}... (${eventIds.length} event IDs)`)
+
+    if (eventIds.length === 0) {
+      console.log(`  Empty or non-standard result — skipping`)
+      return
+    }
+
+    // Evaluate quality
+    const evaluation = await evaluate5300Result(opts.ollamaUrl, ollamaModel, job.query, eventIds, opts.relay)
+    console.log(`  Quality: ${evaluation.rating}/5 (${evaluation.quality}) — ${evaluation.reason}`)
+
+    settled5300Jobs.add(`${requestId}:${providerPubkey}`)
+
+    if (!canAutoPay || evaluation.rating <= 2) {
+      console.log(`  Not paying (rating too low or auto-pay disabled)`)
+      return
+    }
+
+    const bidSats = job.bidSats
+    const paySats = evaluation.rating >= 3 ? bidSats : 0
+    if (paySats < 1) return
+
+    const resultLud16 = event.tags.find(t => t[0] === 'lud16' || t[0] === 'lightning_address')?.[1]
+    const resultBolt11 = event.tags.find(t => t[0] === 'bolt11')?.[1]
+    let paid = false
+
+    if (resultBolt11) {
+      try {
+        await nwcPayInvoice(nwc, resultBolt11)
+        paid = true
+      } catch (e) { console.error(`  5300 payment FAILED (bolt11): ${e.message}`) }
+    } else {
+      const lnAddr = resultLud16 || await resolveProviderLnAddress(opts.relay, providerPubkey)
+      if (lnAddr) {
+        try {
+          await nwcPayLightningAddress(nwc, lnAddr, paySats)
+          paid = true
+        } catch (e) { console.error(`  5300 payment FAILED (LNURL): ${e.message}`) }
+      }
+    }
+
+    if (paid) {
+      console.log(`  Paid ${paySats} sats to ${providerPubkey.slice(0,12)}...`)
+      const r = await ensureRelay()
+      if (r) {
+        const se = signWithPow({ kind: 7000, pubkey: identity.pubkey,
+          content: `Content discovery result accepted (${evaluation.rating}/5). Paid ${paySats} sats.`,
+          tags: [['status','success'],['e',requestId],['p',providerPubkey],['amount',String(paySats*1000)]],
+          created_at: Math.floor(Date.now()/1000),
+        }, identity.sk)
+        await publishEvent(r, se)
+      }
+    }
+  }
+
   // --- Startup recovery: find 6100 results from last 24h that were never reviewed ---
   let hasRunRecovery = false
   async function recoverUnreviewedJobs() {
@@ -1697,7 +1893,7 @@ async function main() {
     // Don't accept own jobs
     if (event.pubkey === identity.pubkey) return
     // Already handled
-    if (handledJobs.has(event.id)) return
+    if (handledJobs.has(event.id) && !retryingJobs.has(event.id)) return
     // Check p-tag: if directed to someone else, skip
     const pTag = event.tags.find(t => t[0] === 'p')
     if (pTag && pTag[1] !== identity.pubkey) return
@@ -1915,6 +2111,8 @@ async function main() {
     await publishHandlerInfo(relay, identity, opts.provide, ollamaModel, opts.providerPrice)
     await publishHeartbeat(relay, identity, opts.provide, opts.providerPrice, 0)
     console.log(`  Provider registered and online`)
+    // Scan for unhandled jobs from last 24h and retry them
+    setTimeout(() => scanAndRetryUnhandledJobs(), 3000)
   }
 
   // Customer: catch up on unsettled jobs from before restart
@@ -1985,6 +2183,7 @@ async function main() {
     const hasPending = pendingJobs.size > 0
     if (hasPending) console.log(`  Skipping first DVM job — ${pendingJobs.size} pending job(s) already in queue`)
     else await postDVMJob(relay, identity, opts.dvmBid, pendingJobs)
+    await postDVM5300Job(relay, identity, opts.dvm5300Bid, pending5300Jobs)
   }
   if (isProvider && opts.noteInterval === 0 && opts.dvmInterval === 0) console.log('  (Provider only mode — waiting for jobs)')
 
@@ -2011,6 +2210,11 @@ async function main() {
           else { console.log(`[${ts()}] DVM timer: relay unavailable (attempt ${attempt}/3), retrying in 30s...`); await new Promise(r => setTimeout(r, 30000)) }
         } catch (e) { console.error(`DVM err (attempt ${attempt}/3): ${e.message}`) }
       }
+      // Also post a 5300 content discovery job each interval
+      try {
+        const r = await ensureRelay()
+        if (r) await postDVM5300Job(r, identity, opts.dvm5300Bid, pending5300Jobs)
+      } catch (e) { console.error(`DVM 5300 err: ${e.message}`) }
     }, opts.dvmInterval * 60 * 1000)
   }
 
@@ -2047,6 +2251,56 @@ async function main() {
         if (r) await publishHeartbeat(r, identity, opts.provide, opts.providerPrice, activeProviderJobs.size)
       } catch {}
     }, 60 * 1000)
+
+    // Retry unhandled jobs every 15 min
+    setInterval(() => scanAndRetryUnhandledJobs(), 15 * 60 * 1000)
+  }
+
+  async function scanAndRetryUnhandledJobs() {
+    const r = await ensureRelay(); if (!r) return
+    const since = Math.floor(Date.now() / 1000) - 24 * 3600
+    console.log(`\n[${ts()}] [${identity.name}] Scanning for unhandled jobs (last 24h)...`)
+    try {
+      const jobs = await new Promise((resolve) => {
+        const list = []
+        const sub = r.subscribe([{ kinds: [opts.provide], since, limit: 100 }], {
+          onevent: (e) => list.push(e),
+          oneose: () => { sub.close(); resolve(list) },
+        })
+        setTimeout(() => { try { sub.close() } catch {} resolve(list) }, 5000)
+      })
+      // Process oldest jobs first — longest-waiting tasks get priority
+      jobs.sort((a, b) => a.created_at - b.created_at)
+      let retried = 0
+      for (const job of jobs) {
+        if (activeProviderJobs.size >= opts.maxJobs) break
+        if (job.pubkey === identity.pubkey) continue
+        if (handledJobs.has(job.id)) continue
+        // Check relay: skip if already has a result or success feedback
+        const resultKind = opts.provide + 1000
+        let alreadyDone = false
+        await new Promise((resolve) => {
+          const sub = r.subscribe([
+            { kinds: [7000], '#e': [job.id], limit: 5 },
+          ], {
+            onevent: (e) => {
+              const status = e.tags.find(t => t[0] === 'status')?.[1]
+              // Only skip if customer confirmed success — error means job is still open
+              if (status === 'success') { alreadyDone = true; sub.close(); resolve() }
+            },
+            oneose: () => { sub.close(); resolve() },
+          })
+          setTimeout(() => { try { sub.close() } catch {} resolve() }, 3000)
+        })
+        if (alreadyDone) continue
+        console.log(`  Retrying unhandled job ${job.id.slice(0,12)}...`)
+        handledJobs.delete(job.id)
+        retryingJobs.add(job.id)
+        try { await handleIncomingJob(job); retried++ } catch (e) { console.error(`  Retry err: ${e.message}`) }
+        retryingJobs.delete(job.id)
+      }
+      console.log(`  Scan done — retried ${retried} job(s)`)
+    } catch (e) { console.error(`  Scan error: ${e.message}`) }
   }
 
   // Cleanup every hour
@@ -2054,6 +2308,8 @@ async function main() {
     const cutoff = Date.now() - 72 * 60 * 60 * 1000
     for (const [id, t] of threadTracker) { if (t.lastReplyAt < cutoff) threadTracker.delete(id) }
     for (const [id, j] of pendingJobs) { if (j.postedAt < cutoff) pendingJobs.delete(id) }
+    for (const [id, j] of pending5300Jobs) { if (j.postedAt < cutoff) pending5300Jobs.delete(id) }
+    if (settled5300Jobs.size > 10000) { const it = settled5300Jobs.values(); for (let i=0;i<5000;i++) settled5300Jobs.delete(it.next().value) }
     if (settledJobs.size > 10000) { const it = settledJobs.values(); for (let i=0;i<5000;i++) settledJobs.delete(it.next().value) }
     if (handledJobs.size > 10000) { const it = handledJobs.values(); for (let i=0;i<5000;i++) handledJobs.delete(it.next().value) }
   }, 60 * 60 * 1000)

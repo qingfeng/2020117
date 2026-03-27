@@ -529,7 +529,7 @@ router.get('/jobs/:id', async (c) => {
         tags: relayEvents.tags,
         eventCreatedAt: relayEvents.eventCreatedAt,
       }).from(relayEvents).where(
-        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
+        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (1, 7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
       ).orderBy(relayEvents.eventCreatedAt).limit(20)
 
       // Build activity HTML
@@ -559,6 +559,10 @@ router.get('/jobs/:id', async (c) => {
             label = t.jobSubmittedResult; cls = 'status-success'
             const amountMsats = at.amount ? parseInt(at.amount) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
+          } else if (a.kind === 1) {
+            const commentText = a.contentPreview || ''
+            label = '💬 commented'; cls = ''
+            reason = commentText
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'
             label = emoji === '+' ? '❤ liked' : `${emoji} ${t.jobReacted}`; cls = 'status-success'
@@ -786,7 +790,7 @@ ${overlays()}
     }).from(relayEvents).where(
       and(
         sqlTag`instr(${relayEvents.tags}, ${requestEventId}) > 0`,
-        sqlTag`${relayEvents.kind} IN (7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
+        sqlTag`${relayEvents.kind} IN (1, 7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
       )
     ).orderBy(relayEvents.eventCreatedAt).limit(20)
   }
@@ -1095,6 +1099,9 @@ ${overlays()}
               const content = activityResultContent.get(a.eventId) || a.contentPreview || ''
               if (content) resultPreview = content.length > 500 ? content.slice(0, 500) + '…' : content
             }
+          } else if (a.kind === 1) {
+            label = '💬 commented'; cls = ''
+            reason = a.contentPreview || ''
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'; label = emoji === '+' ? '❤ liked' : `${emoji} reacted`; cls = 'status-success'
           } else if (a.kind === 31117) {

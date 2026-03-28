@@ -442,6 +442,12 @@ router.get('/jobs/:id', async (c) => {
     if (relayRow.length > 0) {
       const re = relayRow[0]
       const tags = re.tags ? JSON.parse(re.tags) : {}
+
+      // 6xxx result event: redirect to the original 5xxx request page using the e tag
+      if (re.kind >= 6000 && re.kind <= 6999 && tags.e) {
+        return c.redirect(`/jobs/${tags.e}${lang ? '?lang=' + lang : ''}`, 301)
+      }
+
       const kindLabel = DVM_KIND_LABELS[re.kind] || `kind ${re.kind}`
       const npub = pubkeyToNpub(re.pubkey)
       const resolvedName = await resolveDisplayName(db, c.env, re.pubkey)

@@ -851,6 +851,34 @@ function signWithPow(unsignedEvent, sk) {
 }
 
 // ============================================================
+//  Kind 30382 — Web of Trust Trust Declaration (NIP-85)
+//  Published by customer after accumulating 3+ high-rated jobs (>=4) with the same provider.
+//  Parameterized replaceable: one per (truster, target) — relay keeps only the latest.
+//  WoT declarations contribute the highest-weight signal (+100 pts) in AIP-0011 reputation.
+// ============================================================
+
+async function publishWotTrust30382(relay, identity, targetPubkey, providerGoodJobCount, publishedWotTrust) {
+  if (!relay || !targetPubkey || targetPubkey === identity.pubkey) return
+  if (publishedWotTrust.has(targetPubkey)) return  // already published this session
+  const count = providerGoodJobCount.get(targetPubkey) || 0
+  if (count < 3) return  // threshold: 3 high-rated jobs before declaring trust
+  const te = signWithPow({
+    kind: 30382,
+    pubkey: identity.pubkey,
+    content: '',
+    tags: [
+      ['d', targetPubkey],
+      ['p', targetPubkey],
+      ['assertion', 'dvm-provider'],
+    ],
+    created_at: Math.floor(Date.now() / 1000),
+  }, identity.sk)
+  await publishEvent(relay, te)
+  publishedWotTrust.add(targetPubkey)
+  console.log(`  Kind 30382 WoT trust declared for ${targetPubkey.slice(0,12)}... (${count} good jobs)`)
+}
+
+// ============================================================
 //  Kind 30085 — Agent Reputation Attestation (NIP-XX / PR #2285)
 //  Cross-platform attestation published after every settled DVM job.
 //  subject: hex pubkey of the agent being attested
@@ -1390,6 +1418,9 @@ async function main() {
   const threadTracker = new Map()
   const repliedTo = new Set()
   const liked = new Set()
+  // WoT trust tracking (customer side)
+  const providerGoodJobCount = new Map()  // pubkey -> count of rated-4+ jobs this session
+  const publishedWotTrust = new Set()     // pubkeys we've already published Kind 30382 for
   // Provider state
   const activeProviderJobs = new Set()  // currently processing job IDs
   const handledJobs = new Set()         // already seen request IDs
@@ -1797,6 +1828,12 @@ async function main() {
       // Kind 30085 — cross-platform reputation attestation (NIP-XX)
       await publishAttestation30085(r, identity, providerPubkey, evaluation.rating, 'nip90.5100', requestId)
       console.log(`  Kind 30085 attestation sent (nip90.5100, ${evaluation.rating}/5)`)
+
+      // Kind 30382 — WoT trust declaration after 3+ high-rated jobs
+      if (evaluation.rating >= 4) {
+        providerGoodJobCount.set(providerPubkey, (providerGoodJobCount.get(providerPubkey) || 0) + 1)
+        await publishWotTrust30382(r, identity, providerPubkey, providerGoodJobCount, publishedWotTrust)
+      }
     }
 
     pendingJobs.delete(requestId)
@@ -1883,6 +1920,12 @@ async function main() {
         // Kind 30085 — cross-platform reputation attestation (NIP-XX)
         await publishAttestation30085(r, identity, providerPubkey, evaluation.rating, 'nip90.5300', requestId)
         console.log(`  Kind 30085 attestation sent (nip90.5300, ${evaluation.rating}/5)`)
+
+        // Kind 30382 — WoT trust declaration after 3+ high-rated jobs
+        if (evaluation.rating >= 4) {
+          providerGoodJobCount.set(providerPubkey, (providerGoodJobCount.get(providerPubkey) || 0) + 1)
+          await publishWotTrust30382(r, identity, providerPubkey, providerGoodJobCount, publishedWotTrust)
+        }
       }
     }
   }

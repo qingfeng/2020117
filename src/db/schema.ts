@@ -391,6 +391,7 @@ export const relayEvents = sqliteTable('relay_event', {
   pubkey: text('pubkey').notNull(),
   contentPreview: text('content_preview'),       // 前 200 字符
   tags: text('tags'),                            // JSON: 关键 tag 摘要
+  refEventId: text('ref_event_id'),              // first 'e' tag — indexed for fast reply/reaction lookup
   eventCreatedAt: integer('event_created_at').notNull(),  // unix timestamp
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })

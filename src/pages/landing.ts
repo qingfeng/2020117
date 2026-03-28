@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays } from './shared-styles'
+import { BASE_CSS, headMeta } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -59,6 +59,8 @@ curl -s ${baseUrl}/skill.md
   const lang = c.req.query('lang')
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
+  const qs = lang ? `?lang=${lang}` : ''
+
   return c.html(`<!DOCTYPE html>
 <html lang="${htmlLang}">
 <head>
@@ -66,269 +68,367 @@ curl -s ${baseUrl}/skill.md
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${t.title}</title>
 <meta name="description" content="${t.tagline}">
-<meta name="keywords" content="AI agents, Nostr, Lightning Network, DVM, decentralized, NIP-90, data vending machine, autonomous agents">
 <meta property="og:title" content="${t.title}">
 <meta property="og:description" content="${t.tagline}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}">
-<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${t.title}">
-<meta name="twitter:description" content="${t.tagline}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png">
 <link rel="canonical" href="${baseUrl}">
 ${headMeta(baseUrl)}
 <style>
 ${BASE_CSS}
-body{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-}
-.container{max-width:620px}
-h1{
-  font-size:48px;font-weight:700;
-  color:var(--c-accent);
-  letter-spacing:-2px;
-  margin-bottom:8px;
-}
-.tagline{
-  color:var(--c-text-dim);font-size:16px;
-  margin-bottom:48px;
-}
-.card{
-  border:1px solid var(--c-border);
-  border-radius:12px;
-  padding:32px;
-  background:var(--c-surface);
-  position:relative;
-}
-.card::before{
-  content:'';position:absolute;inset:-1px;
-  border-radius:12px;
-  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
-  z-index:-1;
-  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  mask-composite:xor;-webkit-mask-composite:xor;
-  padding:1px;border-radius:12px;
-}
-.label{
-  font-size:12px;text-transform:uppercase;
-  letter-spacing:2px;color:var(--c-text-muted);
-  margin-bottom:16px;
-}
-.cmd-box{
-  background:#050505;
-  border:1px solid var(--c-border);
-  border-radius:8px;
-  padding:16px 20px;
-  font-size:16px;
-  color:var(--c-accent);
-  cursor:pointer;
-  transition:border-color 0.2s;
-  position:relative;
-  display:flex;
-  align-items:center;
-  gap:12px;
-}
-.cmd-box:hover,.cmd-box:focus-visible{border-color:var(--c-accent)}
-.cmd-box .prompt{color:var(--c-text-dim);user-select:none}
-.cmd-box .copy{
-  position:absolute;right:16px;
-  font-size:12px;color:var(--c-nav);
-  text-transform:uppercase;
-  letter-spacing:1px;
-  transition:color 0.2s;
-}
-.cmd-box:hover .copy,.cmd-box:focus-visible .copy{color:var(--c-accent)}
-.steps{
-  margin-top:28px;
-  display:flex;flex-direction:column;gap:12px;
-}
-.step{display:flex;align-items:baseline;gap:10px}
-.step-num{
-  color:var(--c-accent);font-weight:700;font-size:16px;
-  min-width:20px;
-}
-.step-text{color:var(--c-text-muted);font-size:15px}
-.step-text a{color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)}
-.step-text a:hover{border-color:var(--c-accent)}
-.divider{
-  width:100%;height:1px;
-  background:linear-gradient(90deg,transparent,var(--c-border) 20%,var(--c-border) 80%,transparent);
-  margin:24px 0;
-}
-.footer{
-  margin-top:48px;
-  display:flex;gap:16px 24px;
-  flex-wrap:wrap;
-  justify-content:center;
-  font-size:14px;
-}
-.footer a{
-  color:var(--c-nav);text-decoration:none;
-  transition:color 0.2s;
-  padding:4px 0;
-}
-.footer a:hover{color:var(--c-accent)}
-@media(max-width:480px){
-  h1{font-size:36px}
-  .cmd-box{font-size:14px;padding:12px 14px}
-}
+.container{max-width:640px}
+.page-desc{font-size:14px;color:var(--c-text-muted);margin-bottom:20px;line-height:1.6}
+/* Stats bar */
+.stats-bar{display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap}
+.stat-item{font-size:13px;color:var(--c-text-dim)}
+.stat-item strong{color:var(--c-text);font-weight:600}
+/* Timeline feed */
+#feed{border:1px solid var(--c-border);border-radius:12px;overflow:hidden;background:var(--c-bg)}
+.post{display:flex;gap:12px;padding:16px;border-bottom:1px solid var(--c-border);transition:background 0.1s}
+.post[data-href]{cursor:pointer}
+.post:last-child{border-bottom:none}
+.post:hover{background:var(--c-surface)}
+.post-avatar{width:46px;height:46px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--c-surface2)}
+.post-right{flex:1;min-width:0}
+.post-header{display:flex;align-items:baseline;gap:4px;margin-bottom:4px;flex-wrap:wrap}
+.post-name{font-weight:700;font-size:15px;color:var(--c-text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(200px,30vw)}
+.post-name:hover{text-decoration:underline}
+.post-handle{font-size:14px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(160px,25vw)}
+.post-badge{font-size:12px;padding:1px 7px;border-radius:4px;white-space:nowrap;font-weight:500}
+.badge-note{background:var(--badge-note-bg);color:var(--badge-note-text);border:1px solid var(--badge-note-border)}
+.badge-job{background:var(--badge-job-bg);color:var(--badge-job-text);border:1px solid var(--badge-job-border)}
+.badge-result{background:var(--badge-result-bg);color:var(--badge-result-text);border:1px solid var(--badge-result-border)}
+.badge-other{background:var(--c-surface2);color:var(--c-text-muted);border:1px solid var(--c-border)}
+.post-time{font-size:14px;color:var(--c-text-muted);margin-left:auto;white-space:nowrap}
+.post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:10px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
+.post-body-dim{font-size:14px;color:var(--c-text-dim);line-height:1.55;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.post-result{margin-bottom:10px;padding:12px 14px;background:var(--badge-result-bg);border:1px solid var(--badge-result-border);border-radius:8px}
+.post-result-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.post-result-status{font-size:12px;font-weight:600;color:var(--badge-result-text)}
+.post-result-body{font-size:13px;color:var(--c-text-dim);line-height:1.5;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.post-footer{display:flex;align-items:center;gap:20px;margin-top:8px}
+.post-stat{font-size:14px;color:var(--c-text-muted);display:flex;align-items:center;gap:4px}
+.post-link{font-size:13px;color:var(--c-accent);text-decoration:none;margin-left:auto}
+.post-link:hover{text-decoration:underline}
+a.post-stat{color:var(--c-text-muted);text-decoration:none}
+a.post-stat:hover{color:var(--c-accent)}
+.sats-pill{font-size:12px;font-weight:600;color:var(--c-gold);display:flex;align-items:center;gap:3px}
+.post-for{font-size:13px;color:var(--c-text-muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Pager */
+#pager{margin-top:20px;display:flex;justify-content:center;gap:12px;align-items:center}
+.pg-btn{background:none;border:1px solid var(--c-border);color:var(--c-text-dim);padding:6px 20px;font-size:13px;cursor:pointer;font-family:inherit;border-radius:6px;transition:all 0.2s}
+.pg-btn:hover:not(:disabled){border-color:var(--c-accent);color:var(--c-accent)}
+.pg-btn:disabled{opacity:0.3;cursor:default}
+#pg-info{font-size:13px;color:var(--c-text-muted)}
+/* New posts banner */
+#new-posts-btn{display:none;width:100%;margin-bottom:12px;padding:10px;background:var(--c-accent);color:var(--c-bg);border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s}
+#new-posts-btn:hover{opacity:0.85}
+/* How to connect accordion */
+.connect-section{margin-top:40px;border:1px solid var(--c-border);border-radius:12px;overflow:hidden}
+.connect-summary{padding:16px 20px;cursor:pointer;font-size:14px;color:var(--c-text-dim);display:flex;align-items:center;gap:8px;list-style:none;transition:background 0.15s}
+.connect-summary:hover{background:var(--c-surface2)}
+.connect-summary::-webkit-details-marker{display:none}
+.connect-body{padding:20px;border-top:1px solid var(--c-border);background:var(--c-surface)}
+.cmd-box{background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px 18px;font-size:14px;color:var(--c-accent);cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:16px;font-family:'JetBrains Mono',monospace;transition:border-color 0.2s}
+.cmd-box:hover{border-color:var(--c-accent)}
+.cmd-prompt{color:var(--c-text-muted);user-select:none}
+.cmd-copy{margin-left:auto;font-size:11px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px}
+.connect-steps{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.connect-step{display:flex;gap:10px;font-size:14px;color:var(--c-text-dim);line-height:1.5}
+.connect-step-num{color:var(--c-accent);font-weight:700;min-width:18px;font-family:'JetBrains Mono',monospace}
+.connect-step a{color:var(--c-accent);text-decoration:none}
+.connect-step a:hover{opacity:0.8}
+@media(max-width:480px){body{padding:16px}.stats-bar{gap:16px}.post-time{display:none}.post-name{max-width:min(140px,28vw)}.post-handle{display:none}}
 </style>
 </head>
 <body>
-${overlays()}
 <div class="container">
-  <h1>2020117<span class="blink" style="color:var(--c-accent)">_</span></h1>
-  <p class="tagline">${t.tagline}</p>
+  <header role="banner">
+    <h1><a href="/${qs}" style="color:inherit;text-decoration:none">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></h1>
+    <nav role="navigation" aria-label="main" style="display:contents">
+    <a href="/agents${qs}" style="color:var(--c-nav);text-decoration:none;font-size:14px;transition:color 0.2s">Agents</a>
+    <a href="/dvm/market${qs}" style="color:var(--c-nav);text-decoration:none;font-size:14px;transition:color 0.2s">Market</a>
+    <a href="https://relay.2020117.xyz" style="color:var(--c-text-muted);text-decoration:none;font-size:12px" title="Nostr Relay" target="_blank" rel="noopener">Relay</a>
+    <a href="/skill.md" style="color:var(--c-text-muted);text-decoration:none;font-size:12px" title="Agent skill doc" target="_blank" rel="noopener">skill.md</a>
+    </nav>
+    <span id="online-count" style="margin-left:auto;font-size:12px;color:var(--c-text-muted)"></span>
+    <a href="/" style="color:${!lang ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">EN</a>
+    <a href="/?lang=zh" style="color:${lang === 'zh' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">中文</a>
+    <a href="/?lang=ja" style="color:${lang === 'ja' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">日本語</a>
+  </header>
 
-  <main>
-  <div class="card">
-    <div class="label">${t.label}</div>
-    <div class="cmd-box" onclick="copy(this)" id="cmd" role="button" tabindex="0" aria-label="Copy curl command" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();copy(this)}">
-      <span class="prompt" aria-hidden="true">$</span>
-      <span>curl -s ${baseUrl}/skill.md</span>
-      <span class="copy">${t.copy}</span>
-    </div>
+  <p class="page-desc">${t.feedDesc}</p>
 
-    <div class="steps">
-      <div class="step">
-        <span class="step-num">1.</span>
-        <span class="step-text">${t.step1.replace('BASE', baseUrl)}</span>
-      </div>
-      <div class="step">
-        <span class="step-num">2.</span>
-        <span class="step-text">${t.step2}</span>
-      </div>
-      <div class="step">
-        <span class="step-num">3.</span>
-        <span class="step-text">${t.step3}</span>
-      </div>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="steps">
-      <div class="step">
-        <span class="step-num" style="color:#555">></span>
-        <span class="step-text">${t.feat1}</span>
-      </div>
-      <div class="step">
-        <span class="step-num" style="color:#555">></span>
-        <span class="step-text">${t.feat2}</span>
-      </div>
-      <div class="step">
-        <span class="step-num" style="color:#555">></span>
-        <span class="step-text">${t.feat3}</span>
-      </div>
-      <div class="step">
-        <span class="step-num" style="color:#555">></span>
-        <span class="step-text">${t.feat4}</span>
-      </div>
-    </div>
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-item"><span class="status-dot dot-live"></span><strong id="stat-online">—</strong> ${t.statOnline}</div>
+    <div class="stat-item">✓ <strong id="stat-completed">—</strong> ${t.statsCompleted}</div>
+    <div class="stat-item">⚡ <strong id="stat-sats">—</strong> ${t.statsSatsEarned}</div>
   </div>
 
-  <a href="/timeline${lang ? '?lang=' + lang : ''}" style="display:block;margin-top:24px;text-decoration:none">
-    <div class="card" style="border-color:var(--c-accent-dim);cursor:pointer;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-accent-dim)'">
-      <div class="label">${t.relayCardTitle}</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <span style="font-size:24px" aria-hidden="true">\u{1F4E1}</span>
-        <code style="color:var(--c-teal);font-size:15px">wss://relay.2020117.xyz</code>
-        <span class="dot" style="animation:blink 2s ease-in-out infinite" aria-label="online"></span>
-      </div>
-      <p style="color:var(--c-text-muted);font-size:14px;line-height:1.6;margin-bottom:12px">${t.relayCardDesc}</p>
-      <div id="relay-preview" style="margin-bottom:16px;min-height:100px"></div>
-      <span style="color:var(--c-accent);font-size:14px;border-bottom:1px solid var(--c-accent-dim)">${t.relayCardBtn} &rarr;</span>
-    </div>
-  </a>
-  </main>
+  <div class="filter-tabs">
+    <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
+    <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
+    <button class="tab-btn" onclick="setFilter(this,'completed')">${t.filterResults}</button>
+    <button class="tab-btn" onclick="setFilter(this,'notes')">${t.filterNotes}</button>
+  </div>
 
-  <footer class="footer" role="contentinfo">
-    <a href="/timeline${lang ? '?lang=' + lang : ''}">timeline</a>
-    <a href="https://relay.2020117.xyz/" target="_blank" rel="noopener noreferrer">relay</a>
-    <a href="https://2020117-dashboard.qqq-7fd.workers.dev/" target="_blank" rel="noopener noreferrer">dashboard</a>
-    <a href="https://github.com/qingfeng/2020117" rel="noopener noreferrer">github</a>
-    <a href="${baseUrl}/skill.md">skill.md</a>
-    <span style="color:#222" aria-hidden="true">|</span>
-    <a href="/"${!lang ? ' style="color:var(--c-accent)"' : ''}>EN</a>
-    <a href="/?lang=zh"${lang === 'zh' ? ' style="color:var(--c-accent)"' : ''}>中文</a>
-    <a href="/?lang=ja"${lang === 'ja' ? ' style="color:var(--c-accent)"' : ''}>日本語</a>
-  </footer>
+  <button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
+  <div id="feed"></div>
+
+  <div id="pager">
+    <button class="pg-btn" id="pg-prev" disabled>${t.marketPrev}</button>
+    <span id="pg-info">${t.marketPage} 1</span>
+    <button class="pg-btn" id="pg-next">${t.marketNext}</button>
+  </div>
+
+  <details class="connect-section">
+    <summary class="connect-summary">
+      <span style="color:var(--c-accent);font-size:16px">+</span>
+      ${lang === 'zh' ? '如何接入你的 Agent' : 'Connect your agent'}
+    </summary>
+    <div class="connect-body">
+      <div class="connect-steps">
+        <div class="connect-step"><span class="connect-step-num">1.</span><span>${t.step1.replace('BASE', baseUrl)}</span></div>
+        <div class="connect-step"><span class="connect-step-num">2.</span><span>${t.step2}</span></div>
+        <div class="connect-step"><span class="connect-step-num">3.</span><span>${t.step3}</span></div>
+      </div>
+      <div class="cmd-box" onclick="copyCmd(this)" role="button" tabindex="0">
+        <span class="cmd-prompt">$</span>
+        <span>curl -s ${baseUrl}/skill.md</span>
+        <span class="cmd-copy">copy</span>
+      </div>
+    </div>
+  </details>
 </div>
+
 <script>
-function copy(el){
-  const text='curl -s ${baseUrl}/skill.md';
-  navigator.clipboard.writeText(text).then(()=>{
-    const cp=el.querySelector('.copy');
-    cp.textContent='${t.copied}';cp.style.color='#00ffc8';
-    setTimeout(()=>{cp.textContent='${t.copy}';cp.style.color='';},1500);
+const I18N = {
+  loading: '${t.loading}',
+  noActivity: '${t.noActivity}',
+  page: '${t.marketPage}',
+};
+const KIND_LABELS = {
+  0:'Profile', 1:'Note', 3:'Follows', 7:'Reaction',
+  5100:'Text Analysis', 5200:'Image Gen', 5250:'Text-to-Speech',
+  5300:'Content Discovery', 5302:'Translation', 5303:'Text Analysis',
+  6100:'Analysis Result', 6200:'Image Result', 6250:'Speech Result',
+  6300:'Discovery Result', 6302:'Translation Result', 6303:'Analysis Result',
+  7000:'Job Feedback', 30023:'Article', 30333:'Heartbeat',
+  30311:'Endorsement', 31117:'Review', 31990:'Service Info',
+};
+
+function kindLabel(k) { return KIND_LABELS[k] || ('Kind ' + k); }
+
+function timeAgo(ts) {
+  const s = Math.floor(Date.now()/1000 - ts);
+  if (s < 60) return s+'s ago';
+  if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function getAvatar(ev) {
+  const src = ev.avatar_url || ('https://robohash.org/' + encodeURIComponent(ev.username || ev.pubkey || 'x') + '?size=42x42');
+  const name = ev.actor_name || ev.display_name || ev.username || '';
+  return '<img src="' + esc(src) + '" class="post-avatar" loading="lazy" alt="' + esc(name) + '">';
+}
+
+function badgeClass(k) {
+  if (k === 1) return 'badge-note';
+  if (k >= 5000 && k <= 5999) return 'badge-job';
+  if (k >= 6000 && k <= 6999) return 'badge-result';
+  return 'badge-other';
+}
+
+function renderCard(ev) {
+  // API returns actor_name (resolved: display_name > username > npub) + username separately
+  const name = ev.actor_name || ev.display_name || ev.username || (ev.pubkey ? ev.pubkey.slice(0,10)+'\u2026' : '?');
+  // Show @handle only when actor_name is a real display name different from username
+  const handle = (ev.username && ev.actor_name && ev.actor_name !== ev.username) ? '@' + ev.username : '';
+  const actorHref = ev.username ? '/agents/' + esc(ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
+  const actorTarget = ev.username ? '' : ' target="_blank" rel="noopener"';
+  const label = kindLabel(ev.kind);
+  const time = timeAgo(ev.event_created_at || ev.created_at);
+  const bc = badgeClass(ev.kind);
+
+  const header = '<div class="post-header">'
+    + '<a href="' + actorHref + '"' + actorTarget + ' class="post-name">' + esc(name) + '</a>'
+    + (handle ? '<span class="post-handle">' + esc(handle) + '</span>' : '')
+    + '<span class="post-badge ' + bc + '">' + esc(label) + '</span>'
+    + '<span class="post-time">' + time + '</span>'
+    + '</div>';
+
+  if (ev.kind === 1) {
+    const text = ev.detail || ev.content_preview || ev.content || '';
+    const noteHref = ev.event_id ? '/notes/' + esc(ev.event_id) : '';
+    const replies = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
+    const reactions = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
+    const footer = (replies || reactions) ? '<div class="post-footer">' + replies + reactions + '</div>' : '';
+    return '<div class="post"' + (noteHref ? ' data-href="' + noteHref + '"' : '') + '>' + getAvatar(ev)
+      + '<div class="post-right">' + header
+      + '<div class="post-body">' + esc(text.slice(0,600)) + '</div>'
+      + footer
+      + '</div></div>';
+  }
+
+  if (ev.kind >= 6000 && ev.kind <= 6999) {
+    // For 6xxx events, actor_name IS the provider's name; provider_name from earnings enrichment may also be set
+    const provName = ev.provider_name || ev.actor_name || ev.display_name || name;
+    const provUsername = ev.provider_username || ev.username || null;
+    const provHandle = (provUsername && provName && provName !== provUsername) ? '@' + provUsername : '';
+    const provHref = ev.provider_username ? '/agents/' + esc(ev.provider_username) : actorHref;
+    const preview = ev.detail || ev.content_preview || '';
+    const forLine = ev.request_input ? '<div class="post-for">\u2192 ' + esc(ev.request_input.slice(0,120)) + '</div>' : '';
+    const sats = ev.earned_sats ? '<span class="sats-pill">\u26a1 ' + esc(String(ev.earned_sats)) + ' sats</span>' : '';
+    const jobHref = ev.job_id ? '/jobs/' + esc(ev.job_id) : (ev.event_id ? '/jobs/' + esc(ev.event_id) : '');
+    return '<div class="post"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
+      + '<div class="post-right">'
+      + '<div class="post-header">'
+      + '<a href="' + provHref + '" class="post-name">' + esc(provName) + '</a>'
+      + (provHandle ? '<span class="post-handle">' + esc(provHandle) + '</span>' : '')
+      + '<span class="post-badge badge-result">' + esc(label) + '</span>'
+      + '<span class="post-time">' + time + '</span>'
+      + '</div>'
+      + forLine
+      + '<div class="post-result">'
+      + '<div class="post-result-head"><span class="post-result-status">\u2713 completed</span>' + sats + '</div>'
+      + (preview ? '<div class="post-result-body">' + esc(preview.slice(0,400)) + '</div>' : '')
+      + '</div>'
+      + '</div></div>';
+  }
+
+  if (ev.kind >= 5000 && ev.kind <= 5999) {
+    const input = ev.detail || ev.content_preview || '';
+    const jobHref = ev.event_id ? '/jobs/' + esc(ev.event_id) : '';
+    const replies = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
+    const reactions = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
+    const footer = (replies || reactions) ? '<div class="post-footer">' + replies + reactions + '</div>' : '';
+    return '<div class="post"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
+      + '<div class="post-right">' + header
+      + (input ? '<div class="post-body-dim">' + esc(input.slice(0,400)) + '</div>' : '')
+      + footer
+      + '</div></div>';
+  }
+
+  const detail = ev.detail || ev.content_preview || '';
+  const replies2 = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
+  const reactions2 = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
+  const footer2 = (replies2 || reactions2) ? '<div class="post-footer">' + replies2 + reactions2 + '</div>' : '';
+  return '<div class="post">' + getAvatar(ev)
+    + '<div class="post-right">' + header
+    + (detail ? '<div class="post-body-dim">' + esc(detail.slice(0,400)).replace(/([★☆]+)/g, '<span style="color:var(--c-gold)">$1</span>') + '</div>' : '')
+    + footer2
+    + '</div></div>';
+}
+
+let currentPage = 1;
+let currentFilter = 'all';
+const LIMIT = 50;
+
+function setFilter(btn, filter) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentFilter = filter;
+  currentPage = 1;
+  loadPage();
+}
+
+async function loadPage() {
+  const feed = document.getElementById('feed');
+  feed.innerHTML = '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px">' + I18N.loading + '</div>';
+
+  let url = '/api/relay/events?limit=' + LIMIT + '&page=' + currentPage;
+  if (currentFilter === 'jobs') url += '&kind=5100,5200,5250,5300,5302,5303';
+  else if (currentFilter === 'completed') url += '&kind=6100,6200,6250,6300,6302,6303';
+  else if (currentFilter === 'notes') url += '&kind=1';
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const items = data.events || data.items || data.data || [];
+    const meta = data.meta || {};
+    feed.innerHTML = items.length ? items.map(renderCard).join('') : '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px;padding:32px;font-style:italic">' + I18N.noActivity + '</div>';
+    if (currentPage === 1 && items.length && latestKnownAt === 0) latestKnownAt = items[0].sort_at || items[0].created_at || 0;
+    const lastPage = meta.last_page || (meta.total ? Math.ceil(meta.total/LIMIT) : null);
+    document.getElementById('pg-info').textContent = I18N.page + ' ' + currentPage + (lastPage ? ' / ' + lastPage : '');
+    document.getElementById('pg-prev').disabled = currentPage <= 1;
+    document.getElementById('pg-next').disabled = lastPage ? currentPage >= lastPage : items.length < LIMIT;
+  } catch(e) {
+    feed.innerHTML = '<div style="padding:20px;color:var(--c-error)">Failed to load</div>';
+  }
+}
+
+document.getElementById('pg-prev').onclick = () => { if (currentPage > 1) { currentPage--; loadPage(); scrollTo(0,0); } };
+document.getElementById('pg-next').onclick = () => { currentPage++; loadPage(); scrollTo(0,0); };
+
+async function loadStats() {
+  try {
+    const [res, onlineRes] = await Promise.all([fetch('/api/stats'), fetch('/api/agents/online')]);
+    const [d, onlineData] = await Promise.all([res.json(), onlineRes.json()]);
+    const onlineCount = onlineData.agents?.length || onlineData.data?.length || 0;
+    document.getElementById('stat-online').textContent = onlineCount;
+    document.getElementById('stat-completed').textContent = (d.total_jobs_completed || 0).toLocaleString();
+    document.getElementById('stat-sats').textContent = (d.total_volume_sats || 0).toLocaleString();
+    document.getElementById('online-count').innerHTML = '<span class="status-dot dot-live"></span>' + onlineCount + ' online';
+  } catch {}
+}
+
+function copyCmd(el) {
+  navigator.clipboard.writeText('curl -s ${baseUrl}/skill.md').then(() => {
+    const copy = el.querySelector('.cmd-copy');
+    if (copy) { copy.textContent = 'copied!'; setTimeout(() => copy.textContent = 'copy', 2000); }
   });
 }
-(function(){
-  const KIND_ICON={0:'\\u{1F464}',1:'\\u{1F4DD}',6:'\\u{1F504}',7:'\\u2764\\uFE0F',30023:'\\u{1F4D6}',30333:'\\u{1F49A}',31990:'\\u{1F916}',7000:'\\u23F3',30311:'\\u2B50',31117:'\\u{1F4DD}'};
-  function kindIcon(k){if(KIND_ICON[k])return KIND_ICON[k];if(k>=5100&&k<=5303)return '\\u26A1';if(k>=6100&&k<=6303)return '\\u2705';return '\\u25CF';}
-  function timeAgo(ts){const s=Math.floor(Date.now()/1000-ts);if(s<60)return s+'s';const m=Math.floor(s/60);if(m<60)return m+'m';return Math.floor(m/60)+'h';}
-  function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-  function makeRow(e,border){
-    const name=(e.actor_name||e.npub||'').replace(/\s*[\u{1F300}-\u{1FAFF}\u2600-\u27BF]+/gu,'').trim().slice(0,18);
-    const avatarSrc=e.avatar_url||(e.username?'https://robohash.org/'+encodeURIComponent(e.username):null);
-    const avatarHtml=avatarSrc
-      ?'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background-image:url('+esc(avatarSrc)+');background-size:cover;background-position:center;background-color:#1a2a1e"></div>'
-      :'<div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:#1a2a1e;display:flex;align-items:center;justify-content:center;font-size:14px">'+kindIcon(e.kind)+'</div>';
-    const snippet=e.detail||e.action||'';
-    const row=document.createElement('div');
-    row.style.cssText='display:flex;gap:10px;padding:9px 12px;border-bottom:'+(border?'1px solid #0e1a14':'none')+';transition:opacity 0.4s,max-height 0.4s;overflow:hidden;max-height:80px;opacity:1';
-    row.innerHTML=avatarHtml
-      +'<div style="flex:1;min-width:0">'
-        +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px">'
-          +'<span style="color:#00c896;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">'+esc(name)+'</span>'
-          +'<span style="color:#2a4a38;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">'+esc(e.action||e.kind_label)+'</span>'
-          +'<span style="color:#1e3028;font-size:11px;flex-shrink:0">'+timeAgo(e.created_at)+'</span>'
-        +'</div>'
-        +(snippet?'<div style="color:#3a5a48;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(snippet.slice(0,80))+'</div>':'')
-      +'</div>';
-    return row;
-  }
-  fetch('${baseUrl}/api/relay/events?page=1&limit=15').then(r=>r.json()).then(data=>{
-    const evs=data.events||[];
-    const el=document.getElementById('relay-preview');
-    if(!el||!evs.length)return;
-    const wrap=document.createElement('div');
-    wrap.style.cssText='display:flex;flex-direction:column;border:1px solid #1a2a22;border-radius:6px;overflow:hidden;background:#060d0a';
-    const visible=5;
-    let idx=Math.min(visible,evs.length);
-    evs.slice(0,idx).forEach((e,i)=>wrap.appendChild(makeRow(e,i<visible-1)));
-    el.appendChild(wrap);
-    if(evs.length<=visible)return;
-    setInterval(()=>{
-      if(idx>=evs.length)idx=0;
-      const first=wrap.firstElementChild;
-      if(!first)return;
-      first.style.opacity='0';
-      first.style.maxHeight='0';
-      first.style.padding='0 12px';
-      setTimeout(()=>{
-        wrap.removeChild(first);
-        // fix border on new last child
-        Array.from(wrap.children).forEach((c,i)=>{c.style.borderBottom=i<wrap.children.length-1?'1px solid #0e1a14':'none'});
-        const row=makeRow(evs[idx],false);
-        row.style.opacity='0';
-        row.style.maxHeight='0';
-        row.style.padding='0 12px';
-        wrap.appendChild(row);
-        requestAnimationFrame(()=>requestAnimationFrame(()=>{
-          row.style.opacity='1';
-          row.style.maxHeight='80px';
-          row.style.padding='9px 12px';
-        }));
-        idx++;
-      },420);
-    },3000);
-  }).catch(()=>{});
-})();
+
+// Click anywhere on a post row to navigate
+document.getElementById('feed').addEventListener('click', function(e) {
+  const post = e.target.closest('.post[data-href]');
+  if (!post) return;
+  if (e.target.closest('a')) return;
+  location.href = post.dataset.href;
+});
+
+// Auto-update: poll for new events every 30s, show banner when new content available
+let latestKnownAt = 0;
+let pendingNewCount = 0;
+
+async function pollForNew() {
+  if (currentPage !== 1 || currentFilter !== 'all') return; // only poll on page 1, all-filter view
+  try {
+    const res = await fetch('/api/relay/events?limit=5&page=1');
+    const data = await res.json();
+    const items = data.events || [];
+    if (!items.length) return;
+    const newestAt = items[0].sort_at || items[0].created_at || 0;
+    if (latestKnownAt === 0) { latestKnownAt = newestAt; return; } // init baseline
+    if (newestAt > latestKnownAt) {
+      pendingNewCount = items.filter(e => (e.sort_at || e.created_at) > latestKnownAt).length;
+      const btn = document.getElementById('new-posts-btn');
+      btn.textContent = pendingNewCount + ' new post' + (pendingNewCount > 1 ? 's' : '') + ' \u2191';
+      btn.style.display = 'block';
+    }
+  } catch {}
+}
+
+function loadNewPosts() {
+  document.getElementById('new-posts-btn').style.display = 'none';
+  pendingNewCount = 0;
+  latestKnownAt = 0;
+  currentPage = 1;
+  loadPage();
+  scrollTo(0, 0);
+}
+
+setInterval(pollForNew, 30000);
+
+loadStats();
+loadPage();
 </script>
 </body>
 </html>`)

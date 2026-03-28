@@ -16,7 +16,7 @@ const JOB_PAGE_CSS = `
 .job-card::before{
   content:'';position:absolute;inset:-1px;
   border-radius:12px;
-  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
+  background:linear-gradient(135deg,color-mix(in srgb,var(--c-teal) 15%,transparent),transparent 50%);
   z-index:-1;
   mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
@@ -52,8 +52,8 @@ const JOB_PAGE_CSS = `
 .sats-tag{
   display:inline-block;
   padding:3px 10px;
-  background:rgba(255,176,0,0.12);
-  border:1px solid rgba(255,176,0,0.3);
+  background:var(--badge-note-bg);
+  border:1px solid var(--badge-note-border);
   border-radius:4px;
   color:var(--c-gold);font-size:13px;font-weight:700;
 }
@@ -64,11 +64,10 @@ const JOB_PAGE_CSS = `
 }
 .customer span{color:var(--c-accent);font-weight:700}
 .section{margin-top:16px}
-.section-label{color:var(--c-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-weight:600}
+.section-label{color:var(--c-text-muted);font-size:11px;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;font-weight:600}
 .input-content{
-  color:#e2e2de;font-size:15px;
+  color:var(--c-text);font-size:15px;
   line-height:1.7;
-  white-space:pre-line;
   word-break:break-word;
 }
 .reply-block{
@@ -85,32 +84,33 @@ const JOB_PAGE_CSS = `
 }
 .reply-name{
   color:var(--c-accent);text-decoration:none;font-weight:600;font-size:14px;
-  border-bottom:1px solid var(--c-accent-dim);
+  border-bottom:1px solid var(--c-accent-dim);transition:opacity 0.15s;
 }
+.reply-name:hover{opacity:0.75}
 .reply-label{
   font-size:12px;color:var(--c-text-dim);
   margin-left:2px;
 }
 .result-content{
-  color:#e2e2de;font-size:15px;
+  color:var(--c-text);font-size:15px;
   line-height:1.7;
   word-break:break-word;
 }
 .md-body{white-space:normal}
 .md-body p{margin:0 0 0.8em;word-break:break-word}
 .md-body p:last-child{margin-bottom:0}
-.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1em 0 0.4em;font-weight:700;color:#f0f0ec}
+.md-body h3,.md-body h4,.md-body h5,.md-body h6{margin:1em 0 0.4em;font-weight:700;color:var(--c-text)}
 .md-body h3{font-size:1em}
 .md-body h4,.md-body h5,.md-body h6{font-size:0.95em}
 .md-body ul,.md-body ol{margin:0.5em 0 0.8em;padding-left:1.4em}
 .md-body li{margin-bottom:0.25em}
-.md-body code{font-family:monospace;font-size:0.88em;background:rgba(42,161,152,0.15);padding:1px 5px;border-radius:3px}
-.md-body pre{background:rgba(0,0,0,0.25);border:1px solid var(--c-border);border-radius:6px;padding:12px;overflow-x:auto;margin:0.6em 0}
+.md-body code{font-family:monospace;font-size:0.88em;background:var(--c-surface2);padding:1px 5px;border-radius:3px}
+.md-body pre{background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;padding:12px;overflow-x:auto;margin:0.6em 0}
 .md-body pre code{background:none;padding:0;font-size:0.85em}
 .md-body blockquote{margin:0.5em 0;padding:6px 12px;border-left:2px solid var(--c-accent-dim);color:var(--c-text-dim);font-style:italic}
 .md-body hr{border:none;border-top:1px solid var(--c-border);margin:1em 0}
 .md-body a{color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)}
-.md-body strong{font-weight:700;color:#f0f0ec}
+.md-body strong{font-weight:700;color:var(--c-text)}
 .md-body em{font-style:italic}
 .timestamp{
   margin-top:20px;
@@ -126,7 +126,7 @@ const JOB_PAGE_CSS = `
   display:flex;align-items:baseline;gap:8px;
 }
 .activity-item:last-child{border-bottom:none}
-.activity-item .actor{color:var(--c-accent);font-weight:700;text-decoration:none}
+.activity-item .actor{color:var(--c-accent);font-weight:700;text-decoration:none;transition:opacity 0.15s}
 .activity-item .actor:hover{opacity:0.7}
 .activity-item .status-processing{color:var(--c-teal)}
 .activity-item .status-success{color:var(--c-accent)}
@@ -135,18 +135,24 @@ const JOB_PAGE_CSS = `
 .activity-item .atime{color:var(--c-nav);font-size:12px;margin-left:auto;white-space:nowrap}
 .review-block{
   margin-top:16px;padding:12px 16px;
-  border:1px solid rgba(211,54,130,0.25);border-radius:6px;
-  background:rgba(211,54,130,0.06);
+  border:1px solid color-mix(in srgb,var(--c-magenta) 25%,transparent);border-radius:6px;
+  background:color-mix(in srgb,var(--c-magenta) 6%,transparent);
 }
 .review-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
-.review-stars{color:#f0a500;font-size:16px;letter-spacing:1px}
-.review-label{color:var(--c-magenta,#d33682);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
+.review-stars{color:var(--c-gold);font-size:16px;letter-spacing:1px}
+.review-label{color:var(--c-magenta);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
 .review-by{color:var(--c-text-muted);font-size:12px;margin-left:auto}
 .review-text{color:var(--c-text-dim);font-size:14px;line-height:1.6;margin-top:4px}
 .review-paid{
   display:inline-block;padding:2px 8px;
-  background:rgba(255,176,0,0.15);border:1px solid rgba(255,176,0,0.3);
+  background:var(--badge-note-bg);border:1px solid var(--badge-note-border);
   border-radius:4px;color:var(--c-gold);font-size:12px;font-weight:700;
+}
+.encrypted-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;border-radius:4px;font-size:13px;
+  background:var(--badge-note-bg);border:1px solid var(--badge-note-border);
+  color:var(--c-gold);
 }
 @media(max-width:480px){
   .job-card{padding:16px 18px}
@@ -570,7 +576,7 @@ router.get('/jobs/:id', async (c) => {
             const rating = parseInt(at.rating || '0')
             label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`; cls = 'status-payment'
           } else { return '' }
-          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:3px;font-style:italic;width:100%">${esc(reason.slice(0, 200))}</div>` : ''
+          const reasonHtml = reason ? `<div style="color:var(--c-text);font-size:14px;line-height:1.6;margin-top:6px;width:100%">${esc(reason.slice(0, 200))}</div>` : ''
           const actorHref = actorUsername ? `/agents/${esc(actorUsername)}` : `https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}`
           const actorExtra = actorUsername ? '' : ' target="_blank" rel="noopener"'
           return `<div class="activity-item" style="flex-wrap:wrap"><a class="actor" href="${actorHref}"${actorExtra}>${esc(actorLabel)}</a> <span class="${cls}">${esc(label)}</span><span class="atime">${timeA}</span>${reasonHtml}</div>`
@@ -578,11 +584,23 @@ router.get('/jobs/:id', async (c) => {
         activityHtml = `<div class="activity-log"><div class="section-label">${esc(t.jobActivity)}</div>${items.filter(Boolean).join('')}</div>`
       }
 
-      const inputText = fullInput
+      const isResultEvent = re.kind >= 6000 && re.kind <= 6999
+      // For 6xxx result events, the content IS the result — move it to resultPreview for markdown rendering
+      const inputText = isResultEvent ? null : fullInput
+      const resultEventContent = isResultEvent ? fullInput : null
       // Build result block
       let fbResultHtml = ''
       if (isEncrypted) {
-        fbResultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 ${esc(t.jobEncrypted)}</div></div>`
+        fbResultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
+      } else if (resultEventContent) {
+        // 6xxx event: render own content as result with markdown
+        const fbResultBody = `<div class="result-content md-body">${renderMarkdown(String(resultEventContent))}</div>`
+        const provNpub = pubkeyToNpub(re.pubkey)
+        const provNameHtml = `<a href="${requesterUsername ? '/agents/' + esc(requesterUsername) : 'https://yakihonne.com/profile/' + esc(provNpub)}" ${!requesterUsername ? 'target="_blank" rel="noopener"' : ''} class="reply-name">${esc(displayLabel)}</a>`
+        fbResultHtml = `<div class="reply-block">
+          <div class="reply-head">${requesterAvatarUrl ? `<img src="${esc(requesterAvatarUrl)}" class="reply-avatar" loading="lazy" aria-hidden="true">` : ''} ${provNameHtml}<span class="reply-label">${esc(t.jobResult)}</span></div>
+          ${fbResultBody}
+        </div>`
       } else if (resultPreview) {
         const provNpub = resultProviderPubkey ? pubkeyToNpub(resultProviderPubkey) : null
         const provAvatarSrc = resultProviderAvatarUrl || (resultProviderUsername ? 'https://robohash.org/' + encodeURIComponent(resultProviderUsername) : (provNpub ? 'https://robohash.org/' + encodeURIComponent(provNpub) : null))
@@ -617,12 +635,12 @@ router.get('/jobs/:id', async (c) => {
 <meta property="og:description" content="${esc(fbOgDesc)}">
 <meta property="og:type" content="article">
 <meta property="og:url" content="${baseUrl}/jobs/${re.eventId}">
-<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
 <meta property="og:site_name" content="2020117">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${esc(kindLabel)} \u2014 2020117">
 <meta name="twitter:description" content="${esc(fbOgDesc)}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/jobs/${re.eventId}">
 ${headMeta(baseUrl)}
 <style>
@@ -650,7 +668,7 @@ ${overlays()}
     })()}</div>
     ${(!isEncrypted && inputText) ? `<div class="section">
       <div class="section-label">${esc(t.jobInput)}</div>
-      <div class="input-content">${esc(String(inputText))}</div>
+      <div class="result-content md-body">${renderMarkdown(String(inputText))}</div>
     </div>` : ''}
     ${fbResultHtml}
     ${activityHtml}
@@ -891,7 +909,7 @@ ${overlays()}
 
   let resultHtml = ''
   if (jobIsEncrypted) {
-    resultHtml = `<div class="section"><div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(181,137,0,0.12);border:1px solid rgba(181,137,0,0.3);border-radius:4px;color:#b58900;font-size:13px">🔒 ${esc(t.jobEncrypted)}</div></div>`
+    resultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
   } else if (resultText) {
     const j_result_compat = resultText
     let resultBody = ''
@@ -999,12 +1017,12 @@ ${overlays()}
 <meta property="og:description" content="${ogDesc}">
 <meta property="og:type" content="article">
 <meta property="og:url" content="${baseUrl}/jobs/${j.id}">
-<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
 <meta property="og:site_name" content="2020117">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${esc(ogTitle)} \u2014 2020117">
 <meta name="twitter:description" content="${ogDesc}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/jobs/${j.id}">
 ${headMeta(baseUrl)}
 <style>
@@ -1041,9 +1059,9 @@ ${overlays()}
 
     ${(!jobIsEncrypted && j.input) ? `<div class="section">
       <div class="section-label">${esc(t.jobInput)}</div>
-      <div class="input-content">${(() => {
+      <div class="result-content md-body">${(() => {
         const raw = j.input!
-        // For TTS: input may be a nevent/note reference or JSON event array
+        // For content discovery: input may be a nevent/note reference or JSON event array
         if (j.kind === 5300) {
           const neventMatch = raw.match(/nevent1[a-z0-9]+|note1[a-z0-9]+/)
           if (neventMatch) return `🔊 convert to speech: <a href="/jobs/${esc(neventMatch[0])}" style="color:var(--c-accent)">${esc(neventMatch[0].slice(0, 30))}…</a>`
@@ -1055,7 +1073,7 @@ ${overlays()}
             }
           } catch {}
         }
-        return esc(raw)
+        return renderMarkdown(raw)
       })()}</div>
     </div>` : ''}
 
@@ -1073,7 +1091,7 @@ ${overlays()}
 
     ${rejectionsHtml}
 
-    ${effectiveStatus === 'open' ? `<div style="margin:16px 0;padding:10px 14px;background:rgba(0,255,200,0.06);border:1px solid rgba(0,255,200,0.2);border-radius:6px;font-size:13px;color:var(--c-teal)">&#x25CF; This job is still open — providers can submit a better result</div>` : ''}
+    ${effectiveStatus === 'open' ? `<div style="margin:16px 0;padding:10px 14px;background:color-mix(in srgb,var(--c-teal) 6%,transparent);border:1px solid color-mix(in srgb,var(--c-teal) 20%,transparent);border-radius:6px;font-size:13px;color:var(--c-teal)">&#x25CF; This job is still open — providers can submit a better result</div>` : ''}
 
     ${jobActivity.length > 0 ? `<div class="activity-log">
       <div class="section-label">${esc(t.jobActivity)}</div>

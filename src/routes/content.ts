@@ -247,59 +247,76 @@ content.get('/relay/events', async (c) => {
     }
   })
 
-  // Enrich Kind 1 notes with reply/reaction/repost counts + preview replies
+  // Enrich all events with reply/reaction counts (every Nostr event can be replied to or liked)
+  // noteEventIds: used for reply-preview fetching (only kind=1 notes have meaningful text replies)
   const noteEventIds = events.filter(e => e.kind === 1).map(e => e.event_id)
+  // allFeedEventIds: used for reaction + reply counts across all event types
+  const allFeedEventIds = events.map(e => e.event_id).filter(Boolean) as string[]
   const noteStats = new Map<string, { reply_count: number; reaction_count: number; repost_count: number; last_activity_at: number; replies_preview: Array<{ actor_name: string; username: string | null; content: string; created_at: number }> }>()
 
-  if (noteEventIds.length > 0) {
+  if (allFeedEventIds.length > 0) {
     // Batch: 3 queries instead of N×(3-4)
     const noteIdsSql = sql.join(noteEventIds.map(id => sql`${id}`), sql`, `)
-    const [reactionCounts, repostCounts, replyRows] = await Promise.all([
+    const [reactionCounts, repostCounts, replyCounts, replyRows] = await Promise.all([
+      // Reactions (kind=7) for ALL feed events
       db.select({
-        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
+        refId: relayEvents.refEventId,
         count: sql<number>`COUNT(*)`,
         latest: sql<number>`MAX(${relayEvents.eventCreatedAt})`,
       }).from(relayEvents)
-        .where(and(eq(relayEvents.kind, 7), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
-        .groupBy(sql`json_extract(${relayEvents.tags}, '$.e')`),
+        .where(and(eq(relayEvents.kind, 7), inArray(relayEvents.refEventId, allFeedEventIds)))
+        .groupBy(relayEvents.refEventId),
+      // Reposts (kind=6) for ALL feed events
       db.select({
-        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
+        refId: relayEvents.refEventId,
         count: sql<number>`COUNT(*)`,
         latest: sql<number>`MAX(${relayEvents.eventCreatedAt})`,
       }).from(relayEvents)
-        .where(and(eq(relayEvents.kind, 6), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
-        .groupBy(sql`json_extract(${relayEvents.tags}, '$.e')`),
+        .where(and(eq(relayEvents.kind, 6), inArray(relayEvents.refEventId, allFeedEventIds)))
+        .groupBy(relayEvents.refEventId),
+      // Reply counts (kind=1) for ALL feed events (GROUP BY — not affected by preview limit)
       db.select({
-        refId: sql<string>`json_extract(${relayEvents.tags}, '$.e')`,
-        pubkey: relayEvents.pubkey,
-        contentPreview: relayEvents.contentPreview,
-        eventCreatedAt: relayEvents.eventCreatedAt,
+        refId: relayEvents.refEventId,
+        count: sql<number>`COUNT(*)`,
+        latest: sql<number>`MAX(${relayEvents.eventCreatedAt})`,
       }).from(relayEvents)
-        .where(and(eq(relayEvents.kind, 1), sql`json_extract(${relayEvents.tags}, '$.e') IN (${noteIdsSql})`))
-        .orderBy(desc(relayEvents.eventCreatedAt)).limit(noteEventIds.length * 3),
+        .where(and(eq(relayEvents.kind, 1), inArray(relayEvents.refEventId, allFeedEventIds)))
+        .groupBy(relayEvents.refEventId),
+      // Reply preview rows — only for kind=1 notes (text replies make sense there)
+      noteEventIds.length > 0
+        ? db.select({
+            refId: relayEvents.refEventId,
+            pubkey: relayEvents.pubkey,
+            contentPreview: relayEvents.contentPreview,
+            eventCreatedAt: relayEvents.eventCreatedAt,
+          }).from(relayEvents)
+            .where(and(eq(relayEvents.kind, 1), inArray(relayEvents.refEventId, noteEventIds)))
+            .orderBy(desc(relayEvents.eventCreatedAt)).limit(noteEventIds.length * 3)
+        : Promise.resolve([]),
     ])
 
     const reactionMap = new Map(reactionCounts.map(r => [r.refId, r]))
     const repostMap = new Map(repostCounts.map(r => [r.refId, r]))
-    const replyCountMap: Record<string, number> = {}
+    const replyCountMap = new Map(replyCounts.map(r => [r.refId, r]))
     const replyPreviewMap: Record<string, typeof replyRows> = {}
     for (const r of replyRows) {
       if (!r.refId) continue
-      replyCountMap[r.refId] = (replyCountMap[r.refId] || 0) + 1
       if (!replyPreviewMap[r.refId]) replyPreviewMap[r.refId] = []
       if (replyPreviewMap[r.refId].length < 3) replyPreviewMap[r.refId].push(r)
     }
 
-    for (const noteId of noteEventIds) {
-      const reactions = reactionMap.get(noteId)
-      const reposts = repostMap.get(noteId)
-      const previews = (replyPreviewMap[noteId] || []).slice().reverse()
-      const noteCreatedAt = events.find(e => e.event_id === noteId)?.created_at || 0
-      noteStats.set(noteId, {
-        reply_count: replyCountMap[noteId] || 0,
+    for (const evId of allFeedEventIds) {
+      const reactions = reactionMap.get(evId)
+      const reposts = repostMap.get(evId)
+      const replies = replyCountMap.get(evId)
+      if (!reactions && !reposts && !replies) continue // no stats to store
+      const previews = (replyPreviewMap[evId] || []).slice().reverse()
+      const evCreatedAt = events.find(e => e.event_id === evId)?.created_at || 0
+      noteStats.set(evId, {
+        reply_count: replies?.count || 0,
         reaction_count: reactions?.count || 0,
         repost_count: reposts?.count || 0,
-        last_activity_at: Math.max(noteCreatedAt, previews[previews.length - 1]?.eventCreatedAt || 0, reactions?.latest || 0, reposts?.latest || 0),
+        last_activity_at: Math.max(evCreatedAt, previews[previews.length - 1]?.eventCreatedAt || 0, reactions?.latest || 0, reposts?.latest || 0, replies?.latest || 0),
         replies_preview: previews.map(r => {
           const rUser = pubkeyNames.get(r.pubkey)
           return {

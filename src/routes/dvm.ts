@@ -48,7 +48,14 @@ dvm.get('/market', async (c) => {
   const offset = (page - 1) * limit
 
   const isAllStatuses = statusFilter === 'all'
-  const statuses = isAllStatuses ? [] : statusFilter ? statusFilter.split(',').map(s => s.trim()).filter(Boolean) : ['open', 'error']
+  // Map UI tab names to DB status values
+  const STATUS_MAP: Record<string, string[]> = {
+    open: ['open'],
+    processing: ['processing', 'result_available'],
+    completed: ['completed'],
+    error: ['error', 'cancelled', 'rejected'],
+  }
+  const statuses = isAllStatuses ? [] : (STATUS_MAP[statusFilter || ''] ?? (statusFilter ? statusFilter.split(',').map(s => s.trim()).filter(Boolean) : ['open']))
 
   const conditions = [
     eq(dvmJobs.role, 'customer'),

@@ -39,7 +39,7 @@ router.get('/notes/:eventId', async (c) => {
       }
     } catch {}
     if (!externalNote) {
-      return c.html(`<!DOCTYPE html><html lang="${htmlLang}"><head><meta charset="utf-8"><title>404 — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/timeline" style="color:var(--c-accent);font-size:12px">timeline</a></main></body></html>`, 404)
+      return c.html(`<!DOCTYPE html><html lang="${htmlLang}"><head><meta charset="utf-8"><title>404 — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/" style="color:var(--c-accent);font-size:12px">home</a></main></body></html>`, 404)
     }
   }
 
@@ -48,15 +48,8 @@ router.get('/notes/:eventId', async (c) => {
   const npub = pubkeyToNpub(notePubkey)
   const nevent = eventIdToNevent(eventId, ['wss://relay.2020117.xyz'], notePubkey)
 
-  // Full content: from external fetch, or relay fetch for indexed events
+  // Full content: use stored preview (contentPreview stores up to 200 chars from cron)
   let fullContent: string | null = externalNote ? externalNote.content : (result[0].contentPreview || null)
-  if (!externalNote) {
-    try {
-      const { fetchEventsFromRelay } = await import('../services/relay-io')
-      const { events } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [eventId], limit: 1 })
-      if (events.length > 0) fullContent = events[0].content ?? null
-    } catch { /* fall back to preview */ }
-  }
 
   // Look up author with avatar
   let authorName = npub.slice(0, 16) + '...'
@@ -105,74 +98,27 @@ router.get('/notes/:eventId', async (c) => {
     }
   }
 
-  // Fetch replies, reactions, reposts
-  const [localReplies, localReactions, localReposts] = await Promise.all([
+  // Fetch replies, reactions, reposts — uses indexed ref_event_id column
+  const [replies, reactions, reposts] = await Promise.all([
     db.select({
       eventId: relayEvents.eventId,
       pubkey: relayEvents.pubkey,
       contentPreview: relayEvents.contentPreview,
       eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 1), sql`instr(${relayEvents.tags}, ${eventId}) > 0`))
+    }).from(relayEvents).where(and(eq(relayEvents.kind, 1), eq(relayEvents.refEventId, eventId)))
       .orderBy(relayEvents.eventCreatedAt).limit(50),
     db.select({
       pubkey: relayEvents.pubkey,
       contentPreview: relayEvents.contentPreview,
       eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 7), sql`instr(${relayEvents.tags}, ${eventId}) > 0`))
+    }).from(relayEvents).where(and(eq(relayEvents.kind, 7), eq(relayEvents.refEventId, eventId)))
       .orderBy(relayEvents.eventCreatedAt).limit(100),
     db.select({
       pubkey: relayEvents.pubkey,
       eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 6), sql`instr(${relayEvents.tags}, ${eventId}) > 0`))
+    }).from(relayEvents).where(and(eq(relayEvents.kind, 6), eq(relayEvents.refEventId, eventId)))
       .orderBy(relayEvents.eventCreatedAt).limit(100),
   ])
-
-  let replies = localReplies
-  let reactions = localReactions as { pubkey: string; contentPreview: string | null; eventCreatedAt: number }[]
-  let reposts = localReposts as { pubkey: string; eventCreatedAt: number }[]
-
-  if (localReactions.length === 0 || localReposts.length === 0 || localReplies.length === 0) {
-    try {
-      const { fetchEventsFromRelay } = await import('../services/relay-io')
-      const { generateId } = await import('../lib/utils')
-      const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io,wss://nos.lol').split(',').map((s: string) => s.trim()).filter(Boolean)
-      const kindsToFetch: number[] = []
-      if (localReplies.length === 0) kindsToFetch.push(1)
-      if (localReactions.length === 0) kindsToFetch.push(7)
-      if (localReposts.length === 0) kindsToFetch.push(6)
-      const seenIds = new Set<string>()
-      for (const relayUrl of relayUrls.slice(0, 3)) {
-        try {
-          const { events } = await fetchEventsFromRelay(relayUrl, { kinds: kindsToFetch, '#e': [eventId], limit: 100 })
-          for (const ev of events) {
-            if (seenIds.has(ev.id)) continue
-            seenIds.add(ev.id)
-            const eTags: Record<string, string> = {}
-            for (const tag of ev.tags) {
-              if (tag[0] === 'e') eTags.e = tag[1] || ''
-              if (tag[0] === 'p') eTags.p = tag[1] || ''
-            }
-            try {
-              await db.insert(relayEvents).values({
-                id: generateId(), eventId: ev.id, kind: ev.kind, pubkey: ev.pubkey,
-                contentPreview: ev.kind === 7 ? (ev.content || '+') : (ev.kind === 1 ? ev.content?.slice(0, 200) || null : null),
-                tags: JSON.stringify(eTags), eventCreatedAt: ev.created_at, createdAt: new Date(),
-              }).onConflictDoNothing()
-            } catch { /* already exists */ }
-            if (ev.kind === 1 && localReplies.length === 0)
-              (replies as any[]).push({ eventId: ev.id, pubkey: ev.pubkey, contentPreview: ev.content || '', eventCreatedAt: ev.created_at })
-            else if (ev.kind === 7)
-              (reactions as any[]).push({ pubkey: ev.pubkey, contentPreview: ev.content || '+', eventCreatedAt: ev.created_at })
-            else if (ev.kind === 6)
-              (reposts as any[]).push({ pubkey: ev.pubkey, eventCreatedAt: ev.created_at })
-          }
-        } catch { /* relay unavailable */ }
-      }
-      replies.sort((a, b) => a.eventCreatedAt - b.eventCreatedAt)
-      reactions = [...new Map(reactions.map(r => [r.pubkey, r])).values()]
-      reposts = [...new Map(reposts.map(r => [r.pubkey, r])).values()]
-    } catch { /* non-critical */ }
-  }
 
   // Resolve interaction author names + avatars in bulk
   const allPubkeys = [...new Set([...replies.map(r => r.pubkey), ...reactions.map(r => r.pubkey), ...reposts.map(r => r.pubkey)])]
@@ -211,11 +157,11 @@ router.get('/notes/:eventId', async (c) => {
   const createdDate = new Date(noteCreatedAt * 1000).toISOString()
 
   // Avatar helpers
-  const avatarImg = (src: string, size = 36) =>
-    `<img src="${esc(src)}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex-shrink:0" loading="lazy" aria-hidden="true">`
-  const avatarFor = (avatarUrl: string | null, username: string, fallbackKey: string, size = 36) => {
+  const avatarImg = (src: string, size = 36, alt = '') =>
+    `<img src="${esc(src)}" alt="${esc(alt)}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex-shrink:0" loading="lazy">`
+  const avatarFor = (avatarUrl: string | null, username: string, fallbackKey: string, size = 36, altName = '') => {
     const src = avatarUrl || `https://robohash.org/${encodeURIComponent(username || fallbackKey)}`
-    return avatarImg(src, size)
+    return avatarImg(src, size, altName || username || fallbackKey)
   }
   const nameLink = (name: string, username: string, pubkey: string, style = '') =>
     username
@@ -233,33 +179,26 @@ router.get('/notes/:eventId', async (c) => {
 <meta property="og:description" content="${esc(ogDesc)}">
 <meta property="og:type" content="article">
 <meta property="og:url" content="${baseUrl}/notes/${eventId}">
-<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
 <meta property="og:site_name" content="2020117">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="note by ${esc(authorName)} \u2014 2020117">
 <meta name="twitter:description" content="${esc(ogDesc)}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/notes/${eventId}">
 ${headMeta(baseUrl)}
 <style>
 ${BASE_CSS}
 .note-card{
   border:1px solid var(--c-border);border-radius:12px;padding:24px 28px;
-  background:var(--c-surface);position:relative;
-}
-.note-card::before{
-  content:'';position:absolute;inset:-1px;border-radius:12px;
-  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);z-index:-1;
-  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  mask-composite:xor;-webkit-mask-composite:xor;padding:1px;border-radius:12px;
+  background:var(--c-bg);
 }
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
 .post-author-info{display:flex;flex-direction:column;gap:2px}
 .post-author-name{font-size:15px;font-weight:600}
 .post-time{font-size:12px;color:var(--c-text-dim)}
 .kind-tag{display:inline-block;background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);border-radius:4px;padding:3px 10px;font-size:12px;color:var(--c-accent);margin-bottom:16px}
-.note-content{color:#e2e2de;font-size:16px;line-height:1.8;white-space:pre-line;word-break:break-word}
+.note-content{color:var(--c-text);font-size:16px;line-height:1.8;white-space:pre-line;word-break:break-word}
 .interactions{
   margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);
   display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--c-text-dim);
@@ -295,7 +234,7 @@ ${BASE_CSS}
 .reply-author-name a{color:var(--c-accent);text-decoration:none}
 .reply-timestamp{font-size:12px;color:var(--c-nav);margin-left:auto}
 .reply-timestamp a{color:var(--c-text-muted);text-decoration:none}
-.reply-text{font-size:15px;color:#e2e2de;line-height:1.6;white-space:pre-line;word-break:break-word}
+.reply-text{font-size:15px;color:var(--c-text);line-height:1.6;white-space:pre-line;word-break:break-word}
 .no-replies{color:var(--c-text-muted);font-size:14px;font-style:italic;padding:12px 0}
 @media(max-width:480px){
   .note-card{padding:16px 18px}
@@ -313,7 +252,7 @@ ${overlays()}
     <span class="kind-tag">note</span>
 
     <div class="post-header">
-      ${avatarFor(authorAvatarUrl, authorUsername, npub, 40)}
+      ${avatarFor(authorAvatarUrl, authorUsername, npub, 40, authorName)}
       <div class="post-author-info">
         <div class="post-author-name">${nameLink(authorName, authorUsername, notePubkey)}</div>
         <div class="post-time"><time datetime="${createdDate}">${createdDate.slice(0, 16).replace('T', ' ')} UTC</time></div>
@@ -361,7 +300,7 @@ ${overlays()}
           const rDate = new Date(r.eventCreatedAt * 1000).toISOString()
           const rNevent = eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey)
           return `<div class="reply">
-      ${avatarFor(author.avatarUrl, author.username, pubkeyToNpub(r.pubkey), 32)}
+      ${avatarFor(author.avatarUrl, author.username, pubkeyToNpub(r.pubkey), 32, author.name)}
       <div class="reply-body">
         <div class="reply-meta">
           <span class="reply-author-name">${nameLink(author.name, author.username, r.pubkey)}</span>

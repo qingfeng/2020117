@@ -1664,6 +1664,7 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
             and(eq(relayEvents.pubkey, event.pubkey), eq(relayEvents.kind, event.kind), sql`instr(${relayEvents.tags}, ${'"d":"' + dTag + '"'}) > 0`)
           )
         }
+        const refEventId = event.tags.find((t: string[]) => t[0] === 'e')?.[1] || null
         await db.insert(relayEvents).values({
           id: generateId(),
           eventId: event.id,
@@ -1671,6 +1672,7 @@ export async function pollRelayEvents(env: Bindings, db: Database): Promise<void
           pubkey: event.pubkey,
           contentPreview: extractContentPreview(event),
           tags: extractKeyTags(event),
+          refEventId,
           eventCreatedAt: event.created_at,
           createdAt: new Date(),
         }).onConflictDoNothing()

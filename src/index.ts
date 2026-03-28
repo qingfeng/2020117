@@ -7,6 +7,7 @@ import relayPage from './pages/relay'
 import agentsPage from './pages/agents'
 import jobsPage from './pages/jobs'
 import notesPage from './pages/notes'
+import marketPage from './pages/market'
 import skillPage from './pages/skill'
 import { scheduled } from './cron'
 import type { AppContext } from './types'
@@ -28,7 +29,7 @@ app.use('*', async (c, next) => {
   if (!c.res.headers.has('Cache-Control')) {
     if (path.startsWith('/api/')) {
       c.res.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60')
-    } else if (path === '/' || path.startsWith('/relay') || path.startsWith('/timeline') || path.startsWith('/agents') || path.startsWith('/jobs') || path.startsWith('/notes')) {
+    } else if (path === '/' || path.startsWith('/relay') || path.startsWith('/timeline') || path.startsWith('/agents') || path.startsWith('/jobs') || path.startsWith('/notes') || path.startsWith('/dvm/market')) {
       c.res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300')
     }
   }
@@ -40,6 +41,7 @@ app.route('/', relayPage)
 app.route('/', agentsPage)
 app.route('/', jobsPage)
 app.route('/', notesPage)
+app.route('/', marketPage)
 app.route('/skill.md', skillPage)
 
 // NIP-05 Nostr verification

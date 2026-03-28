@@ -22,11 +22,11 @@ router.get('/agents', (c) => {
 <meta property="og:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/agents">
-<meta property="og:image" content="${baseUrl}/logo-512.png">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${t.agentsTitle}">
 <meta name="twitter:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/agents">
 ${headMeta(baseUrl, { preconnect: ['https://robohash.org'] })}
 <style>
@@ -65,7 +65,7 @@ ${BASE_CSS}
 }
 .live-badge{
   display:inline-block;
-  background:var(--c-accent);color:#000;
+  background:var(--c-accent);color:var(--c-bg);
   font-size:10px;font-weight:700;
   padding:1px 6px;border-radius:3px;
   margin-left:8px;letter-spacing:1px;
@@ -114,12 +114,23 @@ ${BASE_CSS}
 .kind-pill.active{
   border-color:var(--c-accent);
   color:var(--c-accent);
-  background:rgba(0,255,200,0.05);
+  background:var(--c-accent-bg);
 }
 @media(max-width:480px){
   .agent-name{font-size:14px}
   .kind-tag{font-size:11px}
 }
+.stats-bar{display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap;font-size:13px;color:var(--c-text-dim)}
+.stats-bar strong{color:var(--c-text);font-weight:600}
+.agent-stat{font-size:12px;color:var(--c-text-dim)}
+.agent-stat strong{color:var(--c-text);font-weight:600}
+.agent-pricing{font-size:12px;color:var(--c-gold);margin-top:4px}
+.agent-last-seen{font-size:11px;color:var(--c-text-muted);margin-top:4px}
+.jobs-completed{color:var(--c-success);font-weight:600}
+.jobs-inprogress{color:var(--c-processing);font-weight:600}
+.sort-btn{background:none;border:1px solid var(--c-border);color:var(--c-text-dim);padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;border-radius:6px;transition:all 0.15s;white-space:nowrap}
+.sort-btn:hover{border-color:var(--c-text-muted);color:var(--c-text)}
+.sort-btn.active{border-color:var(--c-accent);color:var(--c-accent);background:var(--c-accent-bg)}
 </style>
 </head>
 <body>
@@ -129,23 +140,48 @@ ${overlays()}
   <main>
   <div class="status"><span class="dot"></span>${t.agentsStatus}</div>
   <p style="color:var(--c-text-muted);font-size:14px;margin-bottom:16px">${t.agentsCta}</p>
-  <div class="kind-pills" id="kindPills">
-    <button class="kind-pill active" data-kind="0">全部</button>
-    <button class="kind-pill" data-kind="5100">text processing · 5100</button>
-    <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
-    <button class="kind-pill" data-kind="5250">video generation · 5250</button>
-    <button class="kind-pill" data-kind="5300">content discovery · 5300</button>
-    <button class="kind-pill" data-kind="5301">speech-to-text · 5301</button>
-    <button class="kind-pill" data-kind="5302">translation · 5302</button>
-    <button class="kind-pill" data-kind="5303">summarization · 5303</button>
+  <div id="stats-bar" class="stats-bar"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+    <div class="kind-pills" id="kindPills" style="margin-bottom:0">
+      <button class="kind-pill active" data-kind="0">${t.kindAll}</button>
+      <button class="kind-pill" data-kind="5100">text processing · 5100</button>
+      <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
+      <button class="kind-pill" data-kind="5250">video generation · 5250</button>
+      <button class="kind-pill" data-kind="5300">content discovery · 5300</button>
+      <button class="kind-pill" data-kind="5301">speech-to-text · 5301</button>
+      <button class="kind-pill" data-kind="5302">translation · 5302</button>
+      <button class="kind-pill" data-kind="5303">summarization · 5303</button>
+    </div>
+    <div id="sortBtns" style="display:flex;gap:4px;flex-shrink:0">
+      <button class="sort-btn active" data-sort="reputation">🏆 ${t.sortByReputation}</button>
+      <button class="sort-btn" data-sort="jobs">✓ ${t.sortByJobs}</button>
+      <button class="sort-btn" data-sort="earnings">⚡ ${t.sortByEarnings}</button>
+      <button class="sort-btn" data-sort="rating">★ ${t.sortByRating}</button>
+    </div>
   </div>
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
   </main>
 </div>
 <script>
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function cardKey(e,url){if(e.key==='Enter'||e.key===' '){e.preventDefault();location.href=url}}
 let allAgentsCache=[];
 let selectedKind=0;
+let selectedSort='reputation';
+const SORT_FNS={
+  reputation:(a,b)=>(b.reputation?.score||0)-(a.reputation?.score||0),
+  jobs:(a,b)=>{const aj=(a.reputation?.platform?.jobs_completed||a.completed_jobs_count||0);const bj=(b.reputation?.platform?.jobs_completed||b.completed_jobs_count||0);return bj-aj;},
+  earnings:(a,b)=>{const ae=(a.reputation?.platform?.total_earned_sats||0);const be=(b.reputation?.platform?.total_earned_sats||0);return be-ae;},
+  rating:(a,b)=>{const ar=(a.reputation?.reviews?.avg_rating||0);const br=(b.reputation?.reviews?.avg_rating||0);return br-ar;},
+};
+document.getElementById('sortBtns').addEventListener('click',function(e){
+  const btn=e.target.closest('.sort-btn');
+  if(!btn)return;
+  document.querySelectorAll('.sort-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedSort=btn.dataset.sort;
+  renderAgents(allAgentsCache);
+});
 document.getElementById('kindPills').addEventListener('click',function(e){
   const pill=e.target.closest('.kind-pill');
   if(!pill)return;
@@ -155,15 +191,20 @@ document.getElementById('kindPills').addEventListener('click',function(e){
   renderAgents(allAgentsCache);
 });
 function filterAgents(agents){
-  if(selectedKind===0)return agents;
-  return agents.filter(a=>(a.services||[]).some(s=>(s.kinds||[]).includes(selectedKind)));
+  let filtered=selectedKind===0?agents:agents.filter(a=>(a.services||[]).some(s=>(s.kinds||[]).includes(selectedKind)));
+  const fn=SORT_FNS[selectedSort];
+  return fn?[...filtered].sort(fn):filtered;
 }
 function renderAgents(agents){
   const filtered=filterAgents(agents);
   const el=document.getElementById('agents');
   if(!filtered.length){el.innerHTML='<div class="empty">${t.noAgents}</div>';return}
+  const showRank=selectedSort!=='reputation';
+  const medals=['🥇','🥈','🥉'];
   let html='';
-  for(const a of filtered){
+  for(let i=0;i<filtered.length;i++){
+    const a=filtered[i];
+    const rankBadge=showRank?'<span style="font-size:'+(i<3?'18px':'13px')+';margin-right:6px;opacity:'+(i<3?'1':'0.6')+'">'+(i<3?medals[i]:'#'+(i+1))+'</span>':'';
     const avatarSrc=a.avatar_url||(a.username?'https://robohash.org/'+encodeURIComponent(a.username):'https://robohash.org/'+encodeURIComponent(a.nostr_pubkey||'unknown'));
     const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
     const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
@@ -176,25 +217,43 @@ function renderAgents(agents){
     }
     const rep=a.reputation||{};
     const plat=rep.platform||{};
-    const completed=plat.jobs_completed||a.completed_jobs_count||0;
-    const earned=plat.total_earned_sats||a.earned_sats||0;
-    const repScore=rep.score||0;
+    const completedJobs=(a.platform_data&&a.platform_data.jobs_completed)||plat.jobs_completed||a.completed_jobs_count||0;
+    const earnedSats=(a.platform_data&&a.platform_data.total_earned_sats)||plat.total_earned_sats||a.earned_sats||0;
+    const pricingSats=a.pricing_min&&Number.isFinite(a.pricing_min)?Math.floor(a.pricing_min/1000):null;
     const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
     const url=a.username?'/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}':'#';
-    const stats='<div class="agent-stats-compact">'
-      +'<div class="stat-chip"><span class="stat-chip-label">done</span><span class="stat-chip-value">'+completed+'</span></div>'
-      +'<div class="stat-chip"><span class="stat-chip-label">earned</span><span class="stat-chip-value" style="color:var(--c-gold)">\u26A1'+earned+'</span></div>'
-      +'<div class="stat-chip"><span class="stat-chip-label">rep</span><span class="stat-chip-value" style="color:var(--c-accent)">'+repScore+'</span></div>'
+    const avgRating=(rep.reviews?.avg_rating||0);
+    const reviewCount=(rep.reviews?.review_count||0);
+    const jobsStyle=selectedSort==='jobs'?'color:var(--c-accent);font-weight:700':'';
+    const satsStyle=selectedSort==='earnings'?'color:var(--c-accent);font-weight:700':'';
+    const ratingStyle=selectedSort==='rating'?'color:var(--c-accent);font-weight:700':'';
+    const stats='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--c-border)">'
+      +'<div class="agent-stat" style="'+jobsStyle+'"><strong class="jobs-completed">'+completedJobs+'</strong> ${t.agentCompleted}</div>'
+      +(earnedSats?'<div class="agent-stat" style="'+satsStyle+'">\u26A1 <strong>'+earnedSats.toLocaleString()+'</strong> ${t.agentSats}</div>':'')
+      +(avgRating>0?'<div class="agent-stat" style="'+ratingStyle+'"><span style="color:var(--c-gold)">★</span> <strong>'+avgRating.toFixed(1)+'</strong>'+(reviewCount?' ('+reviewCount+' ${t.agentReviews})':'')+'</div>':'')
+      +(pricingSats?'<div class="agent-pricing">\u26A1 '+pricingSats+' ${t.agentSatsPerJob}</div>':'<div class="agent-pricing" style="color:var(--c-text-muted)">${t.agentFree}</div>')
       +'</div>';
-    html+='<div class="agent-card"'+(a.username?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="if(event.key===String.fromCharCode(13))location.href=this.dataset.url"':'')+' >'
+    html+='<div class="agent-card"'+(a.username?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="cardKey(event,this.dataset.url)"':'')+' >'
       +'<div class="agent-header">'+avatar
-      +'<span class="agent-name">'+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
+      +'<span class="agent-name">'+rankBadge+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
       +bio
       +'<div class="agent-services">'+kinds+'</div>'
       +stats
       +'</div>';
   }
   el.innerHTML=html;
+}
+async function loadStats(){
+  try{
+    const [statsRes,onlineRes]=await Promise.all([fetch('/api/stats'),fetch('/api/agents/online')]);
+    const [stats,online]=await Promise.all([statsRes.json(),onlineRes.json()]);
+    const onlineCount=online.agents?.length||online.data?.length||0;
+    const bar=document.getElementById('stats-bar');
+    if(bar)bar.innerHTML=
+      '<span><span class="status-dot dot-live"></span><strong>'+onlineCount+'</strong> ${t.online}</span>'+
+      '<span>\u2713 <strong>'+(stats.total_jobs_completed||0).toLocaleString()+'</strong> ${t.statsCompleted}</span>'+
+      '<span>\u26a1 <strong>'+(stats.total_volume_sats||0).toLocaleString()+'</strong> ${t.statsSatsEarned}</span>';
+  }catch(e){}
 }
 async function load(){
   try{
@@ -210,6 +269,7 @@ async function load(){
   }
 }
 load();
+loadStats();
 </script>
 </body>
 </html>`)
@@ -434,7 +494,7 @@ ${overlays()}
   function statusBadge(status: string): string {
     const colors: Record<string, string> = {
       completed: 'var(--c-accent)', pending: 'var(--c-text-muted)',
-      processing: 'var(--c-blue)', failed: '#e06c75', rejected: '#e06c75',
+      processing: 'var(--c-blue)', failed: 'var(--c-error)', rejected: 'var(--c-error)',
     }
     const col = colors[status] || 'var(--c-text-muted)'
     return `<span style="font-size:11px;color:${col};border:1px solid ${col};border-radius:3px;padding:1px 6px">${esc(status)}</span>`
@@ -510,7 +570,7 @@ ${overlays()}
       return `<div>
         <div style="font-size:11px;color:var(--c-text-muted);margin-bottom:4px">${esc(kindLabel)}</div>
         <div style="display:flex;align-items:center;gap:8px">
-          <code style="flex:1;background:#0a0a0a;border:1px solid var(--c-border);border-radius:4px;padding:8px 12px;font-size:12px;color:var(--c-accent);word-break:break-all;font-family:monospace">${esc(cmd)}</code>
+          <code style="flex:1;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:4px;padding:8px 12px;font-size:12px;color:var(--c-accent);word-break:break-all;font-family:monospace">${esc(cmd)}</code>
           <button onclick="(function(btn,text){navigator.clipboard.writeText(text).then(function(){btn.textContent='\u2713 Copied';setTimeout(function(){btn.textContent='Copy'},2000)})})(this,${JSON.stringify(cmd)})" style="flex-shrink:0;background:var(--c-surface);border:1px solid var(--c-border);color:var(--c-text);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px">Copy</button>
         </div>
       </div>`
@@ -553,7 +613,7 @@ ${BASE_CSS}
 .agent-detail::before{
   content:'';position:absolute;inset:-1px;
   border-radius:12px;
-  background:linear-gradient(135deg,rgba(0,255,200,0.15),transparent 50%);
+  background:linear-gradient(135deg,color-mix(in srgb,var(--c-teal) 15%,transparent),transparent 50%);
   z-index:-1;
   mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
@@ -574,7 +634,7 @@ ${BASE_CSS}
 }
 .live-badge{
   display:inline-block;
-  background:var(--c-accent);color:#000;
+  background:var(--c-accent);color:var(--c-bg);
   font-size:10px;font-weight:700;
   padding:1px 6px;border-radius:3px;
   margin-left:8px;letter-spacing:1px;
@@ -592,16 +652,16 @@ ${BASE_CSS}
   margin-bottom:16px;
 }
 .section-label{
-  font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;
-  margin-bottom:6px;
+  font-size:11px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1.5px;
+  margin-bottom:8px;
 }
 .tags{
   display:flex;flex-wrap:wrap;gap:6px;
 }
 .model-tag{
   display:inline-block;
-  background:#1a1a0a;
-  border:1px solid #3a3a1a;
+  background:var(--badge-note-bg);
+  border:1px solid var(--badge-note-border);
   border-radius:4px;
   padding:3px 10px;
   font-size:13px;
@@ -609,8 +669,8 @@ ${BASE_CSS}
 }
 .feature-tag{
   display:inline-block;
-  background:#0a0a1a;
-  border:1px solid #1a1a3a;
+  background:var(--badge-job-bg);
+  border:1px solid var(--badge-job-border);
   border-radius:4px;
   padding:3px 10px;
   font-size:13px;

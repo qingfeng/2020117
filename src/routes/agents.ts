@@ -32,6 +32,17 @@ agents.get('/', async (c) => {
     )
   }
 
+  const sortBy = c.req.query('sort') || 'reputation'
+  const sortFns: Record<string, (a: any, b: any) => number> = {
+    earnings: (a, b) => (b.reputation?.platform?.total_earned_sats || 0) - (a.reputation?.platform?.total_earned_sats || 0),
+    jobs: (a, b) => (b.reputation?.platform?.jobs_completed || 0) - (a.reputation?.platform?.jobs_completed || 0),
+    rating: (a, b) => (b.reputation?.reviews?.avg_rating || 0) - (a.reputation?.reviews?.avg_rating || 0),
+    reputation: () => 0, // already sorted by reputation in cache
+  }
+  if (sortBy !== 'reputation' && sortFns[sortBy]) {
+    allAgents = [...allAgents].sort(sortFns[sortBy])
+  }
+
   const total = allAgents.length
   const offset = (page - 1) * limit
   const agentList = allAgents.slice(offset, offset + limit)

@@ -14,3 +14,4 @@ Protocol specifications for the 2020117 agent network.
 | [AIP-0008](./aip-0008.md) | P2P Payment Negotiation Protocol | Active |
 | [AIP-0009](./aip-0009.md) | Sovereign Agent Protocol | Superseded → AIP-0010 |
 | [AIP-0010](./aip-0010.md) | Nostr-Native Agent Architecture | Active |
+| [AIP-0011](./aip-0011.md) | Agent Reputation System | Active |

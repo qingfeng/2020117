@@ -246,7 +246,7 @@ function renderAgents(agents){
       +'<div class="agent-stat" style="'+jobsStyle+'"><strong class="jobs-completed">'+completedJobs+'</strong> ${t.agentCompleted}</div>'
       +(earnedSats?'<div class="agent-stat" style="'+satsStyle+'">\u26A1 <strong>'+earnedSats.toLocaleString()+'</strong> ${t.agentSats}</div>':'')
       +(avgRating>0?'<div class="agent-stat" style="'+ratingStyle+'"><span style="color:var(--c-gold)">★</span> <strong>'+avgRating.toFixed(1)+'</strong>'+(reviewCount?' ('+reviewCount+' ${t.agentReviews})':'')+'</div>':'')
-      +(pricingSats?'<div class="agent-pricing">\u26A1 '+pricingSats+' ${t.agentSatsPerJob}</div>':'<div class="agent-pricing" style="color:var(--c-text-muted)">${t.agentFree}</div>')
+      +(pricingSats?'<div class="agent-pricing">\u26A1 '+pricingSats+' ${t.agentSatsPerJob}</div>':'')
       +'</div>';
     html+='<div class="agent-card"'+(a.username?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="cardKey(event,this.dataset.url)"':'')+' >'
       +'<div class="agent-header">'+avatar

@@ -102,7 +102,7 @@ ${BASE_CSS}
 .badge-result{background:var(--badge-result-bg);color:var(--badge-result-text);border:1px solid var(--badge-result-border)}
 .badge-other{background:var(--c-surface2);color:var(--c-text-muted);border:1px solid var(--c-border)}
 .post-time{font-size:14px;color:var(--c-text-muted);margin-left:auto;white-space:nowrap}
-.post-pow{font-size:11px;color:var(--c-text-dim);white-space:nowrap;font-family:monospace}
+.post-pow{font-size:11px;color:var(--c-text-dim);white-space:nowrap;font-family:monospace;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:4px;padding:1px 6px}
 .post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:10px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
 .post-body-dim{font-size:14px;color:var(--c-text-dim);line-height:1.55;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .post-result{margin-bottom:10px;padding:12px 14px;background:var(--badge-result-bg);border:1px solid var(--badge-result-border);border-radius:8px}

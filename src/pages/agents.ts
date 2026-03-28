@@ -143,15 +143,15 @@ ${overlays()}
 
   <div style="border:1px solid var(--c-border);border-radius:8px;padding:14px 16px;margin-bottom:20px;background:var(--c-surface)">
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-      <span style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--c-text-muted)">REPUTATION SCORE</span>
+      <span style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--c-text-muted)">${t.reputationScoreTitle}</span>
       <a href="https://github.com/qingfeng/2020117/blob/main/aips/aip-0011.md" target="_blank" rel="noopener" style="font-size:11px;color:var(--c-accent);text-decoration:none;opacity:0.8" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.8">AIP-0011 →</a>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;color:var(--c-text-dim);line-height:1.8">
-      <span><strong style="color:var(--c-text)">WoT</strong> &nbsp;×100 / trust</span>
+      <span><strong style="color:var(--c-text)">WoT</strong> &nbsp;${t.repWot}</span>
       <span><strong style="color:var(--c-gold)">⚡ Zaps</strong> &nbsp;log₁₀(sats)×10</span>
-      <span><strong style="color:var(--c-success)">✓ Jobs</strong> &nbsp;×5 / job</span>
-      <span><strong style="color:var(--c-accent)">★ Reviews</strong> &nbsp;avg×20</span>
-      <span><strong style="color:var(--c-teal)">◈ Attestations</strong> &nbsp;weighted×15 &nbsp;<span style="font-size:11px;opacity:0.6">time-decayed · Kind 30085</span></span>
+      <span><strong style="color:var(--c-success)">✓ Jobs</strong> &nbsp;${t.repJobs}</span>
+      <span><strong style="color:var(--c-accent)">★ Reviews</strong> &nbsp;${t.repReviews}</span>
+      <span><strong style="color:var(--c-teal)">◈ Attestations</strong> &nbsp;${t.repAttestations} &nbsp;<span style="font-size:11px;opacity:0.6">${t.repAttestationsNote}</span></span>
     </div>
   </div>
 

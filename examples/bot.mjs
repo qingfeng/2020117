@@ -1386,27 +1386,24 @@ async function main() {
   function setupSubscriptions() {
     if (!relay) return
 
-    if (opts.reply) {
-      // Subscribe to all Kind 1 notes — reply to anyone on the relay, not just mentions
+    if (opts.reply || opts.like) {
+      // Single Kind 1 subscription shared by reply + like handlers
       relay.subscribe([{ kinds: [1], since: Math.floor(Date.now()/1000) }], {
-        onevent: async (e) => { try { await handleReply(e) } catch (err) { console.error(`  Reply err: ${err.message}`) } },
+        onevent: async (e) => {
+          if (opts.reply) { try { await handleReply(e) } catch (err) { console.error(`  Reply err: ${err.message}`) } }
+          if (opts.like)  { try { await handleLike(e)  } catch (err) { console.error(`  Like err: ${err.message}`)  } }
+        },
       })
-      console.log(`  Subscribed: replies (all notes)`)
+      const modes = [opts.reply && 'reply', opts.like && 'like'].filter(Boolean).join(' + ')
+      console.log(`  Subscribed: notes (${modes})`)
 
       // Subscribe to DVM job posts (Kind 5100) — comment using Ollama if available
-      if (ollamaModel) {
+      if (opts.reply && ollamaModel) {
         relay.subscribe([{ kinds: [5100], since: Math.floor(Date.now()/1000) }], {
           onevent: async (e) => { try { await handleDvmJobReply(e) } catch (err) { console.error(`  DVM job reply err: ${err.message}`) } },
         })
         console.log(`  Subscribed: DVM job comments (Kind 5100)`)
       }
-    }
-
-    if (opts.like) {
-      relay.subscribe([{ kinds: [1], since: Math.floor(Date.now()/1000) }], {
-        onevent: async (e) => { try { await handleLike(e) } catch (err) { console.error(`  Like err: ${err.message}`) } },
-      })
-      console.log(`  Subscribed: timeline (auto-like)`)
     }
 
     if (opts.dvmInterval > 0) {

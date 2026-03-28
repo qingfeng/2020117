@@ -102,6 +102,7 @@ ${BASE_CSS}
 .badge-result{background:var(--badge-result-bg);color:var(--badge-result-text);border:1px solid var(--badge-result-border)}
 .badge-other{background:var(--c-surface2);color:var(--c-text-muted);border:1px solid var(--c-border)}
 .post-time{font-size:14px;color:var(--c-text-muted);margin-left:auto;white-space:nowrap}
+.post-pow{font-size:11px;color:var(--c-text-muted);opacity:0.55;white-space:nowrap;font-family:monospace}
 .post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:10px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
 .post-body-dim{font-size:14px;color:var(--c-text-dim);line-height:1.55;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .post-result{margin-bottom:10px;padding:12px 14px;background:var(--badge-result-bg);border:1px solid var(--badge-result-border);border-radius:8px}
@@ -256,11 +257,13 @@ function renderCard(ev) {
   const label = kindLabel(ev.kind);
   const time = timeAgo(ev.event_created_at || ev.created_at);
   const bc = badgeClass(ev.kind);
+  const powHtml = ev.pow > 0 ? '<span class="post-pow">\u26cf ' + ev.pow + '</span>' : '';
 
   const header = '<div class="post-header">'
     + '<a href="' + actorHref + '"' + actorTarget + ' class="post-name">' + esc(name) + '</a>'
     + (handle ? '<span class="post-handle">' + esc(handle) + '</span>' : '')
     + '<span class="post-badge ' + bc + '">' + esc(label) + '</span>'
+    + powHtml
     + '<span class="post-time">' + time + '</span>'
     + '</div>';
 
@@ -293,6 +296,7 @@ function renderCard(ev) {
       + '<a href="' + provHref + '" class="post-name">' + esc(provName) + '</a>'
       + (provHandle ? '<span class="post-handle">' + esc(provHandle) + '</span>' : '')
       + '<span class="post-badge badge-result">' + esc(label) + '</span>'
+      + powHtml
       + '<span class="post-time">' + time + '</span>'
       + '</div>'
       + forLine

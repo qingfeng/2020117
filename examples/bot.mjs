@@ -851,6 +851,41 @@ function signWithPow(unsignedEvent, sk) {
 }
 
 // ============================================================
+//  Kind 30085 — Agent Reputation Attestation (NIP-XX / PR #2285)
+//  Cross-platform attestation published after every settled DVM job.
+//  subject: hex pubkey of the agent being attested
+//  rating:  1-5 integer
+//  context: 'nip90.5100' / 'nip90.5302' etc.  (nip90.<job-kind>)
+//  jobEventId: the DVM request/result event id used as verifiable evidence
+// ============================================================
+
+async function publishAttestation30085(relay, identity, subjectPubkey, rating, context, jobEventId) {
+  if (!relay || !subjectPubkey || subjectPubkey === identity.pubkey) return  // skip self-attestation
+  const now = Math.floor(Date.now() / 1000)
+  const confidence = rating >= 4 ? 0.9 : rating === 3 ? 0.7 : 0.85
+  const ae = signWithPow({
+    kind: 30085,
+    pubkey: identity.pubkey,
+    content: JSON.stringify({
+      subject: subjectPubkey,
+      rating,
+      context,
+      confidence,
+      evidence: JSON.stringify([{ type: 'dvm_job_id', data: jobEventId }]),
+    }),
+    tags: [
+      ['d', `${subjectPubkey}:${context}`],
+      ['p', subjectPubkey],
+      ['t', context],
+      ['expiration', String(now + 90 * 86400)],  // 90-day TTL (required by spec)
+      ['v', '2'],
+    ],
+    created_at: now,
+  }, identity.sk)
+  await publishEvent(relay, ae)
+}
+
+// ============================================================
 //  DVM Result Quality Evaluation (Customer side)
 // ============================================================
 
@@ -1758,6 +1793,10 @@ async function main() {
       }, identity.sk)
       await publishEvent(r, ee)
       console.log(`  Kind 30311 endorsement sent`)
+
+      // Kind 30085 — cross-platform reputation attestation (NIP-XX)
+      await publishAttestation30085(r, identity, providerPubkey, evaluation.rating, 'nip90.5100', requestId)
+      console.log(`  Kind 30085 attestation sent (nip90.5100, ${evaluation.rating}/5)`)
     }
 
     pendingJobs.delete(requestId)
@@ -1840,6 +1879,10 @@ async function main() {
           created_at: Math.floor(Date.now()/1000),
         }, identity.sk)
         await publishEvent(r, se)
+
+        // Kind 30085 — cross-platform reputation attestation (NIP-XX)
+        await publishAttestation30085(r, identity, providerPubkey, evaluation.rating, 'nip90.5300', requestId)
+        console.log(`  Kind 30085 attestation sent (nip90.5300, ${evaluation.rating}/5)`)
       }
     }
   }
@@ -2045,7 +2088,7 @@ async function main() {
     }, identity.sk)
     await publishEvent(r, resultEvent)
 
-    // 4. Review customer (Kind 31117, role=provider) + like job request (Kind 7)
+    // 4. Review customer (Kind 31117, role=provider) + Kind 30085 + like job request (Kind 7)
     try {
       // Kind 31117 — provider reviews customer
       const re = signWithPow({ kind: 31117, pubkey: identity.pubkey,
@@ -2054,6 +2097,10 @@ async function main() {
         created_at: Math.floor(Date.now()/1000),
       }, identity.sk)
       await publishEvent(r, re)
+
+      // Kind 30085 — cross-platform reputation attestation (NIP-XX)
+      await publishAttestation30085(r, identity, customerPubkey, 5, `nip90.${event.kind}`, event.id)
+      console.log(`  Kind 30085 attestation sent (nip90.${event.kind}, 5/5)`)
 
       // Kind 7 — like the job request event
       const like = signWithPow({ kind: 7, pubkey: identity.pubkey,

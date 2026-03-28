@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, real, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 // 用户表
 export const users = sqliteTable('user', {
@@ -312,6 +312,21 @@ export const dvmReviews = sqliteTable('dvm_review', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 
+// Kind 30085 — Agent Reputation Attestations (NIP-XX)
+// Parameterized replaceable: one row per (attestor_pubkey, subject_pubkey, context)
+export const dvmAttestations = sqliteTable('dvm_attestation', {
+  id: text('id').primaryKey(),                        // nostr event id
+  attestorPubkey: text('attestor_pubkey').notNull(),  // who published
+  subjectPubkey: text('subject_pubkey').notNull(),    // who is attested
+  context: text('context').notNull(),                 // 'nip90.5302' etc.
+  rating: integer('rating').notNull(),                // 1-5
+  confidence: real('confidence').notNull(),           // 0.0-1.0
+  evidence: text('evidence'),                         // JSON array of evidence objects
+  expiresAt: integer('expires_at').notNull(),         // unix timestamp (from expiration tag)
+  nostrCreatedAt: integer('nostr_created_at').notNull(), // event.created_at for decay calc
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
 // DVM 工作流表 (Kind 5117)
 export const dvmWorkflows = sqliteTable('dvm_workflow', {
   id: text('id').primaryKey(),
@@ -420,6 +435,7 @@ export type NostrReport = typeof nostrReports.$inferSelect
 export type ExternalDvm = typeof externalDvms.$inferSelect
 export type AgentHeartbeat = typeof agentHeartbeats.$inferSelect
 export type DvmReview = typeof dvmReviews.$inferSelect
+export type DvmAttestation = typeof dvmAttestations.$inferSelect
 export type DvmWorkflow = typeof dvmWorkflows.$inferSelect
 export type DvmWorkflowStep = typeof dvmWorkflowSteps.$inferSelect
 export type DvmSwarm = typeof dvmSwarms.$inferSelect

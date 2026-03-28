@@ -132,6 +132,14 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] Job reviews poll failed:', e)
     }
 
+    // Poll Kind 30085 Reputation Attestations (NIP-XX)
+    try {
+      const { pollAttestations } = await import('./services/dvm-polling')
+      await pollAttestations(env, db)
+    } catch (e) {
+      console.error('[Cron] Attestation poll failed:', e)
+    }
+
     // Poll Reputation Endorsements (Kind 30311)
     try {
       const { pollReputationEndorsements } = await import('./services/dvm')

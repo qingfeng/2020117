@@ -1,7 +1,7 @@
 import { eq, and, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import type { Bindings } from '../types'
-import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements, relayEvents } from '../db/schema'
+import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements, relayEvents, dvmAttestations } from '../db/schema'
 import { type NostrEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
 import { generateId } from '../lib/utils'
@@ -1972,5 +1972,108 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
 
     if (maxTs > since) await kv.put(sinceKey, String(maxTs))
     if (indexed > 0) console.log(`[ExtProvider] Indexed ${indexed} P2P sessions`)
+  }
+}
+
+// --- Cron: Poll Kind 30085 Reputation Attestations (NIP-XX) ---
+
+export async function pollAttestations(env: Bindings, db: Database): Promise<void> {
+  const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (relayUrls.length === 0) return
+
+  // Filter by all registered user pubkeys as subjects
+  const registeredUsers = await db
+    .select({ nostrPubkey: users.nostrPubkey })
+    .from(users)
+    .where(isNotNull(users.nostrPubkey))
+
+  const subjectPubkeys = [...new Set(registeredUsers.map(u => u.nostrPubkey).filter((pk): pk is string => !!pk))]
+  if (subjectPubkeys.length === 0) return
+
+  const kv = env.KV
+  const sinceKey = 'dvm_attestation_last_poll'
+  const sinceStr = await kv.get(sinceKey)
+  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 86400 * 7
+  const now = Math.floor(Date.now() / 1000)
+
+  let maxCreatedAt = since
+  let indexed = 0
+
+  try {
+    const { events } = await fetchEventsFromRelay(relayUrls[0], {
+      kinds: [30085],
+      '#p': subjectPubkeys,
+      since,
+    })
+
+    console.log(`[DVM] Fetched ${events.length} Kind 30085 attestation events`)
+
+    for (const event of events) {
+      if (!verifyEvent(event)) continue
+
+      // Skip self-attestations
+      const pTag = event.tags.find((t: string[]) => t[0] === 'p')?.[1]
+      if (!pTag || pTag === event.pubkey) continue
+
+      // Parse and validate expiration tag
+      const expirationTag = event.tags.find((t: string[]) => t[0] === 'expiration')?.[1]
+      if (!expirationTag) continue  // expiration is required by spec
+      const expiresAt = parseInt(expirationTag)
+      if (isNaN(expiresAt) || expiresAt <= now) continue  // skip already-expired
+
+      // Parse content JSON
+      let content: { subject?: string; rating?: number; context?: string; confidence?: number; evidence?: string }
+      try { content = JSON.parse(event.content) } catch { continue }
+
+      const { subject, rating, context, confidence } = content
+      if (!subject || subject !== pTag) continue  // subject must match p tag
+      if (!context || typeof rating !== 'number' || rating < 1 || rating > 5) continue
+      if (typeof confidence !== 'number' || confidence < 0 || confidence > 1) continue
+
+      // Upsert: one row per (attestor, subject, context) — keep latest
+      const existing = await db.select({ id: dvmAttestations.id })
+        .from(dvmAttestations)
+        .where(and(
+          eq(dvmAttestations.attestorPubkey, event.pubkey),
+          eq(dvmAttestations.subjectPubkey, subject),
+          eq(dvmAttestations.context, context),
+        ))
+        .limit(1)
+
+      if (existing.length > 0) {
+        await db.update(dvmAttestations)
+          .set({
+            id: event.id,
+            rating,
+            confidence,
+            evidence: content.evidence || null,
+            expiresAt,
+            nostrCreatedAt: event.created_at,
+            createdAt: new Date(),
+          })
+          .where(eq(dvmAttestations.id, existing[0].id))
+      } else {
+        await db.insert(dvmAttestations).values({
+          id: event.id,
+          attestorPubkey: event.pubkey,
+          subjectPubkey: subject,
+          context,
+          rating,
+          confidence,
+          evidence: content.evidence || null,
+          expiresAt,
+          nostrCreatedAt: event.created_at,
+          createdAt: new Date(),
+        }).onConflictDoNothing()
+      }
+
+      indexed++
+      if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
+    }
+
+    if (maxCreatedAt > since) await kv.put(sinceKey, String(maxCreatedAt + 1))
+    if (indexed > 0) console.log(`[DVM] Indexed/updated ${indexed} Kind 30085 attestations`)
+  } catch (e) {
+    console.error('[DVM] Failed to poll attestations:', e)
   }
 }

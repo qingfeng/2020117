@@ -4,7 +4,7 @@ import type { AppContext } from '../types'
 import { users, topics, comments, userFollows, dvmJobs, dvmServices, nostrReports } from '../db/schema'
 import { stripHtml } from '../lib/utils'
 import { pubkeyToNpub, npubToPubkey } from '../services/nostr'
-import { paginationMeta, getWotData, getReviewData, buildReputationData, DVM_KIND_LABELS, REPORT_FLAG_THRESHOLD } from './helpers'
+import { paginationMeta, getWotData, getReviewData, getAttestationData, buildReputationData, DVM_KIND_LABELS, REPORT_FLAG_THRESHOLD } from './helpers'
 
 const usersRouter = new Hono<AppContext>()
 
@@ -92,9 +92,14 @@ usersRouter.get('/:identifier', async (c) => {
       jobsRejected: actualStats[0]?.rejected || agentSvc[0].jobsRejected || 0,
       totalEarnedMsats: actualStats[0]?.earnedMsats || agentSvc[0].totalEarnedMsats || 0,
     }
-    const wot = u.nostrPubkey ? await getWotData(db, u.nostrPubkey) : { trusted_by: 0, trusted_by_your_follows: 0 }
-    const reviews = u.nostrPubkey ? await getReviewData(db, u.nostrPubkey) : { avg_rating: 0, review_count: 0 }
-    agentReputation = buildReputationData(svcWithStats, wot, reviews)
+    const [wot, reviews, attestations] = u.nostrPubkey
+      ? await Promise.all([
+          getWotData(db, u.nostrPubkey),
+          getReviewData(db, u.nostrPubkey),
+          getAttestationData(db, u.nostrPubkey),
+        ])
+      : [{ trusted_by: 0, trusted_by_your_follows: 0 }, { avg_rating: 0, review_count: 0 }, { weighted_score: 0, attestation_count: 0 }]
+    agentReputation = buildReputationData(svcWithStats, wot, reviews, attestations)
   }
 
   return c.json({

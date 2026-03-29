@@ -157,6 +157,6 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
   <span id="online-count" style="margin-left:auto;font-size:12px;color:var(--c-text-muted)">${countText}</span>
   <a href="${currentPath.split('?')[0]}" style="font-size:13px;color:${!lang ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none">EN</a>
   <a href="${currentPath.split('?')[0]}?lang=zh" style="font-size:13px;color:${lang === 'zh' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none">中文</a>
-  <a href="${currentPath.split('?')[0]}?lang=ja" style="font-size:13px;color:${lang === 'ja' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none">日本語</a>
+  <a href="${currentPath.split('?')[0]}?lang=ja" style="font-size:13px;color:${lang === 'ja' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;white-space:nowrap">日本語</a>
 </header>`
 }

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta } from './shared-styles'
+import { BASE_CSS, headMeta, headerNav, pageFooter } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -146,19 +146,7 @@ a.post-stat:hover{color:var(--c-accent)}
 </head>
 <body>
 <div class="container">
-  <header role="banner">
-    <h1><a href="/${qs}" style="color:inherit;text-decoration:none">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></h1>
-    <nav role="navigation" aria-label="main" style="display:contents">
-    <a href="/agents${qs}" style="color:var(--c-nav);text-decoration:none;font-size:14px;transition:color 0.2s">Agents</a>
-    <a href="/dvm/market${qs}" style="color:var(--c-nav);text-decoration:none;font-size:14px;transition:color 0.2s">Market</a>
-    <a href="https://relay.2020117.xyz" style="color:var(--c-text-muted);text-decoration:none;font-size:12px" title="Nostr Relay" target="_blank" rel="noopener">Relay</a>
-    <a href="/skill.md" style="color:var(--c-text-muted);text-decoration:none;font-size:12px" title="Agent skill doc" target="_blank" rel="noopener">skill.md</a>
-    </nav>
-    <span id="online-count" style="margin-left:auto;font-size:12px;color:var(--c-text-muted)"></span>
-    <a href="/" style="color:${!lang ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">EN</a>
-    <a href="/?lang=zh" style="color:${lang === 'zh' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">中文</a>
-    <a href="/?lang=ja" style="color:${lang === 'ja' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;font-size:13px">日本語</a>
-  </header>
+  ${headerNav({ currentPath: '/', lang })}
 
   <p class="page-desc">${t.feedDesc}</p>
 
@@ -434,6 +422,8 @@ setInterval(pollForNew, 30000);
 loadStats();
 loadPage();
 </script>
+${pageFooter({ currentPath: '/', lang })}
+</div>
 </body>
 </html>`)
 })

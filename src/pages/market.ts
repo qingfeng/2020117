@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, headerNav } from './shared-styles'
+import { BASE_CSS, headMeta, headerNav, pageFooter } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -92,6 +92,7 @@ ${BASE_CSS}
     <span id="pg-info">${t.marketPage} ${currentPage}</span>
     <a href="${pageHref(currentPage + 1)}" class="pg-btn" id="pg-next">${t.marketNext}</a>
   </div>
+  ${pageFooter({ currentPath: '/dvm/market', lang })}
 </div>
 <script>
 const I18N = {

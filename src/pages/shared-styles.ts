@@ -117,6 +117,13 @@ header a.active{color:var(--c-text);font-weight:600}
 .blink{animation:blink 1s step-end infinite}
 @keyframes blink{50%{opacity:0}}
 @media(max-width:480px){body{padding:16px}.card-base{padding:16px 18px}.feed-card{padding:14px 16px}}
+/* Footer */
+.page-footer{margin-top:48px;padding:20px 0 24px;border-top:1px solid var(--c-border);display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;font-size:12px;color:var(--c-text-muted)}
+.page-footer a{color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
+.page-footer a:hover{color:var(--c-text)}
+.page-footer .footer-sep{color:var(--c-border)}
+.page-footer .footer-lang a{color:var(--c-text-dim)}
+.page-footer .footer-lang a.active{color:var(--c-accent)}
 `
 
 /** Shared HTML: head meta tags (favicons + font links) */
@@ -150,13 +157,28 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
   <a href="/agents${qs}"${active('/agents')}>Agents</a>
   <a href="/dvm/market${qs}"${active('/dvm/market')}>Market</a>
   <a href="/stats${qs}"${active('/stats')}>Stats</a>
-  <a href="https://relay.2020117.xyz" style="font-size:12px;color:var(--c-text-muted)" title="Nostr Relay" target="_blank" rel="noopener">Relay</a>
-  <a href="/skill.md" style="font-size:12px;color:var(--c-text-muted)" title="Agent skill doc" target="_blank" rel="noopener">skill.md</a>
   ${extra || ''}
   </nav>
   <span id="online-count" style="margin-left:auto;font-size:12px;color:var(--c-text-muted)">${countText}</span>
-  <a href="${currentPath.split('?')[0]}" style="font-size:13px;color:${!lang ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none">EN</a>
-  <a href="${currentPath.split('?')[0]}?lang=zh" style="font-size:13px;color:${lang === 'zh' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none">中文</a>
-  <a href="${currentPath.split('?')[0]}?lang=ja" style="font-size:13px;color:${lang === 'ja' ? 'var(--c-accent)' : 'var(--c-nav)'};text-decoration:none;white-space:nowrap">日本語</a>
 </header>`
+}
+
+/** Shared HTML: page footer with copyright, links, and language switcher */
+export function pageFooter(opts: { currentPath: string; lang?: string }) {
+  const { currentPath, lang } = opts
+  const base = currentPath.split('?')[0]
+  return `<footer class="page-footer" role="contentinfo">
+  <span>© 2020–2026 2020117.xyz</span>
+  <span class="footer-sep">·</span>
+  <a href="https://relay.2020117.xyz" target="_blank" rel="noopener">Relay</a>
+  <span class="footer-sep">·</span>
+  <a href="/skill.md" target="_blank" rel="noopener">skill.md</a>
+  <span style="margin-left:auto" class="footer-lang">
+    <a href="${base}" class="${!lang ? 'active' : ''}">EN</a>
+    &nbsp;
+    <a href="${base}?lang=zh" class="${lang === 'zh' ? 'active' : ''}">中文</a>
+    &nbsp;
+    <a href="${base}?lang=ja" class="${lang === 'ja' ? 'active' : ''}" style="white-space:nowrap">日本語</a>
+  </span>
+</footer>`
 }

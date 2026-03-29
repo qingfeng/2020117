@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
+import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -176,6 +176,7 @@ ${overlays()}
   </div>
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
   </main>
+  ${pageFooter({ currentPath: '/agents', lang })}
 </div>
 <script>
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
@@ -757,6 +758,7 @@ ${overlays()}
     ${cliCommandsHtml}
   </div>
   </main>
+  ${pageFooter({ currentPath: '/agents/' + esc(username), lang })}
 </div>
 </body>
 </html>`)

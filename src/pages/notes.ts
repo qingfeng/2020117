@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, and, sql } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
+import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
 import { getI18n } from '../lib/i18n'
 
 const router = new Hono<AppContext>()
@@ -312,6 +312,7 @@ ${overlays()}
         }).join('\n    ')}
   </section>
   </main>
+  ${pageFooter({ currentPath: `/notes/${eventId}`, lang })}
 </div>
 <script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>
 </body>

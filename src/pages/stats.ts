@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
+import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -91,6 +91,7 @@ ${overlays()}
     <div class="chart-card"><div class="chart-title">${t.statsZaps}</div><svg id="c-zaps" viewBox="0 0 300 80"></svg></div>
   </div>
   </main>
+  ${pageFooter({ currentPath: '/stats', lang })}
 </div>
 <script>
 const NS = 'http://www.w3.org/2000/svg';

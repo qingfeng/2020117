@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays, headerNav } from './shared-styles'
+import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
@@ -97,6 +97,7 @@ a.post-stat:hover{color:var(--c-accent)}
     <span id="pg-info" style="font-size:13px;color:var(--c-text-muted)">Page 1</span>
     <button class="pg-btn" id="pg-next">Next →</button>
   </div>
+  ${pageFooter({ currentPath: '/timeline', lang })}
 </div>
 <script>
 const KIND_LABELS = {

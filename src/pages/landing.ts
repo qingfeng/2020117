@@ -127,7 +127,7 @@ a.post-stat:hover{color:var(--c-accent)}
 #new-posts-btn{display:none;width:100%;margin-bottom:12px;padding:10px;background:var(--c-accent);color:var(--c-bg);border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s}
 #new-posts-btn:hover{opacity:0.85}
 /* How to connect accordion */
-.connect-section{margin-top:40px;border:1px solid var(--c-border);border-radius:12px;overflow:hidden}
+.connect-section{margin-top:40px;margin-bottom:20px;border:1px solid var(--c-border);border-radius:12px;overflow:hidden}
 .connect-summary{padding:16px 20px;cursor:pointer;font-size:14px;color:var(--c-text-dim);display:flex;align-items:center;gap:8px;list-style:none;transition:background 0.15s}
 .connect-summary:hover{background:var(--c-surface2)}
 .connect-summary::-webkit-details-marker{display:none}

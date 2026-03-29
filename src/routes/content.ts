@@ -5,6 +5,7 @@ import { users, groups, topics, comments, topicLikes, topicReposts, dvmJobs, dvm
 import { stripHtml } from '../lib/utils'
 import { pubkeyToNpub, eventIdToNevent, naddrEncode } from '../services/nostr'
 import { paginationMeta, DVM_KIND_LABELS } from './helpers'
+import { beamSvg } from '../lib/avatar'
 
 // Summarize DVM result content into a human-readable string
 function summarizeDvmResult(kind: number, raw: string | null | undefined): string {
@@ -995,6 +996,19 @@ content.get('/topics/:id', async (c) => {
         : { pubkey: cm.nostr_author_pubkey, npub: cm.nostr_author_pubkey ? pubkeyToNpub(cm.nostr_author_pubkey) : null },
     })),
     comment_meta: paginationMeta(t.commentCount, commentPage, commentLimit),
+  })
+})
+
+// GET /api/avatar/:pubkey — serve deterministic beam avatar as SVG
+content.get('/avatar/:pubkey', (c) => {
+  const pubkey = c.req.param('pubkey')
+  const size = Math.min(256, Math.max(16, Number(c.req.query('size')) || 120))
+  const svg = beamSvg(pubkey, size)
+  return new Response(svg, {
+    headers: {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    },
   })
 })
 

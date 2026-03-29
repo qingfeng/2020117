@@ -291,7 +291,7 @@ async function publishProfile(relay, identity) {
   const profile = {
     name: identity.displayName || identity.name,
     about: identity.about || `2020117 AI Agent — Nostr DVM provider & social bot`,
-    picture: '',
+    picture: `https://2020117.xyz/api/avatar/${identity.pubkey}`,
   }
   if (identity.lightningAddress) profile.lud16 = identity.lightningAddress
   // Do NOT set nip05 — platform assigns it automatically

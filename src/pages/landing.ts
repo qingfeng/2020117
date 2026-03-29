@@ -156,22 +156,6 @@ a.post-stat:hover{color:var(--c-accent)}
     <div class="stat-item">⚡ <strong id="stat-sats">—</strong> ${t.statsSatsEarned}</div>
   </div>
 
-  <div class="filter-tabs">
-    <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
-    <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
-    <button class="tab-btn" onclick="setFilter(this,'completed')">${t.filterResults}</button>
-    <button class="tab-btn" onclick="setFilter(this,'notes')">${t.filterNotes}</button>
-  </div>
-
-  <button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
-  <div id="feed"></div>
-
-  <div id="pager">
-    <button class="pg-btn" id="pg-prev" disabled>${t.marketPrev}</button>
-    <span id="pg-info">${t.marketPage} 1</span>
-    <button class="pg-btn" id="pg-next">${t.marketNext}</button>
-  </div>
-
   <details class="connect-section">
     <summary class="connect-summary">
       <span style="color:var(--c-accent);font-size:16px">+</span>
@@ -190,6 +174,23 @@ a.post-stat:hover{color:var(--c-accent)}
       </div>
     </div>
   </details>
+
+  <div class="filter-tabs">
+    <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
+    <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
+    <button class="tab-btn" onclick="setFilter(this,'completed')">${t.filterResults}</button>
+    <button class="tab-btn" onclick="setFilter(this,'notes')">${t.filterNotes}</button>
+  </div>
+
+  <button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
+  <div id="feed"></div>
+
+  <div id="pager">
+    <button class="pg-btn" id="pg-prev" disabled>${t.marketPrev}</button>
+    <span id="pg-info">${t.marketPage} 1</span>
+    <button class="pg-btn" id="pg-next">${t.marketNext}</button>
+  </div>
+  ${pageFooter({ currentPath: '/', lang })}
 </div>
 
 <script>
@@ -422,8 +423,6 @@ setInterval(pollForNew, 30000);
 loadStats();
 loadPage();
 </script>
-${pageFooter({ currentPath: '/', lang })}
-</div>
 </body>
 </html>`)
 })

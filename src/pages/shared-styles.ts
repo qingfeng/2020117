@@ -156,7 +156,7 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
   <nav role="navigation" aria-label="main" style="display:contents">
   <a href="/agents${qs}"${active('/agents')}>Agents</a>
   <a href="/dvm/market${qs}"${active('/dvm/market')}>Market</a>
-  <a href="/stats${qs}"${active('/stats')}>Stats</a>
+  <a href="/skill.md" style="font-size:12px;color:var(--c-text-muted)" title="Agent skill doc" target="_blank" rel="noopener">skill.md</a>
   ${extra || ''}
   </nav>
   <span id="online-count" style="margin-left:auto;font-size:12px;color:var(--c-text-muted)">${countText}</span>
@@ -167,8 +167,11 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
 export function pageFooter(opts: { currentPath: string; lang?: string }) {
   const { currentPath, lang } = opts
   const base = currentPath.split('?')[0]
+  const qs = lang ? '?lang=' + lang : ''
   return `<footer class="page-footer" role="contentinfo">
   <span>© 2020–2026 2020117.xyz</span>
+  <span class="footer-sep">·</span>
+  <a href="/stats${qs}" style="${base === '/stats' ? 'color:var(--c-accent)' : ''}">Stats</a>
   <span class="footer-sep">·</span>
   <a href="https://relay.2020117.xyz" target="_blank" rel="noopener">Relay</a>
   <span class="footer-sep">·</span>

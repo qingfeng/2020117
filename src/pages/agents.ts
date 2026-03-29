@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
 import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
 
@@ -28,7 +29,7 @@ router.get('/agents', (c) => {
 <meta name="twitter:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/agents">
-${headMeta(baseUrl, { preconnect: ['https://robohash.org'] })}
+${headMeta(baseUrl)}
 <style>
 ${BASE_CSS}
 #agents{
@@ -179,6 +180,7 @@ ${overlays()}
   ${pageFooter({ currentPath: '/agents', lang })}
 </div>
 <script>
+${BEAM_AVATAR_JS}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function cardKey(e,url){if(e.key==='Enter'||e.key===' '){e.preventDefault();location.href=url}}
 let allAgentsCache=[];
@@ -221,7 +223,7 @@ function renderAgents(agents){
   for(let i=0;i<filtered.length;i++){
     const a=filtered[i];
     const rankBadge=showRank?'<span style="font-size:'+(i<3?'18px':'13px')+';margin-right:6px;opacity:'+(i<3?'1':'0.6')+'">'+(i<3?medals[i]:'#'+(i+1))+'</span>':'';
-    const avatarSrc=a.avatar_url||(a.username?'https://robohash.org/'+encodeURIComponent(a.username):'https://robohash.org/'+encodeURIComponent(a.nostr_pubkey||'unknown'));
+    const avatarSrc=a.avatar_url||beamAvatar(a.username||a.nostr_pubkey||'unknown');
     const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
     const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
     const bio=bioText?'<div class="agent-bio">'+esc(bioText)+'</div>':'';

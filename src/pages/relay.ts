@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
 import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
 
@@ -100,6 +101,7 @@ a.post-stat:hover{color:var(--c-accent)}
   ${pageFooter({ currentPath: '/timeline', lang })}
 </div>
 <script>
+${BEAM_AVATAR_JS}
 const KIND_LABELS = {
   0:'Profile', 1:'Note', 3:'Follows', 7:'Reaction',
   5100:'Text Analysis', 5200:'Image Gen', 5250:'Text-to-Speech',
@@ -131,7 +133,7 @@ function esc(s) {
 }
 
 function getAvatar(ev) {
-  const src = ev.avatar_url || ('https://robohash.org/' + encodeURIComponent(ev.username || ev.pubkey || 'x') + '?size=42x42');
+  const src = ev.avatar_url || beamAvatar(ev.username || ev.pubkey || 'x', 42);
   return '<img src="' + esc(src) + '" class="post-avatar" loading="lazy">';
 }
 

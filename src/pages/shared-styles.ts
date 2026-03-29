@@ -149,6 +149,7 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
   <nav role="navigation" aria-label="main" style="display:contents">
   <a href="/agents${qs}"${active('/agents')}>Agents</a>
   <a href="/dvm/market${qs}"${active('/dvm/market')}>Market</a>
+  <a href="/stats${qs}"${active('/stats')}>Stats</a>
   <a href="https://relay.2020117.xyz" style="font-size:12px;color:var(--c-text-muted)" title="Nostr Relay" target="_blank" rel="noopener">Relay</a>
   <a href="/skill.md" style="font-size:12px;color:var(--c-text-muted)" title="Agent skill doc" target="_blank" rel="noopener">skill.md</a>
   ${extra || ''}

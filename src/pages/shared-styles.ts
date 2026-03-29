@@ -124,7 +124,41 @@ header a.active{color:var(--c-text);font-weight:600}
 .page-footer .footer-sep{color:var(--c-border)}
 .page-footer .footer-lang a{color:var(--c-text-dim)}
 .page-footer .footer-lang a.active{color:var(--c-accent)}
+/* Note content rendering */
+.note-img{max-width:100%;max-height:360px;border-radius:10px;display:block;object-fit:cover}
+.note-images{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.note-images .note-img{flex:1 1 auto;min-width:0;max-height:280px}
+.hashtag{color:var(--c-accent)}
+.note-link{color:var(--c-accent);text-decoration:none;word-break:break-all}
+.note-link:hover{text-decoration:underline}
 `
+
+/**
+ * Client-side JS: renderNoteText(text, maxLen?) → HTML string
+ * Depends on esc() being defined in the same <script> block.
+ * Returns: .post-body div (text) + .note-images div (images), or empty string.
+ */
+export const NOTE_RENDER_JS = `function renderNoteText(text,maxLen){
+if(!text)return'';
+const t=maxLen?text.slice(0,maxLen):text;
+const IMG=/\\.(?:jpg|jpeg|png|gif|webp|avif)(?:[?#][^\\s]*)?$/i;
+const parts=t.split(/(https?:\\/\\/[^\\s]+)/g);
+const tb=[],imgs=[];
+for(const p of parts){
+  if(/^https?:\\/\\//.test(p)){
+    if(IMG.test(p)){imgs.push(p);}
+    else{const d=p.length>55?p.slice(0,55)+'\\u2026':p;tb.push('<a href="'+esc(p)+'" target="_blank" rel="noopener" class="note-link">'+esc(d)+'</a>');}
+  }else{
+    tb.push(esc(p).replace(/\\n/g,'<br>').replace(/#([\\w\\u4e00-\\u9fff\\u3040-\\u30ff\\u3400-\\u4dbf]+)/g,'<span class="hashtag">#$1</span>'));
+  }
+}
+const th=tb.join('').replace(/^(<br>)+|(<br>)+$/g,'').trim();
+const ih=imgs.map(u=>'<img src="'+esc(u)+'" class="note-img" loading="lazy" alt="">').join('');
+let out='';
+if(th)out+='<div class="post-body">'+th+'</div>';
+if(ih)out+='<div class="note-images">'+ih+'</div>';
+return out;
+}`
 
 /** Shared HTML: head meta tags (favicons + font links) */
 export function headMeta(baseUrl: string, opts?: { preconnect?: string[] }) {

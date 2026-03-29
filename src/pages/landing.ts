@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, headerNav, pageFooter } from './shared-styles'
+import { BASE_CSS, headMeta, headerNav, pageFooter, NOTE_RENDER_JS } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -104,7 +104,7 @@ ${BASE_CSS}
 .badge-other{background:var(--c-surface2);color:var(--c-text-muted);border:1px solid var(--c-border)}
 .post-time{font-size:14px;color:var(--c-text-muted);margin-left:auto;white-space:nowrap}
 .post-pow{font-size:11px;color:var(--c-text-dim);white-space:nowrap;font-family:monospace;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:4px;padding:1px 6px}
-.post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:10px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
+.post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:6px;white-space:normal;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
 .post-body-dim{font-size:14px;color:var(--c-text-dim);line-height:1.55;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .post-result{margin-bottom:10px;padding:12px 14px;background:var(--badge-result-bg);border:1px solid var(--badge-result-border);border-radius:8px}
 .post-result-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
@@ -196,6 +196,7 @@ a.post-stat:hover{color:var(--c-accent)}
 
 <script>
 ${BEAM_AVATAR_JS}
+${NOTE_RENDER_JS}
 const I18N = {
   loading: '${t.loading}',
   noActivity: '${t.noActivity}',
@@ -266,7 +267,7 @@ function renderCard(ev) {
     const footer = (replies || reactions) ? '<div class="post-footer">' + replies + reactions + '</div>' : '';
     return '<div class="post"' + (noteHref ? ' data-href="' + noteHref + '"' : '') + '>' + getAvatar(ev)
       + '<div class="post-right">' + header
-      + '<div class="post-body">' + esc(text.slice(0,600)) + '</div>'
+      + renderNoteText(text, 600)
       + footer
       + '</div></div>';
   }

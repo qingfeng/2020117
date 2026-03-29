@@ -3,6 +3,7 @@ import { eq, and, sql } from 'drizzle-orm'
 import type { AppContext } from '../types'
 import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
 import { getI18n } from '../lib/i18n'
+import { renderNoteContent } from '../lib/note-render'
 
 const router = new Hono<AppContext>()
 
@@ -198,7 +199,10 @@ ${BASE_CSS}
 .post-author-name{font-size:15px;font-weight:600}
 .post-time{font-size:12px;color:var(--c-text-dim)}
 .kind-tag{display:inline-block;background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);border-radius:4px;padding:3px 10px;font-size:12px;color:var(--c-accent);margin-bottom:16px}
-.note-content{color:var(--c-text);font-size:16px;line-height:1.8;white-space:pre-line;word-break:break-word}
+.note-content{color:var(--c-text);font-size:16px;line-height:1.8;word-break:break-word}
+.note-content .note-text{white-space:normal}
+.note-content .note-img{max-height:480px;margin:12px 0}
+.note-content .note-images{margin-top:12px}
 .interactions{
   margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);
   display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--c-text-dim);
@@ -259,7 +263,7 @@ ${overlays()}
       </div>
     </div>
 
-    <div class="note-content">${esc(content)}</div>
+    <div class="note-content">${renderNoteContent(content)}</div>
 
     ${(reactions.length > 0 || reposts.length > 0) ? `<div class="interactions">
       ${reactions.length > 0 ? `<div>

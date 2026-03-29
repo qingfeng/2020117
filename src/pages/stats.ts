@@ -10,7 +10,6 @@ router.get('/stats', (c) => {
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-  const langQs = lang ? `?lang=${lang}` : ''
 
   return c.html(`<!DOCTYPE html>
 <html lang="${htmlLang}">
@@ -188,6 +187,7 @@ async function loadStats(days) {
     const res = await fetch('/api/stats/daily?days=' + days);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    if (!data?.daily || !data?.totals) throw new Error('Unexpected response shape');
     const dayLabels = data.daily.map(d => d.day);
     CHARTS.forEach(cfg => {
       const svg = document.getElementById(cfg.id);

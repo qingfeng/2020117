@@ -118,12 +118,9 @@ a.post-stat{color:var(--c-text-muted);text-decoration:none}
 a.post-stat:hover{color:var(--c-accent)}
 .sats-pill{font-size:12px;font-weight:600;color:var(--c-gold);display:flex;align-items:center;gap:3px}
 .post-for{font-size:13px;color:var(--c-text-muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* Pager */
-#pager{margin-top:20px;display:flex;justify-content:center;gap:12px;align-items:center}
-.pg-btn{background:none;border:1px solid var(--c-border);color:var(--c-text-dim);padding:6px 20px;font-size:13px;cursor:pointer;font-family:inherit;border-radius:6px;transition:all 0.2s}
-.pg-btn:hover:not(:disabled){border-color:var(--c-accent);color:var(--c-accent)}
-.pg-btn:disabled{opacity:0.3;cursor:default}
-#pg-info{font-size:13px;color:var(--c-text-muted)}
+/* Infinite scroll */
+#scroll-sentinel{height:1px}
+#load-spinner{padding:28px;text-align:center;color:var(--c-text-muted);font-size:13px}
 /* New posts banner */
 #new-posts-btn{display:none;width:100%;margin-bottom:12px;padding:10px;background:var(--c-accent);color:var(--c-bg);border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s}
 #new-posts-btn:hover{opacity:0.85}
@@ -185,12 +182,8 @@ a.post-stat:hover{color:var(--c-accent)}
 
   <button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
   <div id="feed"></div>
-
-  <div id="pager">
-    <button class="pg-btn" id="pg-prev" disabled>${t.marketPrev}</button>
-    <span id="pg-info">${t.marketPage} 1</span>
-    <button class="pg-btn" id="pg-next">${t.marketNext}</button>
-  </div>
+  <div id="scroll-sentinel"></div>
+  <div id="load-spinner"></div>
   ${pageFooter({ currentPath: '/', lang })}
 </div>
 
@@ -323,45 +316,72 @@ function renderCard(ev) {
     + '</div></div>';
 }
 
-let currentPage = 1;
+let currentPage = 0;
 let currentFilter = 'all';
-const LIMIT = 50;
+let _loading = false;
+let _hasMore = true;
+const LIMIT = 20;
 
-function setFilter(btn, filter) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  currentFilter = filter;
-  currentPage = 1;
-  loadPage();
-}
-
-async function loadPage() {
-  const feed = document.getElementById('feed');
-  feed.innerHTML = '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px">' + I18N.loading + '</div>';
-
+function buildFeedUrl() {
   let url = '/api/relay/events?limit=' + LIMIT + '&page=' + currentPage;
   if (currentFilter === 'jobs') url += '&kind=5100,5200,5250,5300,5302,5303';
   else if (currentFilter === 'completed') url += '&kind=6100,6200,6250,6300,6302,6303';
   else if (currentFilter === 'notes') url += '&kind=1';
+  return url;
+}
+
+function setFilter(btn, filter) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (filter === currentFilter) return;
+  currentFilter = filter;
+  currentPage = 0;
+  _hasMore = true;
+  _loading = false;
+  document.getElementById('feed').innerHTML = '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px">' + I18N.loading + '</div>';
+  document.getElementById('load-spinner').textContent = '';
+  loadMore();
+  scrollTo(0, 0);
+}
+
+async function loadMore() {
+  if (_loading || !_hasMore) return;
+  _loading = true;
+  const feed = document.getElementById('feed');
+  const spinner = document.getElementById('load-spinner');
+  spinner.textContent = I18N.loading;
+  currentPage++;
 
   try {
-    const res = await fetch(url);
+    const res = await fetch(buildFeedUrl());
     const data = await res.json();
     const items = data.events || data.items || data.data || [];
     const meta = data.meta || {};
-    feed.innerHTML = items.length ? items.map(renderCard).join('') : '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px;padding:32px;font-style:italic">' + I18N.noActivity + '</div>';
-    if (currentPage === 1 && items.length && latestKnownAt === 0) latestKnownAt = items[0].sort_at || items[0].created_at || 0;
-    const lastPage = meta.last_page || (meta.total ? Math.ceil(meta.total/LIMIT) : null);
-    document.getElementById('pg-info').textContent = I18N.page + ' ' + currentPage + (lastPage ? ' / ' + lastPage : '');
-    document.getElementById('pg-prev').disabled = currentPage <= 1;
-    document.getElementById('pg-next').disabled = lastPage ? currentPage >= lastPage : items.length < LIMIT;
+
+    if (currentPage === 1) {
+      feed.innerHTML = items.length
+        ? items.map(renderCard).join('')
+        : '<div class="post" style="justify-content:center;color:var(--c-text-muted);font-size:14px;padding:32px;font-style:italic">' + I18N.noActivity + '</div>';
+      if (items.length && latestKnownAt === 0) latestKnownAt = items[0].sort_at || items[0].created_at || 0;
+    } else if (items.length) {
+      feed.insertAdjacentHTML('beforeend', items.map(renderCard).join(''));
+    }
+
+    const lastPage = meta.last_page || (meta.total ? Math.ceil(meta.total / LIMIT) : null);
+    _hasMore = lastPage ? currentPage < lastPage : items.length >= LIMIT;
+    spinner.textContent = _hasMore ? '' : '';
   } catch(e) {
-    feed.innerHTML = '<div style="padding:20px;color:var(--c-error)">Failed to load</div>';
+    if (currentPage === 1) feed.innerHTML = '<div style="padding:20px;color:var(--c-error)">Failed to load</div>';
+  } finally {
+    _loading = false;
   }
 }
 
-document.getElementById('pg-prev').onclick = () => { if (currentPage > 1) { currentPage--; loadPage(); scrollTo(0,0); } };
-document.getElementById('pg-next').onclick = () => { currentPage++; loadPage(); scrollTo(0,0); };
+// Infinite scroll via IntersectionObserver
+const _sentinel = document.getElementById('scroll-sentinel');
+new IntersectionObserver((entries) => {
+  if (entries[0].isIntersecting) loadMore();
+}, { rootMargin: '300px' }).observe(_sentinel);
 
 async function loadStats() {
   try {
@@ -395,7 +415,7 @@ let latestKnownAt = 0;
 let pendingNewCount = 0;
 
 async function pollForNew() {
-  if (currentPage !== 1 || currentFilter !== 'all') return; // only poll on page 1, all-filter view
+  if (currentFilter !== 'all') return;
   try {
     const res = await fetch('/api/relay/events?limit=5&page=1');
     const data = await res.json();
@@ -416,15 +436,18 @@ function loadNewPosts() {
   document.getElementById('new-posts-btn').style.display = 'none';
   pendingNewCount = 0;
   latestKnownAt = 0;
-  currentPage = 1;
-  loadPage();
+  currentPage = 0;
+  _hasMore = true;
+  _loading = false;
+  document.getElementById('feed').innerHTML = '';
+  loadMore();
   scrollTo(0, 0);
 }
 
 setInterval(pollForNew, 30000);
 
 loadStats();
-loadPage();
+loadMore();
 </script>
 </body>
 </html>`)

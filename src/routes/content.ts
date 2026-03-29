@@ -37,6 +37,90 @@ content.get('/stats', async (c) => {
   return c.json(JSON.parse(cached))
 })
 
+// GET /api/stats/daily?days=7|30|all — per-day activity breakdown
+content.get('/stats/daily', async (c) => {
+  const daysParam = c.req.query('days') || '30'
+  const nDays = daysParam === 'all' ? 90 : (daysParam === '7' ? 7 : 30)
+  const nowSec = Math.floor(Date.now() / 1000)
+  const sinceS = nowSec - nDays * 86400          // relay_event uses seconds
+  const sinceMs = sinceS * 1000                   // dvm_job / user use ms
+
+  const DB = c.env.DB
+
+  // Run all queries in parallel
+  const [notesR, repliesR, jobsPostedR, jobsCompletedR, satsR, agentsR, zapsR, totalsR] =
+    await Promise.all([
+      DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+        FROM relay_event WHERE kind=1 AND ref_event_id IS NULL AND event_created_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceS).all(),
+      DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+        FROM relay_event WHERE kind=1 AND ref_event_id IS NOT NULL AND event_created_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceS).all(),
+      DB.prepare(`SELECT date(created_at/1000,'unixepoch') as day, COUNT(*) as cnt
+        FROM dvm_job WHERE role='customer' AND created_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceMs).all(),
+      DB.prepare(`SELECT date(updated_at/1000,'unixepoch') as day, COUNT(*) as cnt
+        FROM dvm_job WHERE status='completed' AND updated_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceMs).all(),
+      DB.prepare(`SELECT date(updated_at/1000,'unixepoch') as day,
+        CAST(SUM(COALESCE(paid_msats,price_msats,bid_msats,0))/1000 AS INTEGER) as cnt
+        FROM dvm_job WHERE status='completed' AND updated_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceMs).all(),
+      DB.prepare(`SELECT date(created_at/1000,'unixepoch') as day, COUNT(*) as cnt
+        FROM user WHERE nostr_pubkey IS NOT NULL AND created_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceMs).all(),
+      DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+        FROM relay_event WHERE kind=9735 AND event_created_at>=?
+        GROUP BY day ORDER BY day`).bind(sinceS).all(),
+      DB.prepare(`SELECT
+        (SELECT COUNT(*) FROM relay_event WHERE kind=1 AND ref_event_id IS NULL) as notes,
+        (SELECT COUNT(*) FROM relay_event WHERE kind=1 AND ref_event_id IS NOT NULL) as replies,
+        (SELECT COUNT(*) FROM dvm_job WHERE role='customer') as jobs_posted,
+        (SELECT COUNT(*) FROM dvm_job WHERE status='completed') as jobs_completed,
+        (SELECT CAST(COALESCE(SUM(COALESCE(paid_msats,price_msats,bid_msats,0)),0)/1000 AS INTEGER)
+          FROM dvm_job WHERE status='completed') as sats_earned,
+        (SELECT COUNT(*) FROM user WHERE nostr_pubkey IS NOT NULL) as new_agents,
+        (SELECT COUNT(*) FROM relay_event WHERE kind=9735) as zaps`).all(),
+    ])
+
+  // Build lookup maps from query results
+  const toMap = (r: { results: any[] }) => new Map(r.results.map((x: any) => [x.day, Number(x.cnt) || 0]))
+  const maps = [notesR, repliesR, jobsPostedR, jobsCompletedR, satsR, agentsR, zapsR].map(toMap)
+  const [nm, rm, jpm, jcm, sm, am, zm] = maps
+
+  // Generate complete date list (gap-fill: every day in range, oldest first)
+  const allDays: string[] = []
+  for (let i = nDays - 1; i >= 0; i--) {
+    const d = new Date((nowSec - i * 86400) * 1000)
+    allDays.push(d.toISOString().slice(0, 10))
+  }
+
+  const daily = allDays.map(day => ({
+    day,
+    notes:          nm.get(day) || 0,
+    replies:        rm.get(day) || 0,
+    jobs_posted:    jpm.get(day) || 0,
+    jobs_completed: jcm.get(day) || 0,
+    sats_earned:    sm.get(day) || 0,
+    new_agents:     am.get(day) || 0,
+    zaps:           zm.get(day) || 0,
+  }))
+
+  const t = (totalsR.results[0] || {}) as Record<string, number>
+  return c.json({
+    totals: {
+      notes:          Number(t.notes) || 0,
+      replies:        Number(t.replies) || 0,
+      jobs_posted:    Number(t.jobs_posted) || 0,
+      jobs_completed: Number(t.jobs_completed) || 0,
+      sats_earned:    Number(t.sats_earned) || 0,
+      new_agents:     Number(t.new_agents) || 0,
+      zaps:           Number(t.zaps) || 0,
+    },
+    daily,
+  })
+})
+
 // GET /api/relay/events — Relay 事件流
 content.get('/relay/events', async (c) => {
   const db = c.get('db')

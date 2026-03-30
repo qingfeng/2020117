@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { pageLayout } from './shared-styles'
 import { getI18n } from '../lib/i18n'
 
 // Shared CSS for job detail pages (used in both main path and fallback path)
@@ -630,35 +630,19 @@ router.get('/jobs/:id', async (c) => {
       const fbStatusColor = resultPreview ? 'var(--c-blue)' : 'var(--c-gold)'
 
       const fbOgDesc = `${displayLabel}: ${(inputText || '').slice(0, 160)}`
-      return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(kindLabel)} \u2014 2020117</title>
-<meta name="description" content="${esc(fbOgDesc)}">
-<meta property="og:title" content="${esc(kindLabel)} \u2014 2020117">
-<meta property="og:description" content="${esc(fbOgDesc)}">
-<meta property="og:type" content="article">
-<meta property="og:url" content="${baseUrl}/jobs/${re.eventId}">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta property="og:site_name" content="2020117">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(kindLabel)} \u2014 2020117">
-<meta name="twitter:description" content="${esc(fbOgDesc)}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
-<link rel="canonical" href="${baseUrl}/jobs/${re.eventId}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-${JOB_PAGE_CSS}
-</style>
-</head>
-<body>
-${overlays()}
-<div class="container">
-  ${headerNav({ currentPath: '/jobs/' + re.eventId, lang })}
-  <main>
+      const fbLang = lang
+      const fbQs = fbLang ? '?lang=' + fbLang : ''
+      return c.html(pageLayout({
+        title: `${esc(kindLabel)} \u2014 2020117`,
+        description: esc(fbOgDesc),
+        baseUrl,
+        currentPath: '/jobs/' + re.eventId,
+        lang: fbLang,
+        headExtra: `<meta property="og:type" content="article">
+<meta property="og:site_name" content="2020117">`,
+        feedHeader: `<a href="/dvm/market${fbQs}" class="feed-back">← Market</a>${esc(kindLabel)}`,
+        pageCSS: JOB_PAGE_CSS,
+      }, `
   <article class="job-card">
     <div class="job-meta">
       <span class="status-tag" style="background:color-mix(in srgb,${fbStatusColor} 13%,transparent);color:${fbStatusColor};border:1px solid color-mix(in srgb,${fbStatusColor} 33%,transparent)">${esc(fbStatusLabel)}</span>
@@ -685,10 +669,7 @@ ${overlays()}
       ${tags.e ? `&nbsp;&middot;&nbsp;<a href="/jobs/${esc(tags.e)}" style="color:var(--c-nav)">referenced job</a>` : ''}
     </div>
   </article>
-  </main>
-  ${pageFooter({ currentPath: '/jobs/' + re.eventId, lang })}
-</div>
-</body></html>`)
+`))
     }
     // Not found locally — redirect to nostr viewer
     const nevent404 = eventIdToNevent(jobId, ['wss://relay.2020117.xyz'])
@@ -1013,14 +994,7 @@ ${overlays()}
     }
   } catch {}
 
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(kindLabel)} \u2014 2020117</title>
-<meta name="description" content="${ogDesc}">
-<meta property="og:title" content="${esc(ogTitle)} \u2014 2020117">
+  const jobHeadExtra = `<meta property="og:title" content="${esc(ogTitle)} \u2014 2020117">
 <meta property="og:description" content="${ogDesc}">
 <meta property="og:type" content="article">
 <meta property="og:url" content="${baseUrl}/jobs/${j.id}">
@@ -1030,17 +1004,20 @@ ${overlays()}
 <meta name="twitter:title" content="${esc(ogTitle)} \u2014 2020117">
 <meta name="twitter:description" content="${ogDesc}">
 <meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
-<link rel="canonical" href="${baseUrl}/jobs/${j.id}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-${JOB_PAGE_CSS}
-</style>
-</head>
-<body>
-${overlays()}
-<div class="container">
-  ${headerNav({ currentPath: '/jobs/' + jobId, lang })}
+<link rel="canonical" href="${baseUrl}/jobs/${j.id}">`
+  const jobQs = lang ? '?lang=' + lang : ''
+
+  return c.html(pageLayout({
+    title: `${esc(kindLabel)} \u2014 2020117`,
+    description: ogDesc,
+    baseUrl,
+    currentPath: '/jobs/' + jobId,
+    lang,
+    feedHeader: `<a href="/dvm/market${jobQs}" style="color:var(--c-text-muted);text-decoration:none;font-size:14px">\u2190 Market</a>`,
+    headExtra: jobHeadExtra,
+    pageCSS: JOB_PAGE_CSS,
+    scripts: `<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>`,
+  }, `
 
   <main>
   <article class="job-card">
@@ -1185,12 +1162,7 @@ ${overlays()}
 
     <div class="timestamp"><time datetime="${esc(createdDate)}">${createdDate}</time></div>
   </article>
-  </main>
-  ${pageFooter({ currentPath: '/jobs/' + jobId, lang })}
-</div>
-<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>
-</body>
-</html>`)
+`))
 })
 
 export default router

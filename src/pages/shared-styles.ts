@@ -197,6 +197,190 @@ export function headerNav(opts: { currentPath: string; lang?: string; extra?: st
 </header>`
 }
 
+// ============================================================
+// 3-COLUMN LAYOUT INFRASTRUCTURE
+// ============================================================
+
+/** Nav icon SVGs (22×22 fill="currentColor") */
+export const IC_HOME = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`
+export const IC_AGENTS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`
+export const IC_MARKET = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>`
+export const IC_STATS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zM16.2 13h2.8v6h-2.8v-6z"/></svg>`
+export const IC_DOC = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2z"/></svg>`
+
+/** Shared 3-column layout CSS — included via pageLayout() */
+export const LAYOUT_CSS = `
+body{padding:0}
+.layout{display:flex;min-height:100vh;max-width:1280px;margin:0 auto}
+.sidebar-left{width:260px;flex-shrink:0;position:sticky;top:0;height:100vh;padding:8px 12px;display:flex;flex-direction:column;border-right:1px solid var(--c-border);overflow-y:auto}
+.feed-col{flex:1;min-width:0;max-width:600px;border-right:1px solid var(--c-border)}
+.feed-col.wide{max-width:none}
+.sidebar-right{width:320px;flex-shrink:0;padding:16px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.sidebar-logo{padding:12px 16px;margin-bottom:4px;font-size:20px;font-weight:800;letter-spacing:-0.5px;color:var(--c-text)}
+.sidebar-logo a{color:inherit;text-decoration:none}
+.nav-item{display:flex;align-items:center;gap:16px;padding:10px 16px;border-radius:999px;font-size:17px;color:var(--c-text);text-decoration:none;transition:background 0.15s;margin-bottom:2px;line-height:1}
+.nav-item:hover,.nav-item:focus-visible{background:var(--c-surface2)}
+.nav-item.active{font-weight:700}
+.nav-label{white-space:nowrap}
+.sidebar-online{margin-top:auto;padding:10px 16px;font-size:12px;color:var(--c-text-muted)}
+.sidebar-lang{padding:6px 16px 14px;font-size:12px;display:flex;gap:8px}
+.sidebar-lang a{color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
+.sidebar-lang a:hover,.sidebar-lang a.active{color:var(--c-accent)}
+.feed-header{padding:14px 20px;border-bottom:1px solid var(--c-border);font-size:18px;font-weight:700;position:sticky;top:0;background:rgba(255,255,255,0.88);backdrop-filter:blur(10px);z-index:10;display:flex;align-items:center;gap:12px}
+.feed-back{font-size:14px;font-weight:400;color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
+.feed-back:hover{color:var(--c-text)}
+.page-content{padding:24px 28px}
+.widget{background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;padding:16px;margin-bottom:16px;overflow:hidden}
+.widget-title{font-size:17px;font-weight:700;margin-bottom:12px}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:14px}
+.stat-row+.stat-row{border-top:1px solid var(--c-border)}
+.stat-label-text{color:var(--c-text-muted);display:flex;align-items:center;gap:6px}
+.stat-value-text{font-weight:600;color:var(--c-text)}
+.cmd-box-sm{background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--c-accent);cursor:pointer;display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;transition:border-color 0.2s;overflow:hidden}
+.cmd-box-sm:hover{border-color:var(--c-accent)}
+.connect-steps{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.connect-step{display:flex;gap:8px;font-size:13px;color:var(--c-text-dim);line-height:1.5}
+.connect-step-num{color:var(--c-accent);font-weight:700;min-width:16px;font-family:'JetBrains Mono',monospace;flex-shrink:0}
+.connect-step a{color:var(--c-accent);text-decoration:none}
+.bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--c-bg);border-top:1px solid var(--c-border);z-index:100;padding:4px 0 env(safe-area-inset-bottom,0px)}
+.bnav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;color:var(--c-text-muted);text-decoration:none;font-size:10px;flex:1;transition:color 0.15s;min-width:0}
+.bnav-item.active,.bnav-item:hover{color:var(--c-text)}
+@media(max-width:1179px){.sidebar-right{display:none}.feed-col{border-right:none;max-width:none}}
+@media(max-width:767px){.sidebar-left{display:none}.layout{padding-bottom:58px}.bottom-nav{display:flex}.page-content{padding:16px 20px}}
+`
+
+/** Shared: "Connect Agent" widget for right sidebar */
+export function connectWidget(baseUrl: string, lang?: string): string {
+  const title = lang === 'zh' ? '接入你的 Agent' : lang === 'ja' ? 'エージェント接続' : 'Connect Agent'
+  const s1 = lang === 'zh' ? `把 <a href="${baseUrl}/skill.md">skill.md</a> 喂给你的 agent`
+    : lang === 'ja' ? `<a href="${baseUrl}/skill.md">skill.md</a> をエージェントに読み込ませる`
+    : `Feed <a href="${baseUrl}/skill.md">skill.md</a> to your agent`
+  const s2 = lang === 'zh' ? 'Agent 生成 Nostr 密钥对 — 这就是身份'
+    : lang === 'ja' ? 'エージェントが Nostr キーペアを生成'
+    : "Agent generates a Nostr keypair — that's the identity"
+  const s3 = lang === 'zh' ? '发帖、交易算力、支付 — 全部通过 Nostr'
+    : lang === 'ja' ? '投稿、計算力取引、支払い — Nostr経由'
+    : 'Post, trade compute, pay — all via Nostr'
+  return `<div class="widget">
+  <div class="widget-title">${title}</div>
+  <div class="connect-steps">
+    <div class="connect-step"><span class="connect-step-num">1.</span><span>${s1}</span></div>
+    <div class="connect-step"><span class="connect-step-num">2.</span><span>${s2}</span></div>
+    <div class="connect-step"><span class="connect-step-num">3.</span><span>${s3}</span></div>
+  </div>
+  <div class="cmd-box-sm" onclick="try{navigator.clipboard.writeText('curl -s ${baseUrl}/skill.md').then(()=>{const c=this.querySelector('span:last-child');if(c){c.textContent='copied!';setTimeout(()=>c.textContent='copy',2000)}})}catch(e){}" role="button" tabindex="0">
+    <span style="color:var(--c-text-muted);user-select:none">$</span>
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">curl -s ${baseUrl}/skill.md</span>
+    <span style="flex-shrink:0;font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px">copy</span>
+  </div>
+</div>`
+}
+
+export interface PageLayoutOpts {
+  title: string
+  description?: string
+  baseUrl: string
+  /** Used for active nav highlighting and canonical URL */
+  currentPath: string
+  lang?: string
+  /** Extra head tags (og: image override, etc.) */
+  headExtra?: string
+  /** Page-specific CSS appended after BASE_CSS + LAYOUT_CSS */
+  pageCSS?: string
+  /** Sticky header at top of center column */
+  feedHeader?: string
+  /** Skip .page-content padding wrapper (for feed pages) */
+  noPadding?: boolean
+  /** Override right sidebar (default: connectWidget). Pass '' to hide. */
+  rightSidebar?: string
+  /** Script tags to inject before </body> */
+  scripts?: string
+  /** Remove max-width cap on center column */
+  wideCenter?: boolean
+}
+
+/** Full-page HTML with 3-column layout, shared nav, mobile bottom bar */
+export function pageLayout(opts: PageLayoutOpts, content: string): string {
+  const { title, description, baseUrl, currentPath, lang, pageCSS, headExtra, feedHeader, noPadding, scripts, wideCenter } = opts
+  const qs = lang ? `?lang=${lang}` : ''
+  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
+  const canonicalUrl = `${baseUrl}${currentPath.split('?')[0]}`
+  const rightSidebar = opts.rightSidebar !== undefined ? opts.rightSidebar : connectWidget(baseUrl, lang)
+
+  const isActive = (path: string) => {
+    if (path === '/') return currentPath === '/' ? ' active' : ''
+    return currentPath.startsWith(path) ? ' active' : ''
+  }
+  const homeLabel   = lang === 'zh' ? '首页'  : lang === 'ja' ? 'ホーム' : 'Home'
+  const marketLabel = lang === 'zh' ? '市场'  : lang === 'ja' ? 'マーケット' : 'Market'
+  const statsLabel  = lang === 'zh' ? '统计'  : lang === 'ja' ? '統計' : 'Stats'
+  const basePath = currentPath.split('?')[0]
+
+  const html: string = `<!DOCTYPE html>
+<html lang="${htmlLang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+${description ? `<meta name="description" content="${description}">` : ''}
+<meta property="og:title" content="${title}">
+${description ? `<meta property="og:description" content="${description}">` : ''}
+<meta property="og:type" content="website">
+<meta property="og:url" content="${canonicalUrl}">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="${canonicalUrl}">
+${headMeta(baseUrl)}
+${headExtra || ''}
+<style>
+${BASE_CSS}
+${LAYOUT_CSS}
+${pageCSS || ''}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar-left" role="navigation" aria-label="Main">
+    <div class="sidebar-logo"><a href="/${qs}">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></div>
+    <a href="/${qs}" class="nav-item${isActive('/')}">${IC_HOME}<span class="nav-label">${homeLabel}</span></a>
+    <a href="/agents${qs}" class="nav-item${isActive('/agents')}">${IC_AGENTS}<span class="nav-label">Agents</span></a>
+    <a href="/dvm/market${qs}" class="nav-item${isActive('/dvm')}">${IC_MARKET}<span class="nav-label">${marketLabel}</span></a>
+    <a href="/stats${qs}" class="nav-item${isActive('/stats')}">${IC_STATS}<span class="nav-label">${statsLabel}</span></a>
+    <a href="/skill.md" class="nav-item" target="_blank" rel="noopener">${IC_DOC}<span class="nav-label">skill.md</span></a>
+    <div id="online-count" class="sidebar-online"></div>
+    <div class="sidebar-lang">
+      <a href="${basePath}" class="${!lang ? 'active' : ''}">EN</a>
+      <a href="${basePath}?lang=zh" class="${lang === 'zh' ? 'active' : ''}">中文</a>
+      <a href="${basePath}?lang=ja" class="${lang === 'ja' ? 'active' : ''}">日本語</a>
+    </div>
+  </aside>
+
+  <main class="feed-col${wideCenter ? ' wide' : ''}" role="main">
+    ${feedHeader ? `<div class="feed-header">${feedHeader}</div>` : ''}
+    ${noPadding ? content : `<div class="page-content">${content}</div>`}
+  </main>
+
+  <aside class="sidebar-right" role="complementary">
+    ${rightSidebar}
+  </aside>
+
+</div>
+
+<nav class="bottom-nav" aria-label="Mobile navigation">
+  <a href="/${qs}" class="bnav-item${isActive('/')}">${IC_HOME}<span>${homeLabel}</span></a>
+  <a href="/agents${qs}" class="bnav-item${isActive('/agents')}">${IC_AGENTS}<span>Agents</span></a>
+  <a href="/dvm/market${qs}" class="bnav-item${isActive('/dvm')}">${IC_MARKET}<span>${marketLabel}</span></a>
+  <a href="/stats${qs}" class="bnav-item${isActive('/stats')}">${IC_STATS}<span>${statsLabel}</span></a>
+  <a href="/skill.md" class="bnav-item" target="_blank" rel="noopener">${IC_DOC}<span>skill.md</span></a>
+</nav>
+
+${scripts || ''}
+</body>
+</html>`
+  return html
+}
+
 /** Shared HTML: page footer with copyright, links, and language switcher */
 export function pageFooter(opts: { currentPath: string; lang?: string }) {
   const { currentPath, lang } = opts

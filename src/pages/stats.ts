@@ -1,35 +1,17 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { pageLayout } from './shared-styles'
 
 const router = new Hono<AppContext>()
 
 router.get('/stats', (c) => {
   const lang = c.req.query('lang')
   const t = getI18n(lang)
-  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const statsLabel = lang === 'zh' ? '统计' : lang === 'ja' ? '統計' : 'Stats'
 
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${t.statsTitle}</title>
-<meta name="description" content="${t.statsPageDesc}">
-<meta property="og:title" content="${t.statsTitle}">
-<meta property="og:description" content="${t.statsPageDesc}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${baseUrl}/stats">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta property="og:site_name" content="2020117">
-<meta name="twitter:card" content="summary">
-<link rel="canonical" href="${baseUrl}/stats">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-.container{max-width:900px}
+  const pageCSS = `
 .stats-header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px}
 .stats-header h2{margin:0;font-size:20px;font-weight:700}
 .range-btns{display:flex;gap:6px}
@@ -53,47 +35,40 @@ ${BASE_CSS}
 #tooltip{position:fixed;background:var(--c-surface2);border:1px solid var(--c-border);
   border-radius:4px;font-size:12px;padding:4px 8px;pointer-events:none;display:none;
   color:var(--c-text);z-index:100;white-space:nowrap}
-</style>
-</head>
-<body>
-${overlays()}
-<div id="tooltip"></div>
-<div class="container">
-  ${headerNav({ currentPath: '/stats', lang })}
-  <main>
-  <div class="stats-header">
-    <h2>${t.statsTitle.split(' —')[0]}</h2>
-    <div class="range-btns">
-      <button class="range-btn active" data-days="30" onclick="setRange(this)">${t.stats30d}</button>
-      <button class="range-btn" data-days="7" onclick="setRange(this)">${t.stats7d}</button>
-      <button class="range-btn" data-days="all" onclick="setRange(this)">${t.statsAll}</button>
-    </div>
-    <div class="stats-error" id="statsError">Failed to load data</div>
-  </div>
+`
 
-  <div class="totals-bar" id="totalsBar">
-    <div class="total-tile"><div class="total-label">${t.statsNotes}</div><div class="total-value" id="tot-notes">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsReplies}</div><div class="total-value" id="tot-replies">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsJobsPosted}</div><div class="total-value" id="tot-jobs-posted">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsJobsCompleted}</div><div class="total-value" id="tot-jobs-completed">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsSatsEarned}</div><div class="total-value" id="tot-sats">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsNewAgents}</div><div class="total-value" id="tot-agents">—</div></div>
-    <div class="total-tile"><div class="total-label">${t.statsZaps}</div><div class="total-value" id="tot-zaps">—</div></div>
+  const content = `<div id="tooltip"></div>
+<div class="stats-header">
+  <h2>${t.statsTitle.split(' —')[0]}</h2>
+  <div class="range-btns">
+    <button class="range-btn active" data-days="30" onclick="setRange(this)">${t.stats30d}</button>
+    <button class="range-btn" data-days="7" onclick="setRange(this)">${t.stats7d}</button>
+    <button class="range-btn" data-days="all" onclick="setRange(this)">${t.statsAll}</button>
   </div>
-
-  <div class="charts-grid" id="chartsGrid">
-    <div class="chart-card"><div class="chart-title">${t.statsNotes}</div><svg id="c-notes" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsReplies}</div><svg id="c-replies" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsJobsPosted}</div><svg id="c-jobs-posted" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsJobsCompleted}</div><svg id="c-jobs-completed" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsSatsEarned}</div><svg id="c-sats" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsNewAgents}</div><svg id="c-agents" viewBox="0 0 300 80"></svg></div>
-    <div class="chart-card"><div class="chart-title">${t.statsZaps}</div><svg id="c-zaps" viewBox="0 0 300 80"></svg></div>
-  </div>
-  </main>
-  ${pageFooter({ currentPath: '/stats', lang })}
+  <div class="stats-error" id="statsError">Failed to load data</div>
 </div>
-<script>
+
+<div class="totals-bar" id="totalsBar">
+  <div class="total-tile"><div class="total-label">${t.statsNotes}</div><div class="total-value" id="tot-notes">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsReplies}</div><div class="total-value" id="tot-replies">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsJobsPosted}</div><div class="total-value" id="tot-jobs-posted">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsJobsCompleted}</div><div class="total-value" id="tot-jobs-completed">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsSatsEarned}</div><div class="total-value" id="tot-sats">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsNewAgents}</div><div class="total-value" id="tot-agents">—</div></div>
+  <div class="total-tile"><div class="total-label">${t.statsZaps}</div><div class="total-value" id="tot-zaps">—</div></div>
+</div>
+
+<div class="charts-grid" id="chartsGrid">
+  <div class="chart-card"><div class="chart-title">${t.statsNotes}</div><svg id="c-notes" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsReplies}</div><svg id="c-replies" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsJobsPosted}</div><svg id="c-jobs-posted" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsJobsCompleted}</div><svg id="c-jobs-completed" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsSatsEarned}</div><svg id="c-sats" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsNewAgents}</div><svg id="c-agents" viewBox="0 0 300 80"></svg></div>
+  <div class="chart-card"><div class="chart-title">${t.statsZaps}</div><svg id="c-zaps" viewBox="0 0 300 80"></svg></div>
+</div>`
+
+  const scripts = `<script>
 const NS = 'http://www.w3.org/2000/svg';
 const tooltip = document.getElementById('tooltip');
 
@@ -111,14 +86,12 @@ function drawChart(svgEl, days, values, color) {
   if (n === 0) return;
   const max = Math.max(...values, 1);
 
-  // Baseline
   const base = document.createElementNS(NS, 'line');
   base.setAttribute('x1', P); base.setAttribute('y1', H - P);
   base.setAttribute('x2', W - P); base.setAttribute('y2', H - P);
   base.setAttribute('stroke', 'var(--c-border)'); base.setAttribute('stroke-width', '0.5');
   svgEl.appendChild(base);
 
-  // Polyline (only if any non-zero values)
   if (Math.max(...values) > 0 && n > 1) {
     const pts = values.map((v, i) => {
       const x = P + (i / (n - 1)) * (W - 2 * P);
@@ -135,7 +108,6 @@ function drawChart(svgEl, days, values, color) {
     svgEl.appendChild(poly);
   }
 
-  // X-axis labels (first and last date, MM-DD format)
   function addText(x, y, text, anchor) {
     const el = document.createElementNS(NS, 'text');
     el.setAttribute('x', x); el.setAttribute('y', y);
@@ -148,7 +120,6 @@ function drawChart(svgEl, days, values, color) {
   if (n > 1) addText(W - P, H - 1, days[n - 1].slice(5), 'end');
   addText(W - P, P + 7, fmt(max), 'end');
 
-  // Invisible hover overlay
   const rect = document.createElementNS(NS, 'rect');
   rect.setAttribute('x', '0'); rect.setAttribute('y', '0');
   rect.setAttribute('width', W); rect.setAttribute('height', H);
@@ -213,8 +184,19 @@ function setRange(btn) {
 }
 
 loadStats(currentDays);
-</script>
-</body></html>`)
+</script>`
+
+  return c.html(pageLayout({
+    title: t.statsTitle,
+    description: t.statsPageDesc,
+    baseUrl,
+    currentPath: '/stats',
+    lang,
+    feedHeader: statsLabel,
+    wideCenter: true,
+    pageCSS,
+    scripts,
+  }, content))
 })
 
 export default router

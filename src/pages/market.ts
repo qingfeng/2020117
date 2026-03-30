@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, headerNav, pageFooter } from './shared-styles'
+import { pageLayout } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -10,25 +10,14 @@ router.get('/dvm/market', (c) => {
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
   const lang = c.req.query('lang')
   const t = getI18n(lang)
-  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
   const activeStatus = ['open', 'processing', 'completed'].includes(c.req.query('status') || '') ? c.req.query('status')! : 'open'
   const currentPage = Math.max(1, Number(c.req.query('page')) || 1)
   const langQs = lang ? `&lang=${lang}` : ''
   const tabHref = (s: string) => `/dvm/market?status=${s}${langQs}`
   const pageHref = (p: number) => `/dvm/market?status=${activeStatus}&page=${p}${langQs}`
+  const marketLabel = lang === 'zh' ? '市场' : lang === 'ja' ? 'マーケット' : 'Market'
 
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${t.marketTitle}</title>
-<meta name="description" content="${t.marketDesc}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-.container{max-width:720px}
-/* Status tabs */
+  const pageCSS = `
 .status-tabs{display:flex;gap:0;margin-bottom:20px;border:1px solid var(--c-border);border-radius:8px;overflow:hidden}
 .status-tab{flex:1;background:none;border:none;border-right:1px solid var(--c-border);padding:10px 8px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;color:var(--c-text-muted);transition:all 0.15s;display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none}
 .status-tab:last-child{border-right:none}
@@ -39,7 +28,6 @@ ${BASE_CSS}
 .tab-open .tab-count{color:var(--c-gold)}
 .tab-processing .tab-count{color:var(--c-processing)}
 .tab-completed .tab-count{color:var(--c-success)}
-/* Job list */
 #job-list{border:1px solid var(--c-border);border-radius:12px;overflow:hidden;background:var(--c-bg)}
 .job-row{display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--c-border);transition:background 0.15s;text-decoration:none;color:inherit}
 .job-row:last-child{border-bottom:none}
@@ -58,44 +46,38 @@ ${BASE_CSS}
 .status-completed{background:var(--badge-result-bg);color:var(--badge-result-text);border:1px solid var(--badge-result-border)}
 .status-error{background:var(--badge-error-bg);color:var(--badge-error-text);border:1px solid var(--badge-error-border)}
 .job-bid{font-size:12px;font-weight:600;color:var(--c-gold)}
-/* Pager */
 #pager{margin-top:20px;display:flex;justify-content:center;gap:12px;align-items:center}
 .pg-btn{background:none;border:1px solid var(--c-border);color:var(--c-text-dim);padding:6px 20px;font-size:13px;cursor:pointer;font-family:inherit;border-radius:6px;transition:all 0.2s}
 .pg-btn:hover:not(:disabled){border-color:var(--c-accent);color:var(--c-accent)}
 .pg-btn:disabled,.pg-btn.pg-disabled{opacity:0.3;cursor:default;pointer-events:none}
 #pg-info{font-size:13px;color:var(--c-text-muted)}
 @media(max-width:480px){.job-time{display:none}.job-name{max-width:min(120px,30vw)}}
-</style>
-</head>
-<body>
-<div class="container">
-  ${headerNav({ currentPath: '/dvm/market', lang })}
+`
 
-  <div class="status-tabs">
-    <a href="${tabHref('open')}" class="status-tab tab-open${activeStatus === 'open' ? ' active' : ''}">
-      <span class="tab-count" id="count-open">—</span>
-      <span>${t.marketTabOpen}</span>
-    </a>
-    <a href="${tabHref('processing')}" class="status-tab tab-processing${activeStatus === 'processing' ? ' active' : ''}">
-      <span class="tab-count" id="count-processing">—</span>
-      <span>${t.marketTabProcessing}</span>
-    </a>
-    <a href="${tabHref('completed')}" class="status-tab tab-completed${activeStatus === 'completed' ? ' active' : ''}">
-      <span class="tab-count" id="count-completed">—</span>
-      <span>${t.marketTabCompleted}</span>
-    </a>
-  </div>
-
-  <div id="job-list"></div>
-
-  <div id="pager">
-    <a href="${pageHref(currentPage - 1)}" class="pg-btn${currentPage <= 1 ? ' pg-disabled' : ''}" id="pg-prev" ${currentPage <= 1 ? 'aria-disabled="true"' : ''}>${t.marketPrev}</a>
-    <span id="pg-info">${t.marketPage} ${currentPage}</span>
-    <a href="${pageHref(currentPage + 1)}" class="pg-btn" id="pg-next">${t.marketNext}</a>
-  </div>
-  ${pageFooter({ currentPath: '/dvm/market', lang })}
+  const content = `<div class="status-tabs">
+  <a href="${tabHref('open')}" class="status-tab tab-open${activeStatus === 'open' ? ' active' : ''}">
+    <span class="tab-count" id="count-open">—</span>
+    <span>${t.marketTabOpen}</span>
+  </a>
+  <a href="${tabHref('processing')}" class="status-tab tab-processing${activeStatus === 'processing' ? ' active' : ''}">
+    <span class="tab-count" id="count-processing">—</span>
+    <span>${t.marketTabProcessing}</span>
+  </a>
+  <a href="${tabHref('completed')}" class="status-tab tab-completed${activeStatus === 'completed' ? ' active' : ''}">
+    <span class="tab-count" id="count-completed">—</span>
+    <span>${t.marketTabCompleted}</span>
+  </a>
 </div>
-<script>
+
+<div id="job-list"></div>
+
+<div id="pager">
+  <a href="${pageHref(currentPage - 1)}" class="pg-btn${currentPage <= 1 ? ' pg-disabled' : ''}" id="pg-prev" ${currentPage <= 1 ? 'aria-disabled="true"' : ''}>${t.marketPrev}</a>
+  <span id="pg-info">${t.marketPage} ${currentPage}</span>
+  <a href="${pageHref(currentPage + 1)}" class="pg-btn" id="pg-next">${t.marketNext}</a>
+</div>`
+
+  const scripts = `<script>
 ${BEAM_AVATAR_JS}
 const I18N = {
   loading: '${t.marketLoading}',
@@ -184,7 +166,6 @@ async function loadJobs() {
     if (lastPage && currentPage >= lastPage) { nextEl.classList.add('pg-disabled'); nextEl.removeAttribute('href'); }
     else if (!lastPage && jobs.length < LIMIT) { nextEl.classList.add('pg-disabled'); nextEl.removeAttribute('href'); }
     else { nextEl.href = pageHref(currentPage + 1); }
-    // Update count badge for current tab from this response
     if (meta.total != null) {
       const el = document.getElementById('count-' + currentStatus);
       if (el) el.textContent = meta.total;
@@ -194,11 +175,10 @@ async function loadJobs() {
   }
 }
 
-// Load counts for all 3 tabs in parallel (background)
 async function loadCounts() {
   const statuses = ['open', 'processing', 'completed'];
   await Promise.all(statuses.map(async s => {
-    if (s === currentStatus) return; // already loaded by loadJobs
+    if (s === currentStatus) return;
     try {
       const res = await fetch('/api/dvm/market?status=' + s + '&limit=1&page=1');
       const data = await res.json();
@@ -210,9 +190,18 @@ async function loadCounts() {
 
 loadJobs();
 loadCounts();
-</script>
-</body>
-</html>`)
+</script>`
+
+  return c.html(pageLayout({
+    title: t.marketTitle,
+    description: t.marketDesc,
+    baseUrl,
+    currentPath: '/dvm/market',
+    lang,
+    feedHeader: marketLabel,
+    pageCSS,
+    scripts,
+  }, content))
 })
 
 export default router

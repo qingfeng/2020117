@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { pageLayout } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -11,27 +11,7 @@ router.get('/agents', (c) => {
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
   const lang = c.req.query('lang')
   const t = getI18n(lang)
-  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${t.agentsTitle}</title>
-<meta name="description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
-<meta property="og:title" content="${t.agentsTitle}">
-<meta property="og:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${baseUrl}/agents">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${t.agentsTitle}">
-<meta name="twitter:description" content="${t.agentsCta.replace(/<[^>]*>/g, '')}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
-<link rel="canonical" href="${baseUrl}/agents">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
+  const pageCSS = `
 #agents{
   display:grid;
   grid-template-columns:repeat(3,1fr);
@@ -132,13 +112,8 @@ ${BASE_CSS}
 .sort-btn{background:none;border:1px solid var(--c-border);color:var(--c-text-dim);padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;border-radius:6px;transition:all 0.15s;white-space:nowrap}
 .sort-btn:hover{border-color:var(--c-text-muted);color:var(--c-text)}
 .sort-btn.active{border-color:var(--c-accent);color:var(--c-accent);background:var(--c-accent-bg)}
-</style>
-</head>
-<body>
-${overlays()}
-<div class="container">
-  ${headerNav({ currentPath: '/agents', lang })}
-  <main>
+`
+  const content = `
   <div class="status"><span class="dot"></span>${t.agentsStatus}</div>
   <p style="color:var(--c-text-muted);font-size:14px;margin-bottom:16px">${t.agentsCta}</p>
 
@@ -176,10 +151,8 @@ ${overlays()}
     </div>
   </div>
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
-  </main>
-  ${pageFooter({ currentPath: '/agents', lang })}
-</div>
-<script>
+`
+  const scripts = `<script>
 ${BEAM_AVATAR_JS}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function cardKey(e,url){if(e.key==='Enter'||e.key===' '){e.preventDefault();location.href=url}}
@@ -288,9 +261,17 @@ async function load(){
 }
 load();
 loadStats();
-</script>
-</body>
-</html>`)
+</script>`
+  return c.html(pageLayout({
+    title: t.agentsTitle,
+    description: t.agentsCta.replace(/<[^>]*>/g, ''),
+    baseUrl,
+    currentPath: '/agents',
+    lang,
+    feedHeader: 'Agents',
+    pageCSS,
+    scripts,
+  }, content))
 })
 
 // Agent detail page (SSR)
@@ -307,7 +288,7 @@ router.get('/agents/:username', async (c) => {
   const { pubkeyToNpub, npubToPubkey } = await import('../services/nostr')
 
   // 1. Look up user — support npub1... identifiers in addition to usernames
-  let userResult
+  let userResult: (typeof users.$inferSelect)[] = []
   if (username.startsWith('npub1')) {
     const hex = npubToPubkey(username)
     if (hex) {
@@ -319,12 +300,14 @@ router.get('/agents/:username', async (c) => {
     userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
   }
   if (userResult.length === 0) {
-    return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${t.notFound} — 2020117</title>
-<style>${BASE_CSS}</style></head><body>
-${overlays()}
-<div class="container"><main role="alert" style="display:flex;align-items:center;justify-content:center;min-height:80vh">
+    return c.html(pageLayout({
+      title: `${t.notFound} — 2020117`,
+      baseUrl,
+      currentPath: '/agents/' + username,
+      lang,
+    }, `<main role="alert" style="display:flex;align-items:center;justify-content:center;min-height:80vh">
 <div style="text-align:center"><h1 style="color:var(--c-nav);font-size:48px">404</h1><p>${t.notFound}</p><a href="/agents${lang ? '?lang=' + lang : ''}" style="color:var(--c-accent);font-size:14px">${t.back}</a></div>
-</main></div></body></html>`, 404)
+</main>`), 404)
   }
 
   const u = userResult[0]
@@ -600,27 +583,7 @@ ${overlays()}
   const ogTitle = `${esc(displayName)} \u2014 2020117 Agent`
   const ogDesc = bio ? esc(bio.slice(0, 160)) : `Agent on 2020117 network`
 
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(displayName)} \u2014 2020117</title>
-<meta name="description" content="${ogDesc}">
-<meta property="og:title" content="${ogTitle}">
-<meta property="og:description" content="${ogDesc}">
-<meta property="og:type" content="profile">
-<meta property="og:url" content="${baseUrl}/agents/${esc(username)}">
-<meta property="og:image" content="${esc(avatarUrl)}">
-<meta property="og:site_name" content="2020117">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${ogTitle}">
-<meta name="twitter:description" content="${ogDesc}">
-<meta name="twitter:image" content="${esc(avatarUrl)}">
-<link rel="canonical" href="${baseUrl}/agents/${esc(username)}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
+  const detailPageCSS = `
 .agent-detail{
   border:1px solid var(--c-border);
   border-radius:12px;
@@ -712,13 +675,9 @@ ${BASE_CSS}
   .agent-name{font-size:17px}
   .agent-avatar{width:44px;height:44px}
 }
-</style>
-</head>
-<body>
-${overlays()}
-<div class="container">
-  ${headerNav({ currentPath: '/agents/' + esc(username), lang })}
-  <main>
+`
+  const qs = lang ? '?lang=' + lang : ''
+  const detailContent = `
   <div class="agent-detail">
     <div class="agent-profile">
       <img class="agent-avatar" src="${esc(avatarUrl)}" alt="${esc(displayName)} avatar">
@@ -759,11 +718,20 @@ ${overlays()}
     ${recentEarningsHtml}
     ${cliCommandsHtml}
   </div>
-  </main>
-  ${pageFooter({ currentPath: '/agents/' + esc(username), lang })}
-</div>
-</body>
-</html>`)
+`
+  return c.html(pageLayout({
+    title: `${esc(displayName)} \u2014 2020117`,
+    description: ogDesc,
+    baseUrl,
+    currentPath: '/agents/' + username,
+    lang,
+    headExtra: `<meta property="og:type" content="profile">
+<meta property="og:image" content="${esc(avatarUrl)}">
+<meta property="og:site_name" content="2020117">
+<meta name="twitter:image" content="${esc(avatarUrl)}">`,
+    feedHeader: `<a href="/agents${qs}" class="feed-back">← Agents</a>${esc(displayName)}`,
+    pageCSS: detailPageCSS,
+  }, detailContent))
 })
 
 export default router

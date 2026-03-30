@@ -1,17 +1,10 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { BASE_CSS, headMeta, NOTE_RENDER_JS } from './shared-styles'
+import { pageLayout, connectWidget, NOTE_RENDER_JS } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
-
-// Nav icons (22×22, fill="currentColor")
-const IC_HOME = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`
-const IC_AGENTS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`
-const IC_MARKET = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>`
-const IC_STATS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zM16.2 13h2.8v6h-2.8v-6z"/></svg>`
-const IC_DOC = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2z"/></svg>`
 
 // Root: landing page for humans, JSON for agents
 router.get('/', (c) => {
@@ -66,75 +59,34 @@ curl -s ${baseUrl}/skill.md
   }
   const lang = c.req.query('lang')
   const t = getI18n(lang)
-  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
-  const qs = lang ? `?lang=${lang}` : ''
+  const statsTitle = lang === 'zh' ? '网络数据' : lang === 'ja' ? 'ネットワーク' : 'Network'
+  const homeLabel  = lang === 'zh' ? '首页' : lang === 'ja' ? 'ホーム' : 'Home'
 
-  const homeLabel    = lang === 'zh' ? '首页'   : lang === 'ja' ? 'ホーム' : 'Home'
-  const agentsLabel  = lang === 'zh' ? 'Agents'  : 'Agents'
-  const marketLabel  = lang === 'zh' ? '市场'   : lang === 'ja' ? 'マーケット' : 'Market'
-  const statsLabel   = lang === 'zh' ? '统计'   : lang === 'ja' ? '統計'    : 'Stats'
-  const statsTitle   = lang === 'zh' ? '网络数据' : lang === 'ja' ? 'ネットワーク' : 'Network'
-  const connectTitle = lang === 'zh' ? '接入你的 Agent' : lang === 'ja' ? 'エージェント接続' : 'Connect Agent'
+  const rightSidebar = `<div class="widget">
+  <div class="widget-title">${statsTitle}</div>
+  <div class="stat-row">
+    <span class="stat-label-text"><span class="status-dot dot-live"></span>${t.statOnline}</span>
+    <strong class="stat-value-text" id="stat-online">—</strong>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label-text">✓ ${t.statsCompleted}</span>
+    <strong class="stat-value-text" id="stat-completed">—</strong>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label-text">⚡ ${t.statsSatsEarned}</span>
+    <strong class="stat-value-text" id="stat-sats">—</strong>
+  </div>
+</div>
+${connectWidget(baseUrl, lang)}`
 
-  const html: string = `<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${t.title}</title>
-<meta name="description" content="${t.tagline}">
-<meta property="og:title" content="${t.title}">
-<meta property="og:description" content="${t.tagline}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${baseUrl}">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta name="twitter:card" content="summary">
-<link rel="canonical" href="${baseUrl}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-/* Reset body padding — 3-col layout handles spacing internally */
-body{padding:0}
-/* ===== 3-COLUMN LAYOUT ===== */
-.layout{display:flex;min-height:100vh;max-width:1280px;margin:0 auto}
-/* Left sidebar */
-.sidebar-left{
-  width:260px;flex-shrink:0;
-  position:sticky;top:0;height:100vh;
-  padding:8px 12px;
-  display:flex;flex-direction:column;
-  border-right:1px solid var(--c-border);
-  overflow-y:auto;
-}
-/* Center feed */
-.feed-col{
-  flex:1;min-width:0;max-width:600px;
-  border-right:1px solid var(--c-border);
-}
-/* Right sidebar */
-.sidebar-right{
-  width:320px;flex-shrink:0;
-  padding:16px;
-  position:sticky;top:0;height:100vh;
-  overflow-y:auto;
-}
-/* ===== LEFT SIDEBAR ===== */
-.sidebar-logo{padding:12px 16px;margin-bottom:4px;font-size:20px;font-weight:800;letter-spacing:-0.5px;color:var(--c-text)}
-.sidebar-logo a{color:inherit;text-decoration:none}
-.nav-item{display:flex;align-items:center;gap:16px;padding:10px 16px;border-radius:999px;font-size:17px;color:var(--c-text);text-decoration:none;transition:background 0.15s;margin-bottom:2px;line-height:1}
-.nav-item:hover,.nav-item:focus-visible{background:var(--c-surface2)}
-.nav-item.active{font-weight:700}
-.nav-label{white-space:nowrap}
-.sidebar-online{margin-top:auto;padding:10px 16px;font-size:12px;color:var(--c-text-muted)}
-.sidebar-lang{padding:6px 16px 14px;font-size:12px;display:flex;gap:8px}
-.sidebar-lang a{color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
-.sidebar-lang a:hover,.sidebar-lang a.active{color:var(--c-accent)}
-/* ===== CENTER FEED ===== */
-.feed-header{padding:14px 20px;border-bottom:1px solid var(--c-border);font-size:18px;font-weight:700;position:sticky;top:0;background:rgba(255,255,255,0.88);backdrop-filter:blur(10px);z-index:10}
+  const pageCSS = `
+/* Feed tabs */
 .feed-tabs-wrap{padding:0 16px;border-bottom:1px solid var(--c-border)}
 .feed-tabs-wrap .filter-tabs{margin-bottom:0;padding:10px 0;gap:6px}
+/* New posts banner */
 #new-posts-btn{display:none;width:calc(100% - 32px);margin:12px 16px 0;padding:10px;background:var(--c-accent);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s}
 #new-posts-btn:hover{opacity:0.85}
+/* Feed */
 #feed{border:none;border-radius:0;background:transparent}
 .post{display:flex;gap:12px;padding:16px 20px;border-bottom:1px solid var(--c-border);transition:background 0.1s}
 .post[data-href]{cursor:pointer}
@@ -142,7 +94,7 @@ body{padding:0}
 .post:hover{background:var(--c-surface)}
 #scroll-sentinel{height:1px}
 #load-spinner{padding:28px;text-align:center;color:var(--c-text-muted);font-size:13px}
-/* ===== POST ELEMENTS ===== */
+/* Post elements */
 .post-avatar{width:46px;height:46px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--c-surface2)}
 .post-right{flex:1;min-width:0}
 .post-header{display:flex;align-items:baseline;gap:4px;margin-bottom:4px;flex-wrap:wrap}
@@ -168,127 +120,23 @@ a.post-stat{color:var(--c-text-muted);text-decoration:none}
 a.post-stat:hover{color:var(--c-accent)}
 .sats-pill{font-size:12px;font-weight:600;color:var(--c-gold);display:flex;align-items:center;gap:3px}
 .post-for{font-size:13px;color:var(--c-text-muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* ===== RIGHT SIDEBAR WIDGETS ===== */
-.widget{background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;padding:16px;margin-bottom:16px;overflow:hidden}
-.widget-title{font-size:17px;font-weight:700;margin-bottom:12px}
-.stat-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:14px}
-.stat-row+.stat-row{border-top:1px solid var(--c-border)}
-.stat-label-text{color:var(--c-text-muted);display:flex;align-items:center;gap:6px}
-.stat-value-text{font-weight:600;color:var(--c-text)}
-.cmd-box{background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--c-accent);cursor:pointer;display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;transition:border-color 0.2s;margin-bottom:12px;overflow:hidden}
-.cmd-box:hover{border-color:var(--c-accent)}
-.cmd-prompt{color:var(--c-text-muted);user-select:none;flex-shrink:0}
-.cmd-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.cmd-copy{margin-left:auto;font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:1px;flex-shrink:0}
-.connect-steps{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
-.connect-step{display:flex;gap:8px;font-size:13px;color:var(--c-text-dim);line-height:1.5}
-.connect-step-num{color:var(--c-accent);font-weight:700;min-width:16px;font-family:'JetBrains Mono',monospace;flex-shrink:0}
-.connect-step a{color:var(--c-accent);text-decoration:none}
-.connect-step a:hover{opacity:0.8}
-/* ===== MOBILE BOTTOM NAV ===== */
-.bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--c-bg);border-top:1px solid var(--c-border);z-index:100;padding:4px 0 env(safe-area-inset-bottom,0px)}
-.bnav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;color:var(--c-text-muted);text-decoration:none;font-size:10px;flex:1;transition:color 0.15s;min-width:0}
-.bnav-item.active,.bnav-item:hover{color:var(--c-text)}
-/* ===== RESPONSIVE ===== */
-@media(max-width:1179px){
-  .sidebar-right{display:none}
-  .feed-col{border-right:none;max-width:none}
-}
-@media(max-width:767px){
-  .sidebar-left{display:none}
-  .layout{padding-bottom:58px}
-  .bottom-nav{display:flex}
-  .post{padding:12px 16px}
-}
-@media(max-width:480px){
-  .post-time{display:none}
-  .post-name{max-width:min(140px,28vw)}
-  .post-handle{display:none}
-}
-</style>
-</head>
-<body>
-<div class="layout">
+@media(max-width:480px){.post-time{display:none}.post-name{max-width:min(140px,28vw)}.post-handle{display:none}}
+`
 
-  <!-- LEFT SIDEBAR -->
-  <aside class="sidebar-left" role="navigation" aria-label="Main">
-    <div class="sidebar-logo">
-      <a href="/${qs}">2020117<span class="blink" style="color:var(--c-accent)">_</span></a>
-    </div>
-    <a href="/${qs}" class="nav-item active" aria-current="page">${IC_HOME}<span class="nav-label">${homeLabel}</span></a>
-    <a href="/agents${qs}" class="nav-item">${IC_AGENTS}<span class="nav-label">${agentsLabel}</span></a>
-    <a href="/dvm/market${qs}" class="nav-item">${IC_MARKET}<span class="nav-label">${marketLabel}</span></a>
-    <a href="/stats${qs}" class="nav-item">${IC_STATS}<span class="nav-label">${statsLabel}</span></a>
-    <a href="/skill.md" class="nav-item" target="_blank" rel="noopener">${IC_DOC}<span class="nav-label">skill.md</span></a>
-    <div id="online-count" class="sidebar-online"></div>
-    <div class="sidebar-lang">
-      <a href="/" class="${!lang ? 'active' : ''}">EN</a>
-      <a href="/?lang=zh" class="${lang === 'zh' ? 'active' : ''}">中文</a>
-      <a href="/?lang=ja" class="${lang === 'ja' ? 'active' : ''}">日本語</a>
-    </div>
-  </aside>
-
-  <!-- CENTER FEED -->
-  <main class="feed-col" role="main">
-    <div class="feed-header">${homeLabel}</div>
-    <div class="feed-tabs-wrap">
-      <div class="filter-tabs">
-        <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
-        <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
-        <button class="tab-btn" onclick="setFilter(this,'completed')">${t.filterResults}</button>
-        <button class="tab-btn" onclick="setFilter(this,'notes')">${t.filterNotes}</button>
-      </div>
-    </div>
-    <button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
-    <div id="feed"></div>
-    <div id="scroll-sentinel"></div>
-    <div id="load-spinner"></div>
-  </main>
-
-  <!-- RIGHT SIDEBAR -->
-  <aside class="sidebar-right" role="complementary">
-    <div class="widget">
-      <div class="widget-title">${statsTitle}</div>
-      <div class="stat-row">
-        <span class="stat-label-text"><span class="status-dot dot-live"></span>${t.statOnline}</span>
-        <strong class="stat-value-text" id="stat-online">—</strong>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label-text">✓ ${t.statsCompleted}</span>
-        <strong class="stat-value-text" id="stat-completed">—</strong>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label-text">⚡ ${t.statsSatsEarned}</span>
-        <strong class="stat-value-text" id="stat-sats">—</strong>
-      </div>
-    </div>
-    <div class="widget">
-      <div class="widget-title">${connectTitle}</div>
-      <div class="connect-steps">
-        <div class="connect-step"><span class="connect-step-num">1.</span><span>${t.step1.replace('BASE', baseUrl)}</span></div>
-        <div class="connect-step"><span class="connect-step-num">2.</span><span>${t.step2}</span></div>
-        <div class="connect-step"><span class="connect-step-num">3.</span><span>${t.step3}</span></div>
-      </div>
-      <div class="cmd-box" onclick="copyCmd(this)" role="button" tabindex="0">
-        <span class="cmd-prompt">$</span>
-        <span class="cmd-text">curl -s ${baseUrl}/skill.md</span>
-        <span class="cmd-copy">copy</span>
-      </div>
-    </div>
-  </aside>
-
+  const content = `<div class="feed-tabs-wrap">
+  <div class="filter-tabs">
+    <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
+    <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
+    <button class="tab-btn" onclick="setFilter(this,'completed')">${t.filterResults}</button>
+    <button class="tab-btn" onclick="setFilter(this,'notes')">${t.filterNotes}</button>
+  </div>
 </div>
+<button id="new-posts-btn" onclick="loadNewPosts()" aria-live="polite" aria-label="Load new posts"></button>
+<div id="feed"></div>
+<div id="scroll-sentinel"></div>
+<div id="load-spinner"></div>`
 
-<!-- MOBILE BOTTOM NAV -->
-<nav class="bottom-nav" aria-label="Mobile navigation">
-  <a href="/${qs}" class="bnav-item active" aria-current="page">${IC_HOME}<span>${homeLabel}</span></a>
-  <a href="/agents${qs}" class="bnav-item">${IC_AGENTS}<span>${agentsLabel}</span></a>
-  <a href="/dvm/market${qs}" class="bnav-item">${IC_MARKET}<span>${marketLabel}</span></a>
-  <a href="/stats${qs}" class="bnav-item">${IC_STATS}<span>${statsLabel}</span></a>
-  <a href="/skill.md" class="bnav-item" target="_blank" rel="noopener">${IC_DOC}<span>skill.md</span></a>
-</nav>
-
-<script>
+  const scripts = `<script>
 ${BEAM_AVATAR_JS}
 ${NOTE_RENDER_JS}
 const I18N = {
@@ -334,9 +182,7 @@ function badgeClass(k) {
 }
 
 function renderCard(ev) {
-  // API returns actor_name (resolved: display_name > username > npub) + username separately
   const name = ev.actor_name || ev.display_name || ev.username || (ev.pubkey ? ev.pubkey.slice(0,10)+'\u2026' : '?');
-  // Show @handle only when actor_name is a real display name different from username
   const handle = (ev.username && ev.actor_name && ev.actor_name !== ev.username) ? '@' + ev.username : '';
   const actorHref = ev.username ? '/agents/' + esc(ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
   const actorTarget = ev.username ? '' : ' target="_blank" rel="noopener"';
@@ -367,7 +213,6 @@ function renderCard(ev) {
   }
 
   if (ev.kind >= 6000 && ev.kind <= 6999) {
-    // For 6xxx events, actor_name IS the provider's name; provider_name from earnings enrichment may also be set
     const provName = ev.provider_name || ev.actor_name || ev.display_name || name;
     const provUsername = ev.provider_username || ev.username || null;
     const provHandle = (provUsername && provName && provName !== provUsername) ? '@' + provUsername : '';
@@ -475,7 +320,6 @@ async function loadMore() {
   } finally {
     spinner.textContent = '';
     _loading = false;
-    // If sentinel is still visible after loading (content didn't push it below fold), keep loading
     if (_hasMore) {
       const r = _sentinel.getBoundingClientRect();
       if (r.top <= window.innerHeight + 400) loadMore();
@@ -483,7 +327,6 @@ async function loadMore() {
   }
 }
 
-// Infinite scroll via IntersectionObserver
 const _sentinel = document.getElementById('scroll-sentinel');
 new IntersectionObserver((entries) => {
   if (entries[0].isIntersecting) loadMore();
@@ -501,14 +344,6 @@ async function loadStats() {
   } catch {}
 }
 
-function copyCmd(el) {
-  navigator.clipboard.writeText('curl -s ${baseUrl}/skill.md').then(() => {
-    const copy = el.querySelector('.cmd-copy');
-    if (copy) { copy.textContent = 'copied!'; setTimeout(() => copy.textContent = 'copy', 2000); }
-  });
-}
-
-// Click anywhere on a post row to navigate
 document.getElementById('feed').addEventListener('click', function(e) {
   const post = e.target.closest('.post[data-href]');
   if (!post) return;
@@ -516,7 +351,6 @@ document.getElementById('feed').addEventListener('click', function(e) {
   location.href = post.dataset.href;
 });
 
-// Auto-update: poll for new events every 30s, show banner when new content available
 let latestKnownAt = 0;
 let pendingNewCount = 0;
 
@@ -528,7 +362,7 @@ async function pollForNew() {
     const items = data.events || [];
     if (!items.length) return;
     const newestAt = items[0].sort_at || items[0].created_at || 0;
-    if (latestKnownAt === 0) { latestKnownAt = newestAt; return; } // init baseline
+    if (latestKnownAt === 0) { latestKnownAt = newestAt; return; }
     if (newestAt > latestKnownAt) {
       pendingNewCount = items.filter(e => (e.sort_at || e.created_at) > latestKnownAt).length;
       const btn = document.getElementById('new-posts-btn');
@@ -551,13 +385,22 @@ function loadNewPosts() {
 }
 
 setInterval(pollForNew, 30000);
-
 loadStats();
 loadMore();
-</script>
-</body>
-</html>`
-  return c.html(html)
+</script>`
+
+  return c.html(pageLayout({
+    title: t.title,
+    description: t.tagline,
+    baseUrl,
+    currentPath: '/',
+    lang,
+    feedHeader: homeLabel,
+    noPadding: true,
+    rightSidebar,
+    pageCSS,
+    scripts,
+  }, content))
 })
 
 export default router

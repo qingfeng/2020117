@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, and, sql } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { BASE_CSS, headMeta, overlays, headerNav, pageFooter } from './shared-styles'
+import { pageLayout } from './shared-styles'
 import { getI18n } from '../lib/i18n'
 import { renderNoteContent } from '../lib/note-render'
 
@@ -40,7 +40,8 @@ router.get('/notes/:eventId', async (c) => {
       }
     } catch {}
     if (!externalNote) {
-      return c.html(`<!DOCTYPE html><html lang="${htmlLang}"><head><meta charset="utf-8"><title>404 — 2020117</title><style>${BASE_CSS}</style></head><body style="display:flex;align-items:center;justify-content:center"><main style="text-align:center" role="alert"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/" style="color:var(--c-accent);font-size:12px">home</a></main></body></html>`, 404)
+      return c.html(pageLayout({ title: '404 — 2020117', baseUrl, currentPath: `/notes/${eventId}`, lang },
+        '<div style="text-align:center;padding:64px 0"><h1 style="color:var(--c-text-muted);font-size:48px">404</h1><p style="margin:12px 0">note not found</p><a href="/" style="color:var(--c-accent);font-size:12px">home</a></div>'), 404)
     }
   }
 
@@ -169,31 +170,8 @@ router.get('/notes/:eventId', async (c) => {
       ? `<a href="/agents/${esc(username)}" style="color:var(--c-accent);text-decoration:none;font-weight:600${style ? ';' + style : ''}">${esc(name)}</a>`
       : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(pubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;font-weight:600${style ? ';' + style : ''}">${esc(name)}</a>`
 
-  return c.html(`<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>note by ${esc(authorName)} \u2014 2020117</title>
-<meta name="description" content="${esc(ogDesc)}">
-<meta property="og:title" content="note by ${esc(authorName)} \u2014 2020117">
-<meta property="og:description" content="${esc(ogDesc)}">
-<meta property="og:type" content="article">
-<meta property="og:url" content="${baseUrl}/notes/${eventId}">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta property="og:site_name" content="2020117">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="note by ${esc(authorName)} \u2014 2020117">
-<meta name="twitter:description" content="${esc(ogDesc)}">
-<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
-<link rel="canonical" href="${baseUrl}/notes/${eventId}">
-${headMeta(baseUrl)}
-<style>
-${BASE_CSS}
-.note-card{
-  border:1px solid var(--c-border);border-radius:12px;padding:24px 28px;
-  background:var(--c-bg);
-}
+  const pageCSS = `
+.note-card{border:1px solid var(--c-border);border-radius:12px;padding:24px 28px;background:var(--c-bg)}
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
 .post-author-info{display:flex;flex-direction:column;gap:2px}
 .post-author-name{font-size:15px;font-weight:600}
@@ -203,34 +181,19 @@ ${BASE_CSS}
 .note-content .note-text{white-space:normal}
 .note-content .note-img{max-height:480px;margin:12px 0}
 .note-content .note-images{margin-top:12px}
-.interactions{
-  margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);
-  display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--c-text-dim);
-}
+.interactions{margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--c-text-dim)}
 .interaction-group{display:flex;align-items:center;gap:6px}
 .interaction-group .icon{font-size:16px}
 .interaction-group .cnt{color:var(--c-text-muted);font-size:13px}
 .interaction-faces{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .interaction-faces a{font-size:12px;color:var(--c-accent);text-decoration:none}
-.note-footer{
-  margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);
-  font-size:13px;color:var(--c-nav);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;
-}
+.note-footer{margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);font-size:13px;color:var(--c-nav);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
 .note-footer a{color:var(--c-text-muted);text-decoration:none;font-size:12px}
 .note-footer a:hover{color:var(--c-accent)}
 .replies-section{margin-top:32px}
-.replies-header{
-  font-size:11px;color:var(--c-text-dim);text-transform:uppercase;letter-spacing:1.5px;
-  margin-bottom:16px;display:flex;align-items:center;gap:8px;font-weight:600;
-}
-.replies-header .count{
-  background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);
-  border-radius:4px;padding:2px 8px;color:var(--c-accent);font-size:12px;
-}
-.reply{
-  display:flex;gap:10px;
-  padding:14px 0;border-bottom:1px solid var(--c-border);
-}
+.replies-header{font-size:11px;color:var(--c-text-dim);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;display:flex;align-items:center;gap:8px;font-weight:600}
+.replies-header .count{background:var(--c-accent-bg);border:1px solid var(--c-accent-dim);border-radius:4px;padding:2px 8px;color:var(--c-accent);font-size:12px}
+.reply{display:flex;gap:10px;padding:14px 0;border-bottom:1px solid var(--c-border)}
 .reply:last-child{border-bottom:none}
 .reply-body{flex:1;min-width:0}
 .reply-meta{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
@@ -240,19 +203,10 @@ ${BASE_CSS}
 .reply-timestamp a{color:var(--c-text-muted);text-decoration:none}
 .reply-text{font-size:15px;color:var(--c-text);line-height:1.6;white-space:pre-line;word-break:break-word}
 .no-replies{color:var(--c-text-muted);font-size:14px;font-style:italic;padding:12px 0}
-@media(max-width:480px){
-  .note-card{padding:16px 18px}
-  .note-content{font-size:15px}
-}
-</style>
-</head>
-<body>
-${overlays()}
-<div class="container">
-  ${headerNav({ currentPath: `/notes/${eventId}`, lang })}
+@media(max-width:480px){.note-card{padding:16px 18px}.note-content{font-size:15px}}
+`
 
-  <main>
-  <article class="note-card">
+  const noteContent = `<article class="note-card">
     <span class="kind-tag">note</span>
 
     <div class="post-header">
@@ -314,13 +268,33 @@ ${overlays()}
       </div>
     </div>`
         }).join('\n    ')}
-  </section>
-  </main>
-  ${pageFooter({ currentPath: `/notes/${eventId}`, lang })}
-</div>
-<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>
-</body>
-</html>`)
+  </section>`
+
+  const headExtra = `<meta property="og:title" content="note by ${esc(authorName)} \u2014 2020117">
+<meta property="og:description" content="${esc(ogDesc)}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="${baseUrl}/notes/${eventId}">
+<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
+<meta property="og:site_name" content="2020117">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="note by ${esc(authorName)} \u2014 2020117">
+<meta name="twitter:description" content="${esc(ogDesc)}">
+<meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
+<link rel="canonical" href="${baseUrl}/notes/${eventId}">`
+
+  const scripts = `<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>`
+
+  return c.html(pageLayout({
+    title: `note by ${esc(authorName)} \u2014 2020117`,
+    description: ogDesc,
+    baseUrl,
+    currentPath: `/notes/${eventId}`,
+    lang,
+    feedHeader: `<a href="/" style="color:var(--c-text-muted);text-decoration:none;font-size:14px">\u2190 back</a>`,
+    headExtra,
+    pageCSS,
+    scripts,
+  }, noteContent))
 })
 
 export default router

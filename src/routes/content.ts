@@ -41,6 +41,10 @@ content.get('/stats', async (c) => {
 // GET /api/stats/daily?days=7|30|all — per-day activity breakdown
 content.get('/stats/daily', async (c) => {
   const daysParam = c.req.query('days') || '30'
+  const cacheKey = `stats_daily:${daysParam}`
+  const cached = await c.env.KV.get(cacheKey)
+  if (cached) return c.json(JSON.parse(cached))
+
   const nDays = daysParam === 'all' ? 90 : (daysParam === '7' ? 7 : 30)
   const nowSec = Math.floor(Date.now() / 1000)
   const sinceS = nowSec - nDays * 86400          // all tables use Unix seconds
@@ -108,7 +112,7 @@ content.get('/stats/daily', async (c) => {
     }))
 
     const t = (totalsR.results[0] || {}) as Record<string, number>
-    return c.json({
+    const payload = {
       totals: {
         notes:          Number(t.notes) || 0,
         replies:        Number(t.replies) || 0,
@@ -119,7 +123,9 @@ content.get('/stats/daily', async (c) => {
         zaps:           Number(t.zaps) || 0,
       },
       daily,
-    })
+    }
+    await c.env.KV.put(cacheKey, JSON.stringify(payload), { expirationTtl: 300 })
+    return c.json(payload)
   } catch (err) {
     return c.json({ error: 'stats unavailable' }, 500)
   }
@@ -131,6 +137,9 @@ content.get('/relay/events', async (c) => {
   const page = Math.max(1, Number(c.req.query('page')) || 1)
   const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 50))
   const kindParam = c.req.query('kind')
+  const cacheKey = `relay_events:${kindParam || 'all'}:${page}:${limit}`
+  const cached = await c.env.KV.get(cacheKey)
+  if (cached) return c.json(JSON.parse(cached))
   const offset = (page - 1) * limit
 
   const EXCLUDED_KINDS = [6, 7, 7000, 30333, 31990]
@@ -636,7 +645,9 @@ content.get('/relay/events', async (c) => {
   // Re-sort: notes with recent activity bubble up (Reddit-style)
   enrichedEvents.sort((a, b) => (b.sort_at || b.created_at) - (a.sort_at || a.created_at))
 
-  return c.json({ events: enrichedEvents, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } })
+  const relayPayload = { events: enrichedEvents, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } }
+  c.executionCtx.waitUntil(c.env.KV.put(cacheKey, JSON.stringify(relayPayload), { expirationTtl: 30 }))
+  return c.json(relayPayload)
 })
 
 // GET /api/activity — 全站活动流
@@ -645,6 +656,9 @@ content.get('/activity', async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') || '1'))
   const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') || '20')), 50)
   const typeFilter = c.req.query('type')
+  const actCacheKey = `activity:${typeFilter || 'all'}:${page}:${limit}`
+  const actCached = await c.env.KV.get(actCacheKey)
+  if (actCached) return c.json(JSON.parse(actCached))
   const fetchLimit = 100
 
   // Build job query condition based on type filter
@@ -758,7 +772,9 @@ content.get('/activity', async (c) => {
   const start = (page - 1) * limit
   const paged = filtered.slice(start, start + limit)
 
-  return c.json({ items: paged, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } })
+  const actPayload = { items: paged, meta: { current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)) } }
+  c.executionCtx.waitUntil(c.env.KV.put(actCacheKey, JSON.stringify(actPayload), { expirationTtl: 30 }))
+  return c.json(actPayload)
 })
 
 // GET /api/timeline — 全站时间线

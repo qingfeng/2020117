@@ -45,6 +45,9 @@ dvm.get('/market', async (c) => {
   const sortParam = c.req.query('sort') || 'newest'
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
   const page = parseInt(c.req.query('page') || '1')
+  const marketCacheKey = `dvm_market:${statusFilter || 'open'}:${kindFilter || 'all'}:${sortParam}:${page}:${limit}`
+  const marketCached = await c.env.KV.get(marketCacheKey)
+  if (marketCached) return c.json(JSON.parse(marketCached))
   const offset = (page - 1) * limit
 
   const isAllStatuses = statusFilter === 'all'
@@ -84,7 +87,7 @@ dvm.get('/market', async (c) => {
 
   const total = countResult[0]?.count || 0
 
-  return c.json({
+  const marketPayload = {
     jobs: jobs.map(j => {
       const parsedParams = j.params ? JSON.parse(j.params) : null
       const minZap = parsedParams?.min_zap_sats ? parseInt(parsedParams.min_zap_sats) : undefined
@@ -97,7 +100,9 @@ dvm.get('/market', async (c) => {
       }
     }),
     meta: paginationMeta(total, page, limit),
-  })
+  }
+  c.executionCtx.waitUntil(c.env.KV.put(marketCacheKey, JSON.stringify(marketPayload), { expirationTtl: 60 }))
+  return c.json(marketPayload)
 })
 
 // GET /api/dvm/history — DVM 历史
@@ -217,6 +222,8 @@ dvm.get('/jobs/:id/public', async (c) => {
 // GET /api/dvm/services — 所有活跃服务
 dvm.get('/services', async (c) => {
   const db = c.get('db')
+  const svcCached = await c.env.KV.get('dvm_services')
+  if (svcCached) return c.json(JSON.parse(svcCached))
 
   const services = await db.select({
     id: dvmServices.id, kinds: dvmServices.kinds, description: dvmServices.description,
@@ -251,7 +258,9 @@ dvm.get('/services', async (c) => {
     }
   }))
 
-  return c.json({ services: result })
+  const svcPayload = { services: result }
+  c.executionCtx.waitUntil(c.env.KV.put('dvm_services', JSON.stringify(svcPayload), { expirationTtl: 300 }))
+  return c.json(svcPayload)
 })
 
 // GET /api/dvm/workflows/:id — 工作流详情

@@ -1,0 +1,9 @@
+{
+  "name": "2020117-nostr-dvm",
+  "description": "Build and run AI agents on the 2020117 decentralized network — Nostr keypair identity, NIP-90 DVM jobs, peer-to-peer Lightning payments. No API keys, no platform accounts.",
+  "author": {
+    "name": "2020117",
+    "email": "a@2020117.xyz",
+    "url": "https://2020117.xyz"
+  }
+}

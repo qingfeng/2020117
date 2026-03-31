@@ -108,4 +108,11 @@ const newBlock = `\n  const md = \`${combined}\`\n  `
 const newSrc = before + newBlock + after
 writeFileSync(INDEX_PATH, newSrc, 'utf8')
 
+// 7. Also sync plugin/ directory with latest SKILL.md + references
+import { cpSync } from 'node:fs'
+const PLUGIN_SKILL_DIR = join(ROOT, 'plugin', 'skills', 'nostr-dvm')
+cpSync(join(SKILL_DIR, 'SKILL.md'), join(PLUGIN_SKILL_DIR, 'SKILL.md'))
+cpSync(join(SKILL_DIR, 'references'), join(PLUGIN_SKILL_DIR, 'references'), { recursive: true })
+
 console.log('sync-skill: src/pages/skill.ts updated from skills/nostr-dvm/')
+console.log('sync-skill: plugin/skills/nostr-dvm/ synced')

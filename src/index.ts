@@ -17,7 +17,7 @@ const app = new Hono<AppContext>()
 
 // DB middleware
 app.use('*', async (c, next) => {
-  const db = createDb(c.env.DB)
+  const db = createDb(c.env.TURSO_URL, c.env.TURSO_TOKEN)
   c.set('db', db)
   c.set('user', null)
   await next()

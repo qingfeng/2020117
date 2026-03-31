@@ -49,35 +49,35 @@ content.get('/stats/daily', async (c) => {
   const nowSec = Math.floor(Date.now() / 1000)
   const sinceS = nowSec - nDays * 86400          // all tables use Unix seconds
 
-  const DB = c.env.DB
+  const client = c.get('db').$client
 
   try {
     // Run all queries in parallel
     const [notesR, repliesR, jobsPostedR, jobsCompletedR, satsR, agentsR, zapsR, totalsR] =
       await Promise.all([
-        DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+        client.execute({ sql: `SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
           FROM relay_event WHERE kind=1 AND ref_event_id IS NULL AND event_created_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
           FROM relay_event WHERE kind=1 AND ref_event_id IS NOT NULL AND event_created_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(created_at,'unixepoch') as day, COUNT(*) as cnt
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(created_at,'unixepoch') as day, COUNT(*) as cnt
           FROM dvm_job WHERE role='customer' AND created_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(updated_at,'unixepoch') as day, COUNT(*) as cnt
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(updated_at,'unixepoch') as day, COUNT(*) as cnt
           FROM dvm_job WHERE status='completed' AND updated_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(updated_at,'unixepoch') as day,
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(updated_at,'unixepoch') as day,
           CAST(SUM(COALESCE(paid_msats,price_msats,bid_msats,0))/1000 AS INTEGER) as cnt
           FROM dvm_job WHERE status='completed' AND updated_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(created_at,'unixepoch') as day, COUNT(*) as cnt
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(created_at,'unixepoch') as day, COUNT(*) as cnt
           FROM user WHERE nostr_pubkey IS NOT NULL AND created_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute({ sql: `SELECT date(event_created_at,'unixepoch') as day, COUNT(*) as cnt
           FROM relay_event WHERE kind=9735 AND event_created_at>=?
-          GROUP BY day ORDER BY day`).bind(sinceS).all(),
-        DB.prepare(`SELECT
+          GROUP BY day ORDER BY day`, args: [sinceS] }),
+        client.execute(`SELECT
           (SELECT COUNT(*) FROM relay_event WHERE kind=1 AND ref_event_id IS NULL) as notes,
           (SELECT COUNT(*) FROM relay_event WHERE kind=1 AND ref_event_id IS NOT NULL) as replies,
           (SELECT COUNT(*) FROM dvm_job WHERE role='customer') as jobs_posted,
@@ -85,11 +85,11 @@ content.get('/stats/daily', async (c) => {
           (SELECT CAST(COALESCE(SUM(COALESCE(paid_msats,price_msats,bid_msats,0)),0)/1000 AS INTEGER)
             FROM dvm_job WHERE status='completed') as sats_earned,
           (SELECT COUNT(*) FROM user WHERE nostr_pubkey IS NOT NULL) as new_agents,
-          (SELECT COUNT(*) FROM relay_event WHERE kind=9735) as zaps`).all(),
+          (SELECT COUNT(*) FROM relay_event WHERE kind=9735) as zaps`),
       ])
 
     // Build lookup maps from query results
-    const toMap = (r: { results: any[] }) => new Map(r.results.map((x: any) => [x.day, Number(x.cnt) || 0]))
+    const toMap = (r: { rows: any[] }) => new Map(r.rows.map((x: any) => [x.day, Number(x.cnt) || 0]))
     const maps = [notesR, repliesR, jobsPostedR, jobsCompletedR, satsR, agentsR, zapsR].map(toMap)
     const [nm, rm, jpm, jcm, sm, am, zm] = maps
 
@@ -111,7 +111,7 @@ content.get('/stats/daily', async (c) => {
       zaps:           zm.get(day) || 0,
     }))
 
-    const t = (totalsR.results[0] || {}) as Record<string, number>
+    const t = (totalsR.rows[0] || {}) as Record<string, number>
     const payload = {
       totals: {
         notes:          Number(t.notes) || 0,

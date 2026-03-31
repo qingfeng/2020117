@@ -2,7 +2,7 @@ import type { Bindings } from './types'
 
 export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: ExecutionContext) {
     const { createDb } = await import('./db')
-    const db = createDb(env.DB)
+    const db = createDb(env.TURSO_URL, env.TURSO_TOKEN)
 
     // Poll followed Nostr users
     try {
@@ -185,9 +185,9 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
 
     // Prune stale open jobs older than 7 days (will never be processed)
     try {
-      await db.$client.prepare(
+      await db.$client.execute(
         "DELETE FROM dvm_job WHERE status = 'open' AND created_at < datetime('now', '-7 days')"
-      ).run()
+      )
     } catch (e) {
       console.error('[Cron] Stale job prune failed:', e)
     }

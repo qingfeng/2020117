@@ -153,7 +153,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
 
   // --- Customer-only agents: registered users with jobs but no active dvmService ---
   // Single query: users with at least one dvm_job but no active dvm_service entry
-  const customerResult = await db.$client.prepare(`
+  const customerResult = await db.$client.execute(`
     SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.nostr_pubkey, u.lightning_address,
       (SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = u.id AND dvm_job.role = 'customer') AS jobs_posted_count,
       (SELECT COALESCE(SUM(COALESCE(price_msats, bid_msats, 0)), 0) FROM dvm_job WHERE dvm_job.user_id = u.id AND dvm_job.role = 'customer' AND status IN ('completed','result_available')) AS spent_msats,
@@ -162,8 +162,8 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     WHERE u.nostr_pubkey IS NOT NULL
       AND EXISTS (SELECT 1 FROM dvm_job WHERE dvm_job.user_id = u.id)
       AND NOT EXISTS (SELECT 1 FROM dvm_service WHERE dvm_service.user_id = u.id AND dvm_service.active = 1)
-  `).all<{ id: string; username: string; display_name: string | null; avatar_url: string | null; bio: string | null; nostr_pubkey: string; lightning_address: string | null; jobs_posted_count: number; spent_msats: number; last_seen_at: number | null }>()
-  const customerRows = customerResult.results
+  `)
+  const customerRows = customerResult.rows as unknown as { id: string; username: string; display_name: string | null; avatar_url: string | null; bio: string | null; nostr_pubkey: string; lightning_address: string | null; jobs_posted_count: number; spent_msats: number; last_seen_at: number | null }[]
   console.log(`[Cache] customerRows=${customerRows.length}`)
 
   const customerAgents = customerRows.map(row => {

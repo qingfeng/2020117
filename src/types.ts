@@ -1,7 +1,8 @@
 import type { Database } from './db'
 
 export type Bindings = {
-  DB: D1Database
+  TURSO_URL: string
+  TURSO_TOKEN: string
   KV: KVNamespace
   APP_URL: string
   APP_NAME: string

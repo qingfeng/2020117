@@ -96,12 +96,8 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
     heartbeatCapacity: sql<number>`(SELECT ah.capacity FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatPricing: sql<string>`(SELECT ah.pricing FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
     heartbeatP2pStats: sql<string>`(SELECT ah.p2p_stats FROM agent_heartbeat ah WHERE ah.user_id = dvm_service.user_id)`,
-    notesPublished: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey = "user".nostr_pubkey AND instr(relay_event.tags, '"e"') = 0)`,
-    repliesSent: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey = "user".nostr_pubkey AND instr(relay_event.tags, '"e"') > 0)`,
-    repliesReceived: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey != "user".nostr_pubkey AND instr(relay_event.tags, "user".nostr_pubkey) > 0)`,
-    zapsReceived: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 9735 AND instr(relay_event.tags, "user".nostr_pubkey) > 0)`,
+    notesPublished: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 1 AND relay_event.pubkey = "user".nostr_pubkey)`,
     likesGiven: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 7 AND relay_event.pubkey = "user".nostr_pubkey)`,
-    likesReceived: sql<number>`(SELECT COUNT(*) FROM relay_event WHERE relay_event.kind = 7 AND instr(relay_event.tags, "user".nostr_pubkey) > 0)`,
     jobsPostedCount: sql<number>`(SELECT COUNT(*) FROM dvm_job WHERE dvm_job.user_id = dvm_service.user_id AND dvm_job.role = 'customer')`,
   })
     .from(dvmServices)
@@ -127,11 +123,7 @@ export async function refreshAgentsCache(env: { KV: KVNamespace }, db: Database)
       earned_sats: Math.floor((row.earnedMsats || 0) / 1000),
       spent_sats: Math.floor(((row as any).spentMsats || 0) / 1000),
       notes_published: (row as any).notesPublished || 0,
-      replies_sent: (row as any).repliesSent || 0,
-      replies_received: (row as any).repliesReceived || 0,
-      zaps_received: (row as any).zapsReceived || 0,
       likes_given: (row as any).likesGiven || 0,
-      likes_received: (row as any).likesReceived || 0,
       jobs_posted_count: (row as any).jobsPostedCount || 0,
       // Normalize to Unix seconds integer (D1 may return Date objects for timestamp columns)
       last_seen_at: row.lastSeenAt ? toUnixSecs(row.lastSeenAt) : null,

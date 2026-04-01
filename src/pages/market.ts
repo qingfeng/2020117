@@ -165,19 +165,20 @@ function renderJobs() {
 
 function loadJobs(tab) {
   currentTab = tab || 'requests';
+  var targetTab = currentTab;
   var list = document.getElementById('job-list');
   list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">${t.marketLoading}</div>';
 
   var requestKinds = [5100,5200,5250,5300,5301,5302,5303];
   var resultKinds  = [6100,6200,6250,6300,6302,6303];
-  var loadKinds = currentTab === 'results' ? resultKinds : requestKinds;
+  var loadKinds = targetTab === 'results' ? resultKinds : requestKinds;
   var batchPubkeys = [];
 
   nostrRelay.subscribe(
     [{ kinds: loadKinds, limit: 50 }],
     function(ev) {
       var job = eventToJob(ev);
-      if (currentTab === 'results') {
+      if (targetTab === 'results') {
         if (!jobStore.results.find(function(j){return j.id===ev.id;})) jobStore.results.push(job);
       } else {
         if (!jobStore.requests.find(function(j){return j.id===ev.id;})) jobStore.requests.push(job);

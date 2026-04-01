@@ -1,3 +1,5 @@
+import type { Client } from '@libsql/client'
+import { createClient } from '@libsql/client/http'
 import type { NostrEvent, NostrFilter, Env } from './types'
 import { isEphemeral, isAllowedKind, checkPow } from './types'
 import { verifyEvent } from './crypto'
@@ -15,11 +17,15 @@ interface Session {
 export class RelayDO implements DurableObject {
   private sessions = new Map<WebSocket, Session>()
   private env: Env
+  private db: Client
+  private appDb: Client
   private registeredPubkeys = new Set<string>()
   private pubkeyCacheExpiry = 0
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
+    this.db = createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN })
+    this.appDb = createClient({ url: env.APP_TURSO_URL, authToken: env.APP_TURSO_TOKEN })
     // Restore hibernated sessions (with subscriptions from WebSocket attachments)
     for (const ws of this.state.getWebSockets()) {
       const subs = new Map<string, NostrFilter[]>()
@@ -152,8 +158,7 @@ export class RelayDO implements DurableObject {
       return
     }
 
-    // Save to D1
-    const saved = await saveEvent(this.env.DB, event)
+    const saved = await saveEvent(this.db, event)
     if (!saved) {
       this.sendOk(ws, event.id, true, 'duplicate: already have this event')
       return
@@ -193,7 +198,7 @@ export class RelayDO implements DurableObject {
     // Query stored events and send them
     for (const filter of filters) {
       try {
-        const events = await queryEvents(this.env.DB, filter)
+        const events = await queryEvents(this.db, filter)
         for (const event of events) {
           this.send(ws, ['EVENT', subId, event])
         }
@@ -260,13 +265,13 @@ export class RelayDO implements DurableObject {
     // Source 1: DVM-active pubkeys from relay's own events DB
     // Entry ticket = having DVM activity (job requests, results, feedback, heartbeats, service registrations)
     try {
-      const dvmResult = await this.env.DB.prepare(
+      const dvmResult = await this.db.execute(
         `SELECT DISTINCT pubkey FROM events WHERE
           (kind >= 5000 AND kind <= 5999) OR
           (kind >= 6000 AND kind <= 6999) OR
           kind IN (7000, 30333, 31990)`
-      ).all<{ pubkey: string }>()
-      for (const row of dvmResult.results) {
+      )
+      for (const row of dvmResult.rows as any[]) {
         if (row.pubkey) this.registeredPubkeys.add(row.pubkey)
       }
     } catch (e) {
@@ -275,10 +280,10 @@ export class RelayDO implements DurableObject {
 
     // Source 2: 2020117.xyz domain users from platform DB (always trusted)
     try {
-      const domainResult = await this.env.APP_DB.prepare(
-        `SELECT nostr_pubkey FROM user WHERE lightning_address LIKE '%@2020117.xyz' AND nostr_pubkey IS NOT NULL`
-      ).all<{ nostr_pubkey: string }>()
-      for (const row of domainResult.results) {
+      const domainResult = await this.appDb.execute(
+        `SELECT nostr_pubkey FROM user WHERE nip05_enabled = 1 AND nostr_pubkey IS NOT NULL`
+      )
+      for (const row of domainResult.rows as any[]) {
         if (row.nostr_pubkey) this.registeredPubkeys.add(row.nostr_pubkey)
       }
     } catch (e) {

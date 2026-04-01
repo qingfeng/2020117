@@ -19,3 +19,5 @@ logo-philosophy.md
 scripts/
 2020117.sqlite
 2020117-turso.sql
+2020117-import.db
+2020117-import.db-wal

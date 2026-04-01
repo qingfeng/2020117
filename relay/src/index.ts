@@ -1,3 +1,4 @@
+import { createClient } from '@libsql/client/http'
 import type { Env } from './types'
 import { pruneOldEvents } from './db'
 
@@ -78,7 +79,8 @@ export default {
   // Daily maintenance: prune old events
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     try {
-      const deleted = await pruneOldEvents(env.DB, 90)
+      const db = createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN })
+      const deleted = await pruneOldEvents(db, 90)
       if (deleted > 0) {
         console.log(`[Maintenance] Pruned ${deleted} old events`)
       }

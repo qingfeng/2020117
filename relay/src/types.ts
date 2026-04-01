@@ -23,8 +23,10 @@ export interface NostrFilter {
 }
 
 export interface Env {
-  DB: D1Database
-  APP_DB: D1Database
+  RELAY_TURSO_URL: string
+  RELAY_TURSO_TOKEN: string
+  APP_TURSO_URL: string
+  APP_TURSO_TOKEN: string
   RELAY_DO: DurableObjectNamespace
   RELAY_NAME: string
   RELAY_DESCRIPTION: string

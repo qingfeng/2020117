@@ -1,78 +1,64 @@
+import type { Client } from '@libsql/client'
 import type { NostrEvent, NostrFilter } from './types'
 import { isReplaceable, isParameterizedReplaceable, isEphemeral } from './types'
 
 /**
- * Save an event to D1. Handles replaceable/parameterized-replaceable logic.
+ * Save an event to libSQL. Handles replaceable/parameterized-replaceable logic.
  * Returns true if saved (new), false if duplicate or older.
  */
-export async function saveEvent(db: D1Database, event: NostrEvent): Promise<boolean> {
-  // Don't store ephemeral events
+export async function saveEvent(db: Client, event: NostrEvent): Promise<boolean> {
   if (isEphemeral(event.kind)) return false
 
-  // Check duplicate (pre-flight to avoid unnecessary work downstream)
-  const existing = await db
-    .prepare('SELECT id FROM events WHERE id = ?')
-    .bind(event.id)
-    .first()
-  if (existing) return false
+  const existing = await db.execute({ sql: 'SELECT id FROM events WHERE id = ?', args: [event.id] })
+  if (existing.rows.length > 0) return false
 
-
-
-  // Replaceable events: delete older versions
   if (isReplaceable(event.kind)) {
-    const older = await db
-      .prepare('SELECT id, created_at FROM events WHERE pubkey = ? AND kind = ? LIMIT 1')
-      .bind(event.pubkey, event.kind)
-      .first<{ id: string; created_at: number }>()
-
-    if (older) {
-      if (older.created_at > event.created_at) return false // incoming is older
-      // Delete old version
-      await db.prepare('DELETE FROM event_tags WHERE event_id = ?').bind(older.id).run()
-      await db.prepare('DELETE FROM events WHERE id = ?').bind(older.id).run()
+    const older = await db.execute({
+      sql: 'SELECT id, created_at FROM events WHERE pubkey = ? AND kind = ? LIMIT 1',
+      args: [event.pubkey, event.kind],
+    })
+    if (older.rows.length > 0) {
+      const row = older.rows[0] as any
+      if (row.created_at > event.created_at) return false
+      await db.batch([
+        { sql: 'DELETE FROM event_tags WHERE event_id = ?', args: [row.id] },
+        { sql: 'DELETE FROM events WHERE id = ?', args: [row.id] },
+      ])
     }
   }
 
-  // Parameterized replaceable: (kind, pubkey, d-tag) unique
   if (isParameterizedReplaceable(event.kind)) {
     const dTag = event.tags.find(t => t[0] === 'd')?.[1] || ''
-    const older = await db
-      .prepare(`
-        SELECT e.id, e.created_at FROM events e
+    const older = await db.execute({
+      sql: `SELECT e.id, e.created_at FROM events e
         JOIN event_tags et ON et.event_id = e.id AND et.tag_name = 'd' AND et.tag_value = ?
-        WHERE e.pubkey = ? AND e.kind = ?
-        LIMIT 1
-      `)
-      .bind(dTag, event.pubkey, event.kind)
-      .first<{ id: string; created_at: number }>()
-
-    if (older) {
-      if (older.created_at > event.created_at) return false
-      await db.prepare('DELETE FROM event_tags WHERE event_id = ?').bind(older.id).run()
-      await db.prepare('DELETE FROM events WHERE id = ?').bind(older.id).run()
+        WHERE e.pubkey = ? AND e.kind = ? LIMIT 1`,
+      args: [dTag, event.pubkey, event.kind],
+    })
+    if (older.rows.length > 0) {
+      const row = older.rows[0] as any
+      if (row.created_at > event.created_at) return false
+      await db.batch([
+        { sql: 'DELETE FROM event_tags WHERE event_id = ?', args: [row.id] },
+        { sql: 'DELETE FROM events WHERE id = ?', args: [row.id] },
+      ])
     }
   }
 
-  // Handle kind 5 deletion events
   if (event.kind === 5) {
     await processDeletion(db, event)
   }
 
-  // Insert event — use OR IGNORE to handle race conditions between concurrent connections
-  const insertResult = await db
-    .prepare('INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig)
-    .run()
-  if (!insertResult.meta.changes) return false // another connection won the race
+  const insertResult = await db.execute({
+    sql: 'INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    args: [event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig],
+  })
+  if (!insertResult.rowsAffected) return false
 
-  // Index tags (single-letter tags with values)
-  const tagInserts: D1PreparedStatement[] = []
+  const tagInserts: { sql: string; args: any[] }[] = []
   for (const tag of event.tags) {
     if (tag.length >= 2 && tag[0].length === 1) {
-      tagInserts.push(
-        db.prepare('INSERT INTO event_tags (event_id, tag_name, tag_value) VALUES (?, ?, ?)')
-          .bind(event.id, tag[0], tag[1])
-      )
+      tagInserts.push({ sql: 'INSERT INTO event_tags (event_id, tag_name, tag_value) VALUES (?, ?, ?)', args: [event.id, tag[0], tag[1]] })
     }
   }
   if (tagInserts.length > 0) {
@@ -82,165 +68,97 @@ export async function saveEvent(db: D1Database, event: NostrEvent): Promise<bool
   return true
 }
 
-/**
- * Process kind 5 deletion: delete events referenced by e-tags if authored by same pubkey
- */
-async function processDeletion(db: D1Database, event: NostrEvent): Promise<void> {
+async function processDeletion(db: Client, event: NostrEvent): Promise<void> {
   const eTagIds = event.tags.filter(t => t[0] === 'e').map(t => t[1])
   for (const targetId of eTagIds) {
-    const target = await db
-      .prepare('SELECT pubkey FROM events WHERE id = ?')
-      .bind(targetId)
-      .first<{ pubkey: string }>()
-    if (target && target.pubkey === event.pubkey) {
-      await db.prepare('DELETE FROM event_tags WHERE event_id = ?').bind(targetId).run()
-      await db.prepare('DELETE FROM events WHERE id = ?').bind(targetId).run()
+    const target = await db.execute({ sql: 'SELECT pubkey FROM events WHERE id = ?', args: [targetId] })
+    if (target.rows.length > 0 && (target.rows[0] as any).pubkey === event.pubkey) {
+      await db.batch([
+        { sql: 'DELETE FROM event_tags WHERE event_id = ?', args: [targetId] },
+        { sql: 'DELETE FROM events WHERE id = ?', args: [targetId] },
+      ])
     }
   }
 }
 
-/**
- * Query events matching a NIP-01 filter
- */
-export async function queryEvents(db: D1Database, filter: NostrFilter): Promise<NostrEvent[]> {
+export async function queryEvents(db: Client, filter: NostrFilter): Promise<NostrEvent[]> {
   const conditions: string[] = []
   const binds: any[] = []
-  let needsTagJoin = false
 
   if (filter.ids && filter.ids.length > 0) {
     conditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`)
     binds.push(...filter.ids)
   }
-
   if (filter.authors && filter.authors.length > 0) {
     conditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`)
     binds.push(...filter.authors)
   }
-
   if (filter.kinds && filter.kinds.length > 0) {
     conditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`)
     binds.push(...filter.kinds)
   }
+  if (filter.since) { conditions.push('e.created_at >= ?'); binds.push(filter.since) }
+  if (filter.until) { conditions.push('e.created_at <= ?'); binds.push(filter.until) }
 
-  if (filter.since) {
-    conditions.push('e.created_at >= ?')
-    binds.push(filter.since)
-  }
-
-  if (filter.until) {
-    conditions.push('e.created_at <= ?')
-    binds.push(filter.until)
-  }
-
-  // Tag filters: #e, #p, #a, #t, #d
-  const tagFilters: [string, string[]][] = []
   for (const key of Object.keys(filter) as (keyof NostrFilter)[]) {
     if (typeof key === 'string' && key.startsWith('#') && key.length === 2) {
       const tagName = key[1]
       const values = filter[key] as string[] | undefined
       if (values && values.length > 0) {
-        tagFilters.push([tagName, values])
+        const placeholders = values.map(() => '?').join(',')
+        conditions.push(`EXISTS (SELECT 1 FROM event_tags et WHERE et.event_id = e.id AND et.tag_name = ? AND et.tag_value IN (${placeholders}))`)
+        binds.push(tagName, ...values)
       }
     }
   }
 
-  // Each tag filter is a separate EXISTS subquery
-  for (const [tagName, values] of tagFilters) {
-    const placeholders = values.map(() => '?').join(',')
-    conditions.push(`EXISTS (SELECT 1 FROM event_tags et WHERE et.event_id = e.id AND et.tag_name = ? AND et.tag_value IN (${placeholders}))`)
-    binds.push(tagName, ...values)
-  }
-
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
   const limit = Math.min(filter.limit || 500, 500)
-
-  const sql = `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e ${where} ORDER BY e.created_at DESC LIMIT ?`
   binds.push(limit)
 
-  const stmt = db.prepare(sql)
-  const result = await stmt.bind(...binds).all<{
-    id: string; pubkey: string; created_at: number; kind: number; tags: string; content: string; sig: string
-  }>()
+  const result = await db.execute({
+    sql: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e ${where} ORDER BY e.created_at DESC LIMIT ?`,
+    args: binds,
+  })
 
-  return (result.results || []).map(row => ({
-    id: row.id,
-    pubkey: row.pubkey,
-    created_at: row.created_at,
-    kind: row.kind,
-    tags: JSON.parse(row.tags),
-    content: row.content,
-    sig: row.sig,
+  return result.rows.map((row: any) => ({
+    id: row.id, pubkey: row.pubkey, created_at: row.created_at,
+    kind: row.kind, tags: JSON.parse(row.tags), content: row.content, sig: row.sig,
   }))
 }
 
-/**
- * Check if a pubkey belongs to a registered user or group (shared D1)
- */
-export async function isAllowedPubkey(appDb: D1Database, pubkey: string): Promise<boolean> {
-  const user = await appDb
-    .prepare('SELECT id FROM user WHERE nostr_pubkey = ?')
-    .bind(pubkey)
-    .first()
-  if (user) return true
-
-  const group = await appDb
-    .prepare('SELECT id FROM "group" WHERE nostr_pubkey = ?')
-    .bind(pubkey)
-    .first()
-  return !!group
+export async function isAllowedPubkey(appDb: Client, pubkey: string): Promise<boolean> {
+  const user = await appDb.execute({ sql: 'SELECT id FROM user WHERE nostr_pubkey = ?', args: [pubkey] })
+  if (user.rows.length > 0) return true
+  const group = await appDb.execute({ sql: 'SELECT id FROM "group" WHERE nostr_pubkey = ?', args: [pubkey] })
+  return group.rows.length > 0
 }
 
-/**
- * Check if a pubkey has zapped the relay (Kind 9735 with matching zap request pubkey).
- * Looks for a zap receipt (#p contains relayPubkey) whose description tag
- * contains a zap request JSON with the sender's pubkey.
- */
-export async function hasZappedRelay(db: D1Database, senderPubkey: string, relayPubkey: string): Promise<boolean> {
-  // Find Kind 9735 events that tag the relay pubkey
-  const rows = await db
-    .prepare(`
-      SELECT e.tags FROM events e
+export async function hasZappedRelay(db: Client, senderPubkey: string, relayPubkey: string): Promise<boolean> {
+  const rows = await db.execute({
+    sql: `SELECT e.tags FROM events e
       JOIN event_tags et ON et.event_id = e.id AND et.tag_name = 'p' AND et.tag_value = ?
-      WHERE e.kind = 9735
-      ORDER BY e.created_at DESC
-      LIMIT 50
-    `)
-    .bind(relayPubkey)
-    .all<{ tags: string }>()
-
-  for (const row of rows.results || []) {
+      WHERE e.kind = 9735 ORDER BY e.created_at DESC LIMIT 50`,
+    args: [relayPubkey],
+  })
+  for (const row of rows.rows as any[]) {
     try {
       const tags: string[][] = JSON.parse(row.tags)
       const descTag = tags.find(t => t[0] === 'description')
-      if (!descTag || !descTag[1]) continue
+      if (!descTag?.[1]) continue
       const zapRequest = JSON.parse(descTag[1])
       if (zapRequest.pubkey === senderPubkey) return true
-    } catch {
-      continue
-    }
+    } catch { continue }
   }
   return false
 }
 
-/**
- * Prune old events (keep recent, protect metadata kinds)
- *
- * Special rule for DVM job requests (kind 5000-5999):
- * - If a job has NO corresponding result (kind 6000-6999 with #e pointing to it),
- *   protect it for an extra 30 days so providers can still find and fulfill it.
- * - Fulfilled jobs (have a result) are pruned on the normal schedule.
- */
-export async function pruneOldEvents(db: D1Database, maxAgeDays: number = 90): Promise<number> {
+export async function pruneOldEvents(db: Client, maxAgeDays: number = 90): Promise<number> {
   const cutoff = Math.floor(Date.now() / 1000) - maxAgeDays * 86400
-  // Unfulfilled job requests get 30 extra days beyond maxAgeDays
   const jobCutoff = cutoff - 30 * 86400
-  // Don't delete kind 0 (metadata), 3 (contacts), 10002 (relay list), 34550 (community)
   const protectedKinds = [0, 3, 10002, 34550]
   const placeholders = protectedKinds.map(() => '?').join(',')
 
-  // Build the delete condition:
-  // Delete if: old enough AND not a protected kind AND not an unfulfilled job request
-  // An unfulfilled 5xxx is one where no 6xxx event has an #e tag pointing to it.
   const deleteCondition = `
     created_at < ?
     AND kind NOT IN (${placeholders})
@@ -255,17 +173,9 @@ export async function pruneOldEvents(db: D1Database, maxAgeDays: number = 90): P
       )
     )
   `
+  const args = [cutoff, ...protectedKinds, jobCutoff]
 
-  // Delete tags first (same condition applied via subquery)
-  await db
-    .prepare(`DELETE FROM event_tags WHERE event_id IN (SELECT id FROM events WHERE ${deleteCondition})`)
-    .bind(cutoff, ...protectedKinds, jobCutoff)
-    .run()
-
-  const result = await db
-    .prepare(`DELETE FROM events WHERE ${deleteCondition}`)
-    .bind(cutoff, ...protectedKinds, jobCutoff)
-    .run()
-
-  return result.meta?.changes || 0
+  await db.execute({ sql: `DELETE FROM event_tags WHERE event_id IN (SELECT id FROM events WHERE ${deleteCondition})`, args })
+  const result = await db.execute({ sql: `DELETE FROM events WHERE ${deleteCondition}`, args })
+  return result.rowsAffected || 0
 }

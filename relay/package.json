@@ -8,6 +8,7 @@
     "db:init": "wrangler d1 execute 2020117-relay --remote --file=schema.sql"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.2",
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.7.1"
   },

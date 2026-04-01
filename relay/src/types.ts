@@ -27,6 +27,8 @@ export interface Env {
   RELAY_TURSO_TOKEN: string
   APP_TURSO_URL: string
   APP_TURSO_TOKEN: string
+  D1?: D1Database
+  SQLITE_PATH?: string
   RELAY_DO: DurableObjectNamespace
   RELAY_NAME: string
   RELAY_DESCRIPTION: string

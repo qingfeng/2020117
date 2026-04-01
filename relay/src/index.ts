@@ -1,6 +1,7 @@
-import { createClient } from '@libsql/client/http'
+import { createClient } from '@libsql/client/web'
 import type { Env } from './types'
 import { pruneOldEvents } from './db'
+import { libsqlAdapter, d1Adapter } from './db-adapter'
 
 export { RelayDO } from './relay-do'
 
@@ -79,7 +80,9 @@ export default {
   // Daily maintenance: prune old events
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     try {
-      const db = createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN })
+      const db = env.D1
+        ? d1Adapter(env.D1)
+        : libsqlAdapter(createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN }))
       const deleted = await pruneOldEvents(db, 90)
       if (deleted > 0) {
         console.log(`[Maintenance] Pruned ${deleted} old events`)

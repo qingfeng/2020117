@@ -1,9 +1,10 @@
-import type { Client } from '@libsql/client'
-import { createClient } from '@libsql/client/http'
+import { createClient } from '@libsql/client/web'
 import type { NostrEvent, NostrFilter, Env } from './types'
 import { isEphemeral, isAllowedKind, checkPow } from './types'
 import { verifyEvent } from './crypto'
 import { saveEvent, queryEvents } from './db'
+import type { DbAdapter } from './db-adapter'
+import { libsqlAdapter, d1Adapter } from './db-adapter'
 
 interface Session {
   subscriptions: Map<string, NostrFilter[]>
@@ -17,15 +18,18 @@ interface Session {
 export class RelayDO implements DurableObject {
   private sessions = new Map<WebSocket, Session>()
   private env: Env
-  private db: Client
-  private appDb: Client
+  private db: DbAdapter
+  private appDb: DbAdapter
   private registeredPubkeys = new Set<string>()
   private pubkeyCacheExpiry = 0
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
-    this.db = createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN })
-    this.appDb = createClient({ url: env.APP_TURSO_URL, authToken: env.APP_TURSO_TOKEN })
+    // Select DB backend: D1 binding > Turso remote
+    this.db = env.D1
+      ? d1Adapter(env.D1)
+      : libsqlAdapter(createClient({ url: env.RELAY_TURSO_URL, authToken: env.RELAY_TURSO_TOKEN }))
+    this.appDb = libsqlAdapter(createClient({ url: env.APP_TURSO_URL, authToken: env.APP_TURSO_TOKEN }))
     // Restore hibernated sessions (with subscriptions from WebSocket attachments)
     for (const ws of this.state.getWebSockets()) {
       const subs = new Map<string, NostrFilter[]>()
@@ -265,12 +269,12 @@ export class RelayDO implements DurableObject {
     // Source 1: DVM-active pubkeys from relay's own events DB
     // Entry ticket = having DVM activity (job requests, results, feedback, heartbeats, service registrations)
     try {
-      const dvmResult = await this.db.execute(
-        `SELECT DISTINCT pubkey FROM events WHERE
+      const dvmResult = await this.db.execute({
+        sql: `SELECT DISTINCT pubkey FROM events WHERE
           (kind >= 5000 AND kind <= 5999) OR
           (kind >= 6000 AND kind <= 6999) OR
-          kind IN (7000, 30333, 31990)`
-      )
+          kind IN (7000, 30333, 31990)`,
+      })
       for (const row of dvmResult.rows as any[]) {
         if (row.pubkey) this.registeredPubkeys.add(row.pubkey)
       }
@@ -280,9 +284,9 @@ export class RelayDO implements DurableObject {
 
     // Source 2: 2020117.xyz domain users from platform DB (always trusted)
     try {
-      const domainResult = await this.appDb.execute(
-        `SELECT nostr_pubkey FROM user WHERE nip05_enabled = 1 AND nostr_pubkey IS NOT NULL`
-      )
+      const domainResult = await this.appDb.execute({
+        sql: `SELECT nostr_pubkey FROM user WHERE nip05_enabled = 1 AND nostr_pubkey IS NOT NULL`,
+      })
       for (const row of domainResult.rows as any[]) {
         if (row.nostr_pubkey) this.registeredPubkeys.add(row.nostr_pubkey)
       }

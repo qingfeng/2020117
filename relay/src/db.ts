@@ -1,4 +1,4 @@
-import type { Client } from '@libsql/client'
+import type { DbAdapter } from './db-adapter'
 import type { NostrEvent, NostrFilter } from './types'
 import { isReplaceable, isParameterizedReplaceable, isEphemeral } from './types'
 
@@ -6,7 +6,7 @@ import { isReplaceable, isParameterizedReplaceable, isEphemeral } from './types'
  * Save an event to libSQL. Handles replaceable/parameterized-replaceable logic.
  * Returns true if saved (new), false if duplicate or older.
  */
-export async function saveEvent(db: Client, event: NostrEvent): Promise<boolean> {
+export async function saveEvent(db: DbAdapter, event: NostrEvent): Promise<boolean> {
   if (isEphemeral(event.kind)) return false
 
   const existing = await db.execute({ sql: 'SELECT id FROM events WHERE id = ?', args: [event.id] })
@@ -68,7 +68,7 @@ export async function saveEvent(db: Client, event: NostrEvent): Promise<boolean>
   return true
 }
 
-async function processDeletion(db: Client, event: NostrEvent): Promise<void> {
+async function processDeletion(db: DbAdapter, event: NostrEvent): Promise<void> {
   const eTagIds = event.tags.filter(t => t[0] === 'e').map(t => t[1])
   for (const targetId of eTagIds) {
     const target = await db.execute({ sql: 'SELECT pubkey FROM events WHERE id = ?', args: [targetId] })
@@ -81,7 +81,7 @@ async function processDeletion(db: Client, event: NostrEvent): Promise<void> {
   }
 }
 
-export async function queryEvents(db: Client, filter: NostrFilter): Promise<NostrEvent[]> {
+export async function queryEvents(db: DbAdapter, filter: NostrFilter): Promise<NostrEvent[]> {
   const conditions: string[] = []
   const binds: any[] = []
 
@@ -127,14 +127,14 @@ export async function queryEvents(db: Client, filter: NostrFilter): Promise<Nost
   }))
 }
 
-export async function isAllowedPubkey(appDb: Client, pubkey: string): Promise<boolean> {
+export async function isAllowedPubkey(appDb: DbAdapter, pubkey: string): Promise<boolean> {
   const user = await appDb.execute({ sql: 'SELECT id FROM user WHERE nostr_pubkey = ?', args: [pubkey] })
   if (user.rows.length > 0) return true
   const group = await appDb.execute({ sql: 'SELECT id FROM "group" WHERE nostr_pubkey = ?', args: [pubkey] })
   return group.rows.length > 0
 }
 
-export async function hasZappedRelay(db: Client, senderPubkey: string, relayPubkey: string): Promise<boolean> {
+export async function hasZappedRelay(db: DbAdapter, senderPubkey: string, relayPubkey: string): Promise<boolean> {
   const rows = await db.execute({
     sql: `SELECT e.tags FROM events e
       JOIN event_tags et ON et.event_id = e.id AND et.tag_name = 'p' AND et.tag_value = ?
@@ -153,7 +153,7 @@ export async function hasZappedRelay(db: Client, senderPubkey: string, relayPubk
   return false
 }
 
-export async function pruneOldEvents(db: Client, maxAgeDays: number = 90): Promise<number> {
+export async function pruneOldEvents(db: DbAdapter, maxAgeDays: number = 90): Promise<number> {
   const cutoff = Math.floor(Date.now() / 1000) - maxAgeDays * 86400
   const jobCutoff = cutoff - 30 * 86400
   const protectedKinds = [0, 3, 10002, 34550]

@@ -3,7 +3,6 @@ import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
 import { pageLayout } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
-import { NOSTR_CLIENT_JS } from '../lib/nostr-client'
 
 const router = new Hono<AppContext>()
 
@@ -11,7 +10,6 @@ router.get('/dvm/market', (c) => {
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
   const lang = c.req.query('lang')
   const t = getI18n(lang)
-  const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
   const activeStatus = ['open', 'processing', 'completed'].includes(c.req.query('status') || '') ? c.req.query('status')! : 'open'
   const currentPage = Math.max(1, Number(c.req.query('page')) || 1)
   const langQs = lang ? `&lang=${lang}` : ''
@@ -81,66 +79,51 @@ router.get('/dvm/market', (c) => {
 
   const scripts = `<script>
 ${BEAM_AVATAR_JS}
-${NOSTR_CLIENT_JS}
-nostrRelay.init('${relayUrl}');
-
+const I18N = {
+  loading: '${t.marketLoading}',
+  emptyOpen: '${t.marketEmptyOpen}',
+  emptyProcessing: '${t.marketEmptyProcessing}',
+  emptyCompleted: '${t.marketEmptyCompleted}',
+  page: '${t.marketPage}',
+};
 const KIND_LABELS = {
   5100:'Text Processing', 5200:'Image Gen', 5250:'Text-to-Speech',
   5300:'Content Discovery', 5301:'Speech-to-Text', 5302:'Translation', 5303:'Summarization',
-  6100:'Analysis Result', 6200:'Image Result', 6250:'Speech Result',
-  6300:'Discovery Result', 6302:'Translation Result', 6303:'Analysis Result',
 };
 function kindLabel(k) { return KIND_LABELS[k] || 'Kind ' + k; }
 
 function timeAgo(ts) {
-  const s = Math.floor((Date.now()/1000) - ts);
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
   if (s < 60) return s + 's ago';
   if (s < 3600) return Math.floor(s/60) + 'm ago';
   if (s < 86400) return Math.floor(s/3600) + 'h ago';
   return Math.floor(s/86400) + 'd ago';
 }
+
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-var profileCache = {};
-var jobStore = { requests: [], results: [] };
-var currentTab = 'requests';
-
-function getDisplayName(pubkey) {
-  var p = profileCache[pubkey] || {};
-  return p.name || (pubkey.slice(0,8) + '\u2026');
-}
-function getAvatar(pubkey, size) {
-  var p = profileCache[pubkey] || {};
-  return '<img src="' + esc(p.picture || beamAvatar(pubkey, size)) + '" class="job-avatar" loading="lazy" alt="">';
-}
-
-function eventToJob(ev) {
-  var iTag = ev.tags.find(function(t){return t[0]==='i';});
-  var input = iTag ? (iTag[1]||'') : (ev.content||'');
-  var bidTag = ev.tags.find(function(t){return t[0]==='bid';});
-  var bid_sats = bidTag ? Math.floor(parseInt(bidTag[1]||'0',10)/1000) : 0;
-  return {
-    id: ev.id,
-    kind: ev.kind,
-    status: ev.kind >= 6000 ? 'completed' : 'open',
-    input: input.slice(0, 200),
-    bid_sats: bid_sats,
-    created_at: ev.created_at,
-    pubkey: ev.pubkey,
+function statusBadge(status) {
+  const map = {
+    open: '<span class="job-status status-open">open</span>',
+    processing: '<span class="job-status status-processing">processing</span>',
+    completed: '<span class="job-status status-completed">completed</span>',
+    error: '<span class="job-status status-error">error</span>',
   };
+  return map[status] || '<span class="job-status status-open">' + esc(status) + '</span>';
 }
 
 function renderJob(j) {
-  const name = getDisplayName(j.pubkey);
-  const avatar = getAvatar(j.pubkey, 38);
-  const input = j.input || '';
+  const c = j.customer || {};
+  const name = c.display_name || c.username || (c.pubkey ? c.pubkey.slice(0,10)+'\u2026' : '?');
+  const avatarAlt = esc(c.display_name || c.username || '');
+  const avatar = '<img src="' + esc(c.avatar_url || beamAvatar(c.username || c.pubkey || 'x', 38)) + '" class="job-avatar" loading="lazy" alt="' + avatarAlt + '">';
+  const actorHref = c.username ? '/agents/' + esc(c.username) : '#';
+  const input = (j.input || '').slice(0, 200);
   const bid = j.bid_sats ? '<span class="job-bid">\u26a1 ' + j.bid_sats + ' sats</span>' : '';
-  const jobHref = '/jobs/' + esc(j.id);
-  const statusLabel = j.status === 'completed' ? '<span class="job-status status-completed">completed</span>'
-    : '<span class="job-status status-open">open</span>';
-  return '<a href="' + jobHref + '" class="job-row">'
+  return '<a href="/jobs/' + esc(j.id) + '" class="job-row">'
     + avatar
     + '<div class="job-body">'
     + '<div class="job-header">'
@@ -149,83 +132,64 @@ function renderJob(j) {
     + '<span class="job-time">' + timeAgo(j.created_at) + '</span>'
     + '</div>'
     + (input ? '<div class="job-input">' + esc(input) + '</div>' : '')
-    + '<div class="job-footer">' + statusLabel + bid + '</div>'
+    + '<div class="job-footer">' + statusBadge(j.status) + bid + '</div>'
     + '</div></a>';
 }
 
-function renderJobs(tab) {
-  var list = document.getElementById('job-list');
-  var t = tab || currentTab;  // use passed tab, fall back to currentTab
-  var jobs = t === 'results' ? jobStore.results : jobStore.requests;
-  if (!jobs.length) {
-    list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">No ' + t + '</div>';
-    return;
-  }
-  list.innerHTML = jobs.sort(function(a,b){return b.created_at-a.created_at;}).map(renderJob).join('');
+const LIMIT = 30;
+const params = new URLSearchParams(location.search);
+const currentStatus = params.get('status') || 'open';
+const currentPage = Math.max(1, parseInt(params.get('page') || '1'));
+const langParam = params.get('lang') ? '&lang=' + params.get('lang') : '';
+
+function pageHref(p) {
+  return '/dvm/market?status=' + currentStatus + '&page=' + p + langParam;
 }
 
-function loadJobs(tab) {
-  currentTab = tab || 'requests';
-  var targetTab = currentTab;
-  var list = document.getElementById('job-list');
-  list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">${t.marketLoading}</div>';
-
-  var requestKinds = [5100,5200,5250,5300,5301,5302,5303];
-  var resultKinds  = [6100,6200,6250,6300,6302,6303];
-  var loadKinds = targetTab === 'results' ? resultKinds : requestKinds;
-  var batchPubkeys = [];
-
-  nostrRelay.subscribe(
-    [{ kinds: loadKinds, limit: 50 }],
-    function(ev) {
-      var job = eventToJob(ev);
-      if (targetTab === 'results') {
-        if (!jobStore.results.find(function(j){return j.id===ev.id;})) jobStore.results.push(job);
-      } else {
-        if (!jobStore.requests.find(function(j){return j.id===ev.id;})) jobStore.requests.push(job);
-      }
-      if (batchPubkeys.indexOf(ev.pubkey) < 0) batchPubkeys.push(ev.pubkey);
-    },
-    function() {
-      if (batchPubkeys.length) {
-        nostrRelay.subscribe(
-          [{ kinds: [0], authors: batchPubkeys, limit: batchPubkeys.length }],
-          function(ev) { try { var p = JSON.parse(ev.content); profileCache[ev.pubkey] = p; } catch(e) {} },
-          function() { renderJobs(targetTab); }
-        );
-      } else {
-        renderJobs(targetTab);
-      }
+async function loadJobs() {
+  const list = document.getElementById('job-list');
+  list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">' + I18N.loading + '</div>';
+  const url = '/api/dvm/market?status=' + currentStatus + '&limit=' + LIMIT + '&page=' + currentPage;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const jobs = data.jobs || [];
+    const meta = data.meta || {};
+    list.innerHTML = jobs.length
+      ? jobs.map(renderJob).join('')
+      : '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">' + ({open:I18N.emptyOpen,processing:I18N.emptyProcessing,completed:I18N.emptyCompleted}[currentStatus]||I18N.emptyOpen) + '</div>';
+    const lastPage = meta.last_page || (meta.total ? Math.ceil(meta.total / LIMIT) : null);
+    document.getElementById('pg-info').textContent = I18N.page + ' ' + currentPage + (lastPage ? ' / ' + lastPage : '');
+    const prevEl = document.getElementById('pg-prev');
+    const nextEl = document.getElementById('pg-next');
+    if (currentPage <= 1) { prevEl.classList.add('pg-disabled'); prevEl.removeAttribute('href'); }
+    if (lastPage && currentPage >= lastPage) { nextEl.classList.add('pg-disabled'); nextEl.removeAttribute('href'); }
+    else if (!lastPage && jobs.length < LIMIT) { nextEl.classList.add('pg-disabled'); nextEl.removeAttribute('href'); }
+    else { nextEl.href = pageHref(currentPage + 1); }
+    if (meta.total != null) {
+      const el = document.getElementById('count-' + currentStatus);
+      if (el) el.textContent = meta.total;
     }
-  );
+  } catch(e) {
+    list.innerHTML = '<div style="padding:20px;color:var(--c-error)">Failed to load</div>';
+  }
 }
 
-// Tab switching
-document.querySelectorAll('.status-tab').forEach(function(btn) {
-  btn.onclick = function(e) {
-    e.preventDefault();
-    var tab = btn.classList.contains('tab-open') ? 'requests' : 'results';
-    document.querySelectorAll('.status-tab').forEach(function(b){b.classList.remove('active');});
-    btn.classList.add('active');
-    loadJobs(tab);
-  };
-});
+async function loadCounts() {
+  const statuses = ['open', 'processing', 'completed'];
+  await Promise.all(statuses.map(async s => {
+    if (s === currentStatus) return;
+    try {
+      const res = await fetch('/api/dvm/market?status=' + s + '&limit=1&page=1');
+      const data = await res.json();
+      const el = document.getElementById('count-' + s);
+      if (el) el.textContent = data.meta?.total ?? 0;
+    } catch {}
+  }));
+}
 
-// Hide processing tab (can't determine from relay)
-var processingTab = document.querySelector('.tab-processing');
-if (processingTab) processingTab.style.display = 'none';
-
-// Update tab labels
-var openLabel = document.querySelector('.tab-open span:last-child');
-if (openLabel) openLabel.textContent = 'Requests';
-var completedLabel = document.querySelector('.tab-completed span:last-child');
-if (completedLabel) completedLabel.textContent = 'Results';
-
-// Hide server-side pager (relay doesn't have page numbers)
-var pager = document.getElementById('pager');
-if (pager) pager.style.display = 'none';
-
-loadJobs('requests');
+loadJobs();
+loadCounts();
 </script>`
 
   return c.html(pageLayout({

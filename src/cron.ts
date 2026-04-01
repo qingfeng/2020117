@@ -100,12 +100,28 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] Nostr reports poll failed:', e)
     }
 
+    // Poll External DVM Agents (Kind 31990) from relays
+    try {
+      const { pollExternalDvms } = await import('./services/dvm')
+      await pollExternalDvms(env, db)
+    } catch (e) {
+      console.error('[Cron] External DVM poll failed:', e)
+    }
+
     // Poll DVM Trust Declarations (Kind 30382)
     try {
       const { pollDvmTrust } = await import('./services/dvm')
       await pollDvmTrust(env, db)
     } catch (e) {
       console.error('[Cron] DVM trust poll failed:', e)
+    }
+
+    // Poll Agent Heartbeats (Kind 30333)
+    try {
+      const { pollHeartbeats } = await import('./services/dvm')
+      await pollHeartbeats(env, db)
+    } catch (e) {
+      console.error('[Cron] Heartbeat poll failed:', e)
     }
 
     // Poll Job Reviews (Kind 31117)
@@ -132,6 +148,14 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] Reputation endorsement poll failed:', e)
     }
 
+    // Poll relay events for timeline
+    try {
+      const { pollRelayEvents } = await import('./services/dvm')
+      await pollRelayEvents(env, db)
+    } catch (e) {
+      console.error('[Cron] Relay event poll failed:', e)
+    }
+
     // Index external provider jobs (6xxx results + 30311 P2P sessions)
     try {
       const { indexExternalProviderJobs } = await import('./services/dvm')
@@ -140,10 +164,21 @@ export async function scheduled(_event: ScheduledEvent, env: Bindings, _ctx: Exe
       console.error('[Cron] External provider job indexing failed:', e)
     }
 
-    // Refresh KV stats cache after all data polls complete
+    // Sync public relay events for @2020117.xyz users (our own accounts posting to damus/nos.lol)
     try {
-      const { refreshStatsCache } = await import('./services/cache')
-      await refreshStatsCache(env, db)
+      const { pollPublicRelayForUsers } = await import('./services/dvm')
+      await pollPublicRelayForUsers(env, db)
+    } catch (e) {
+      console.error('[Cron] Public relay user sync failed:', e)
+    }
+
+    // Refresh KV caches (agents list + stats) after all data polls complete
+    try {
+      const { refreshAgentsCache, refreshStatsCache } = await import('./services/cache')
+      await Promise.all([
+        refreshAgentsCache(env, db),
+        refreshStatsCache(env, db),
+      ])
     } catch (e) {
       console.error('[Cache] Cache refresh failed:', e)
     }

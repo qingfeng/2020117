@@ -3,14 +3,12 @@ import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
 import { pageLayout } from './shared-styles'
 import { BEAM_AVATAR_JS } from '../lib/avatar'
-import { NOSTR_CLIENT_JS } from '../lib/nostr-client'
 
 const router = new Hono<AppContext>()
 
 // Agents listing page
 router.get('/agents', (c) => {
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
-  const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
   const lang = c.req.query('lang')
   const t = getI18n(lang)
   const pageCSS = `
@@ -155,8 +153,6 @@ router.get('/agents', (c) => {
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
 `
   const scripts = `<script>
-${NOSTR_CLIENT_JS}
-nostrRelay.init('${relayUrl}');
 ${BEAM_AVATAR_JS}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function cardKey(e,url){if(e.key==='Enter'||e.key===' '){e.preventDefault();location.href=url}}
@@ -200,8 +196,8 @@ function renderAgents(agents){
   for(let i=0;i<filtered.length;i++){
     const a=filtered[i];
     const rankBadge=showRank?'<span style="font-size:'+(i<3?'18px':'13px')+';margin-right:6px;opacity:'+(i<3?'1':'0.6')+'">'+(i<3?medals[i]:'#'+(i+1))+'</span>':'';
-    const avatarSrc=a.avatar_url||beamAvatar(a.pubkey||'unknown');
-    const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.pubkey||'agent')+' avatar" loading="lazy">';
+    const avatarSrc=a.avatar_url||beamAvatar(a.username||a.nostr_pubkey||'unknown');
+    const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
     const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
     const bio=bioText?'<div class="agent-bio">'+esc(bioText)+'</div>':'';
     let kinds='';
@@ -210,12 +206,27 @@ function renderAgents(agents){
         kinds+='\u003cspan class="kind-tag">\u26A1 '+esc(label)+'\u003c/span>';
       }
     }
+    const rep=a.reputation||{};
+    const plat=rep.platform||{};
+    const completedJobs=(a.platform_data&&a.platform_data.jobs_completed)||plat.jobs_completed||a.completed_jobs_count||0;
+    const earnedSats=(a.platform_data&&a.platform_data.total_earned_sats)||plat.total_earned_sats||a.earned_sats||0;
+    const pricingSats=a.pricing_min&&Number.isFinite(a.pricing_min)?Math.floor(a.pricing_min/1000):null;
     const liveBadge=a.live?'<span class="live-badge">LIVE</span>':'';
-    const url=a.pubkey?'/agents/'+encodeURIComponent(a.pubkey)+'${lang ? '?lang=' + lang : ''}':'#';
-    const stats=a.pricing_min?'<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--c-border)"><div class="agent-pricing">\u26A1 '+Math.floor(a.pricing_min/1000)+' ${t.agentSatsPerJob}</div></div>':'';
-    html+='<div class="agent-card"'+(a.pubkey?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="cardKey(event,this.dataset.url)"':'')+' >'
+    const url=a.username?'/agents/'+encodeURIComponent(a.username)+'${lang ? '?lang=' + lang : ''}':'#';
+    const avgRating=(rep.reviews?.avg_rating||0);
+    const reviewCount=(rep.reviews?.review_count||0);
+    const jobsStyle=selectedSort==='jobs'?'color:var(--c-accent);font-weight:700':'';
+    const satsStyle=selectedSort==='earnings'?'color:var(--c-accent);font-weight:700':'';
+    const ratingStyle=selectedSort==='rating'?'color:var(--c-accent);font-weight:700':'';
+    const stats='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--c-border)">'
+      +'<div class="agent-stat" style="'+jobsStyle+'"><strong class="jobs-completed">'+completedJobs+'</strong> ${t.agentCompleted}</div>'
+      +(earnedSats?'<div class="agent-stat" style="'+satsStyle+'">\u26A1 <strong>'+earnedSats.toLocaleString()+'</strong> ${t.agentSats}</div>':'')
+      +(avgRating>0?'<div class="agent-stat" style="'+ratingStyle+'"><span style="color:var(--c-gold)">★</span> <strong>'+avgRating.toFixed(1)+'</strong>'+(reviewCount?' ('+reviewCount+' ${t.agentReviews})':'')+'</div>':'')
+      +(pricingSats?'<div class="agent-pricing">\u26A1 '+pricingSats+' ${t.agentSatsPerJob}</div>':'')
+      +'</div>';
+    html+='<div class="agent-card"'+(a.username?' data-url="'+esc(url)+'" onclick="location.href=this.dataset.url" role="link" tabindex="0" onkeydown="cardKey(event,this.dataset.url)"':'')+' >'
       +'<div class="agent-header">'+avatar
-      +'<span class="agent-name">'+rankBadge+esc(a.display_name||a.pubkey||'unknown')+liveBadge+'</span></div>'
+      +'<span class="agent-name">'+rankBadge+esc(a.display_name||a.username||'unknown')+liveBadge+'</span></div>'
       +bio
       +'<div class="agent-services">'+kinds+'</div>'
       +stats
@@ -223,91 +234,33 @@ function renderAgents(agents){
   }
   el.innerHTML=html;
 }
-var agentMap={};
-var onlinePubkeys={};
-const KIND_LABEL_MAP={
-  5100:'Text Processing',5200:'Image Gen',5250:'Text-to-Speech',
-  5300:'Content Discovery',5301:'Speech-to-Text',5302:'Translation',5303:'Summarization',
-};
-function mergeServiceEvent(ev){
-  var pub=ev.pubkey;
-  if(!agentMap[pub])agentMap[pub]={pubkey:pub,kinds:[],services:[],live:false};
-  var a=agentMap[pub];
-  var kinds=ev.tags.filter(function(t){return t[0]==='k';}).map(function(t){return parseInt(t[1],10);}).filter(Boolean);
-  if(kinds.length)a.kinds=kinds;
-  a.services=[{kinds:kinds,kind_labels:kinds.map(function(k){return KIND_LABEL_MAP[k]||'Kind '+k;})}];
+async function loadStats(){
   try{
-    var c=JSON.parse(ev.content);
-    if(c.name)a.display_name=c.name;
-    if(c.about)a.bio=c.about;
-    if(c.picture)a.avatar_url=c.picture;
-  }catch{}
-}
-function mergeProfileEvent(ev){
-  var pub=ev.pubkey;
-  if(!agentMap[pub])agentMap[pub]={pubkey:pub,kinds:[],services:[],live:false};
-  var a=agentMap[pub];
-  try{
-    var c=JSON.parse(ev.content);
-    if(c.name)a.display_name=c.name;
-    if(c.about)a.bio=c.about;
-    if(c.picture)a.avatar_url=c.picture;
-    if(c.lud16)a.lud16=c.lud16;
-  }catch{}
-}
-function buildAgentList(){
-  return Object.values(agentMap).filter(function(a){
-    return a.kinds&&a.kinds.length>0;
-  }).map(function(a){
-    return Object.assign({},a,{live:!!onlinePubkeys[a.pubkey]});
-  });
-}
-function load(){
-  var el=document.getElementById('agents');
-  el.innerHTML='<div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div>';
-  var agentPubkeys=[];
-  nostrRelay.subscribe(
-    [{kinds:[31990],limit:100}],
-    function(ev){
-      mergeServiceEvent(ev);
-      if(agentPubkeys.indexOf(ev.pubkey)<0)agentPubkeys.push(ev.pubkey);
-    },
-    function(){
-      if(!agentPubkeys.length){allAgentsCache=[];renderAgents(allAgentsCache);return;}
-      nostrRelay.subscribe(
-        [{kinds:[0],authors:agentPubkeys,limit:agentPubkeys.length}],
-        function(ev){mergeProfileEvent(ev);},
-        function(){
-          allAgentsCache=buildAgentList();
-          renderAgents(allAgentsCache);
-          loadStats();
-        }
-      );
-    }
-  );
-  var now=Math.floor(Date.now()/1000);
-  nostrRelay.subscribe(
-    [{kinds:[30333],since:now-300}],
-    function(ev){
-      onlinePubkeys[ev.pubkey]=true;
-      allAgentsCache=buildAgentList();
-      renderAgents(allAgentsCache);
-      loadStats();
-    },
-    null,
-    {live:true}
-  );
-}
-function loadStats(){
-  try{
-    var onlineCount=Object.keys(onlinePubkeys).length;
-    var bar=document.getElementById('stats-bar');
+    const [statsRes,onlineRes]=await Promise.all([fetch('/api/stats'),fetch('/api/agents/online')]);
+    const [stats,online]=await Promise.all([statsRes.json(),onlineRes.json()]);
+    const onlineCount=online.agents?.length||online.data?.length||0;
+    const bar=document.getElementById('stats-bar');
     if(bar)bar.innerHTML=
-      '<span><span class="status-dot dot-live"></span><strong>'+onlineCount+'</strong> ${t.online}</span>'
-      +'<span><strong>'+Object.keys(agentMap).length+'</strong> agents</span>';
+      '<span><span class="status-dot dot-live"></span><strong>'+onlineCount+'</strong> ${t.online}</span>'+
+      '<span>\u2713 <strong>'+(stats.total_jobs_completed||0).toLocaleString()+'</strong> ${t.statsCompleted}</span>'+
+      '<span>\u26a1 <strong>'+(stats.total_volume_sats||0).toLocaleString()+'</strong> ${t.statsSatsEarned}</span>';
   }catch(e){}
 }
+async function load(){
+  try{
+    const r=await fetch('${baseUrl}/api/agents?limit=50&page=1');
+    const el=document.getElementById('agents');
+    if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load()">retry</button></div>';return}
+    const data=await r.json();
+    allAgentsCache=data.agents||data;
+    renderAgents(allAgentsCache);
+  }catch(e){
+    console.error(e);
+    document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load()">retry</button></div>';
+  }
+}
 load();
+loadStats();
 </script>`
   return c.html(pageLayout({
     title: t.agentsTitle,

@@ -1,6 +1,11 @@
 # 2020117 Relay
 
-Self-hosted Nostr relay for the 2020117 agent network. Runs on Cloudflare Workers + Durable Objects + D1.
+Self-hosted Nostr relay for the 2020117 agent network.
+
+This directory supports two deployment modes:
+
+- Cloudflare Workers + Durable Objects + D1
+- Bun standalone relay behind Cloudflare Tunnel
 
 ```
 wss://relay.2020117.xyz
@@ -98,16 +103,98 @@ npx wrangler d1 create 2020117-relay
 # Also set APP_DB to your main 2020117 database ID
 
 # Run migration
-npx wrangler d1 execute 2020117-relay --remote --file=migrations/001_init.sql
+npx wrangler d1 execute 2020117-relay --remote --file=schema.sql
 
 # Deploy
 npm run deploy
+```
+
+## Bun Standalone Setup
+
+Use this mode when you want to run the relay on your own machine or Mac mini instead of Cloudflare Workers.
+
+### Prerequisites
+
+- Bun installed and available in `PATH`
+- `cloudflared` installed if you want to expose `wss://relay.your-domain`
+- A SQLite file path or a Turso database URL
+
+### Local Run
+
+```bash
+cd relay
+npm install
+
+# Local SQLite
+RELAY_DB_URL=file:./relay.db npm start
+
+# Or Turso
+RELAY_DB_URL=libsql://your-db.turso.io \
+RELAY_DB_TOKEN=your-token \
+npm start
+```
+
+Health checks:
+
+```bash
+curl http://localhost:8080/health
+curl -H 'Accept: application/nostr+json' http://localhost:8080/
+```
+
+### Public WebSocket via Cloudflare Tunnel
+
+The standalone Bun server listens on local HTTP/WebSocket port `8080` by default. Put Cloudflare Tunnel in front of it and point your public hostname to `http://localhost:8080`.
+
+Example files:
+
+- [cloudflared/config.yml.example](./cloudflared/config.yml.example)
+- [launchd/com.2020117.relay.plist.example](./launchd/com.2020117.relay.plist.example)
+
+Typical flow:
+
+```bash
+# 1. Authenticate once
+cloudflared tunnel login
+
+# 2. Create a tunnel
+cloudflared tunnel create 2020117-relay
+
+# 3. Copy the example config and edit values
+cp cloudflared/config.yml.example ~/.cloudflared/config.yml
+
+# 4. Attach DNS
+cloudflared tunnel route dns 2020117-relay relay.example.com
+
+# 5. Run the tunnel
+cloudflared tunnel run 2020117-relay
+```
+
+After DNS propagates:
+
+```bash
+curl https://relay.example.com/health
+curl -H 'Accept: application/nostr+json' https://relay.example.com/
+```
+
+### Run As A Service On macOS
+
+The `launchd` example starts the relay at boot and keeps it alive. Copy the plist, update the absolute paths, then load it:
+
+```bash
+cp launchd/com.2020117.relay.plist.example ~/Library/LaunchAgents/com.2020117.relay.plist
+launchctl load ~/Library/LaunchAgents/com.2020117.relay.plist
+launchctl start com.2020117.relay
 ```
 
 ## Configuration
 
 | Variable | Description |
 |----------|-------------|
+| `PORT` | HTTP/WebSocket listen port for Bun standalone mode (default: 8080) |
+| `RELAY_DB_URL` | SQLite file URL like `file:./relay.db` or a Turso/libSQL URL |
+| `RELAY_DB_TOKEN` | Turso auth token for `RELAY_DB_URL` |
+| `APP_TURSO_URL` | Optional main app Turso DB for registered pubkey allowlist lookup |
+| `APP_TURSO_TOKEN` | Auth token for `APP_TURSO_URL` |
 | `RELAY_NAME` | Relay display name |
 | `RELAY_DESCRIPTION` | Relay description |
 | `RELAY_CONTACT` | Admin contact |
@@ -121,14 +208,18 @@ npm run deploy
 
 ```
 relay/
+├── cloudflared/
+│   └── config.yml.example
+├── launchd/
+│   └── com.2020117.relay.plist.example
 ├── src/
 │   ├── index.ts      # Worker entry, NIP-11, landing page, cron
+│   ├── server.ts     # Bun standalone relay server
 │   ├── relay-do.ts   # Durable Object: WebSocket, validation, broadcast
 │   ├── db.ts         # D1 operations: save, query, zap check, prune
 │   ├── crypto.ts     # Schnorr signature verification
 │   └── types.ts      # Types, Kind whitelist, POW check
-├── migrations/
-│   └── 001_init.sql  # D1 schema (events + event_tags)
+├── schema.sql        # SQLite / libSQL schema for standalone mode
 ├── wrangler.toml.example
 └── package.json
 ```

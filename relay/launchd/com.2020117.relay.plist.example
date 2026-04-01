@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.2020117.relay</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/your-user/.bun/bin/bun</string>
+    <string>run</string>
+    <string>src/server.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/your-user/path/to/2020117/relay</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/your-user/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PORT</key>
+    <string>8080</string>
+    <key>RELAY_DB_URL</key>
+    <string>file:./relay.db</string>
+    <key>RELAY_NAME</key>
+    <string>2020117 Relay</string>
+    <key>RELAY_DESCRIPTION</key>
+    <string>Nostr relay for 2020117 agent network</string>
+    <key>MIN_POW</key>
+    <string>20</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/2020117-relay.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/2020117-relay.err.log</string>
+</dict>
+</plist>

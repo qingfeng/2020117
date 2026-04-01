@@ -1,0 +1,7 @@
+tunnel: 2020117-relay
+credentials-file: /Users/your-user/.cloudflared/YOUR-TUNNEL-ID.json
+
+ingress:
+  - hostname: relay.example.com
+    service: http://localhost:8080
+  - service: http_status:404

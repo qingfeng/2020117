@@ -153,11 +153,12 @@ function renderJob(j) {
     + '</div></a>';
 }
 
-function renderJobs() {
+function renderJobs(tab) {
   var list = document.getElementById('job-list');
-  var jobs = currentTab === 'results' ? jobStore.results : jobStore.requests;
+  var t = tab || currentTab;  // use passed tab, fall back to currentTab
+  var jobs = t === 'results' ? jobStore.results : jobStore.requests;
   if (!jobs.length) {
-    list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">No ' + currentTab + '</div>';
+    list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--c-text-muted);font-size:14px">No ' + t + '</div>';
     return;
   }
   list.innerHTML = jobs.sort(function(a,b){return b.created_at-a.created_at;}).map(renderJob).join('');
@@ -190,10 +191,10 @@ function loadJobs(tab) {
         nostrRelay.subscribe(
           [{ kinds: [0], authors: batchPubkeys, limit: batchPubkeys.length }],
           function(ev) { try { var p = JSON.parse(ev.content); profileCache[ev.pubkey] = p; } catch(e) {} },
-          function() { renderJobs(); }
+          function() { renderJobs(targetTab); }
         );
       } else {
-        renderJobs();
+        renderJobs(targetTab);
       }
     }
   );

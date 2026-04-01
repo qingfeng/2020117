@@ -7,37 +7,158 @@ import { renderNoteContent } from '../lib/note-render'
 
 const router = new Hono<AppContext>()
 
+type ResolvedAuthor = {
+  name: string
+  username: string
+  avatarUrl: string | null
+}
+
+function parseProfilePreviewName(preview: string | null | undefined): string | null {
+  if (!preview) return null
+  const dashIdx = preview.indexOf(' — ')
+  return dashIdx > 0 ? preview.slice(0, dashIdx) : preview
+}
+
 router.get('/notes/:eventId', async (c) => {
   const db = c.get('db')
   const baseUrl = c.env.APP_URL || new URL(c.req.url).origin
+  const relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
   const eventId = c.req.param('eventId')
   const lang = c.req.query('lang')
   const t = getI18n(lang)
   const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
 
-  const { relayEvents, users } = await import('../db/schema')
+  const { relayEvents, users, externalDvms } = await import('../db/schema')
   const { pubkeyToNpub, eventIdToNevent } = await import('../services/nostr')
+  const { fetchEventsFromRelay } = await import('../services/relay-io')
+  const relayUrls = [relayUrl, ...(c.env.NOSTR_RELAYS || '').split(',').map((s: string) => s.trim()).filter(Boolean)]
+  const dedupedRelayUrls = [...new Set(relayUrls)].filter(Boolean)
 
-  const result = await db.select({
-    eventId: relayEvents.eventId,
-    kind: relayEvents.kind,
-    pubkey: relayEvents.pubkey,
-    contentPreview: relayEvents.contentPreview,
-    eventCreatedAt: relayEvents.eventCreatedAt,
-  }).from(relayEvents).where(eq(relayEvents.eventId, eventId)).limit(1)
+  const resolveAuthors = async (pubkeys: string[]): Promise<Map<string, ResolvedAuthor>> => {
+    const resolved = new Map<string, ResolvedAuthor>()
+    const uniquePubkeys = [...new Set(pubkeys.filter(Boolean))]
+    if (uniquePubkeys.length === 0) return resolved
+
+    const { inArray, desc } = await import('drizzle-orm')
+
+    try {
+      const localUsers = await db.select({
+        nostrPubkey: users.nostrPubkey,
+        displayName: users.displayName,
+        username: users.username,
+        avatarUrl: users.avatarUrl,
+      }).from(users).where(inArray(users.nostrPubkey, uniquePubkeys))
+
+      for (const u of localUsers) {
+        if (!u.nostrPubkey) continue
+        resolved.set(u.nostrPubkey, {
+          name: u.displayName || u.username || pubkeyToNpub(u.nostrPubkey).slice(0, 16) + '...',
+          username: u.username || '',
+          avatarUrl: u.avatarUrl || null,
+        })
+      }
+    } catch {}
+
+    let remaining = uniquePubkeys.filter(pk => !resolved.has(pk))
+    if (remaining.length > 0) {
+      try {
+        const dvmRows = await db.select({
+          pubkey: externalDvms.pubkey,
+          name: externalDvms.name,
+          picture: externalDvms.picture,
+          eventCreatedAt: externalDvms.eventCreatedAt,
+        }).from(externalDvms)
+          .where(inArray(externalDvms.pubkey, remaining))
+          .orderBy(desc(externalDvms.eventCreatedAt))
+
+        for (const row of dvmRows) {
+          if (!row.pubkey || resolved.has(row.pubkey) || !row.name) continue
+          resolved.set(row.pubkey, {
+            name: row.name,
+            username: '',
+            avatarUrl: row.picture || null,
+          })
+        }
+      } catch {}
+    }
+
+    remaining = uniquePubkeys.filter(pk => !resolved.has(pk))
+    if (remaining.length > 0) {
+      try {
+        const profiles = await db.select({
+          pubkey: relayEvents.pubkey,
+          contentPreview: relayEvents.contentPreview,
+        }).from(relayEvents).where(and(eq(relayEvents.kind, 0), inArray(relayEvents.pubkey, remaining)))
+
+        for (const p of profiles) {
+          if (resolved.has(p.pubkey)) continue
+          const name = parseProfilePreviewName(p.contentPreview)
+          if (!name) continue
+          resolved.set(p.pubkey, { name, username: '', avatarUrl: null })
+        }
+      } catch {}
+    }
+
+    remaining = uniquePubkeys.filter(pk => !resolved.has(pk))
+    if (remaining.length > 0) {
+      for (const pubkey of remaining) {
+        for (const url of dedupedRelayUrls.slice(0, 3)) {
+          try {
+            const [kind0, kind31990] = await Promise.all([
+              fetchEventsFromRelay(url, { kinds: [0], authors: [pubkey], limit: 1 }),
+              fetchEventsFromRelay(url, { kinds: [31990], authors: [pubkey], limit: 3 }),
+            ])
+
+            const kind0Event = [...kind0.events].sort((a, b) => b.created_at - a.created_at)[0]
+            if (kind0Event?.content) {
+              const profile = JSON.parse(kind0Event.content)
+              const name = profile.display_name || profile.name || ''
+              const avatarUrl = profile.picture || null
+              if (name) {
+                resolved.set(pubkey, { name, username: '', avatarUrl })
+                break
+              }
+            }
+
+            const handler = [...kind31990.events].sort((a, b) => b.created_at - a.created_at)[0]
+            if (handler?.content) {
+              const profile = JSON.parse(handler.content)
+              const name = profile.name || ''
+              const avatarUrl = profile.picture || profile.image || null
+              if (name) {
+                resolved.set(pubkey, { name, username: '', avatarUrl })
+                break
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    return resolved
+  }
+
+  let result: Array<{ eventId: string; kind: number; pubkey: string; contentPreview: string | null; eventCreatedAt: number }> = []
+  try {
+    result = await db.select({
+      eventId: relayEvents.eventId,
+      kind: relayEvents.kind,
+      pubkey: relayEvents.pubkey,
+      contentPreview: relayEvents.contentPreview,
+      eventCreatedAt: relayEvents.eventCreatedAt,
+    }).from(relayEvents).where(eq(relayEvents.eventId, eventId)).limit(1)
+  } catch {}
 
   // If not in our relay_events, try fetching from external relays before 404
   let externalNote: { pubkey: string; content: string; created_at: number } | null = null
   if (result.length === 0) {
-    try {
-      const { fetchEventsFromRelay } = await import('../services/relay-io')
-      const relayUrls = ['wss://relay.damus.io', 'wss://nos.lol', c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz']
-      for (const ru of relayUrls) {
-        try {
-          const { events } = await fetchEventsFromRelay(ru, { ids: [eventId], kinds: [1], limit: 1 })
+      try {
+        for (const ru of dedupedRelayUrls.slice(0, 3)) {
+          try {
+            const { events } = await fetchEventsFromRelay(ru, { ids: [eventId], kinds: [1], limit: 1 })
           if (events.length > 0) { externalNote = { pubkey: events[0].pubkey, content: events[0].content || '', created_at: events[0].created_at }; break }
-        } catch {}
-      }
+          } catch {}
+        }
     } catch {}
     if (!externalNote) {
       return c.html(pageLayout({ title: '404 — 2020117', baseUrl, currentPath: `/notes/${eventId}`, lang },
@@ -57,101 +178,68 @@ router.get('/notes/:eventId', async (c) => {
   let authorName = npub.slice(0, 16) + '...'
   let authorUsername = ''
   let authorAvatarUrl: string | null = null
-  const authorResult = await db.select({
-    displayName: users.displayName,
-    username: users.username,
-    avatarUrl: users.avatarUrl,
-  }).from(users).where(eq(users.nostrPubkey, notePubkey)).limit(1)
-  if (authorResult.length > 0) {
-    authorName = authorResult[0].displayName || authorResult[0].username || authorName
-    authorUsername = authorResult[0].username || ''
-    authorAvatarUrl = authorResult[0].avatarUrl || null
-  } else {
-    const profileResult = await db.select({ contentPreview: relayEvents.contentPreview })
-      .from(relayEvents).where(and(eq(relayEvents.pubkey, notePubkey), eq(relayEvents.kind, 0))).limit(1)
-    if (profileResult.length > 0 && profileResult[0].contentPreview) {
-      const dashIdx = profileResult[0].contentPreview.indexOf(' — ')
-      authorName = dashIdx > 0 ? profileResult[0].contentPreview.slice(0, dashIdx) : profileResult[0].contentPreview
-    } else {
-      try {
-        const { fetchEventsFromRelay } = await import('../services/relay-io')
-        const { generateId } = await import('../lib/utils')
-        const relayUrls = (c.env.NOSTR_RELAYS || 'wss://relay.damus.io').split(',').map((s: string) => s.trim()).filter(Boolean)
-        let events: any[] = []
-        for (const relayUrl of relayUrls.slice(0, 3)) {
-          const res = await fetchEventsFromRelay(relayUrl, { kinds: [0], authors: [notePubkey], limit: 1 })
-          if (res.events.length > 0) { events = res.events; break }
-        }
-        if (events.length > 0) {
-          const profile = JSON.parse(events[0].content)
-          const name = profile.display_name || profile.name || ''
-          if (name) {
-            authorName = name
-            const preview = name + (profile.about ? ' — ' + profile.about.slice(0, 150) : '')
-            await db.insert(relayEvents).values({
-              id: (await import('../lib/utils')).generateId(),
-              eventId: events[0].id, kind: 0, pubkey: notePubkey,
-              contentPreview: preview, tags: JSON.stringify({}),
-              eventCreatedAt: events[0].created_at, createdAt: new Date(),
-            }).onConflictDoNothing()
-          }
-        }
-      } catch { /* non-critical */ }
-    }
+  const mainAuthor = await resolveAuthors([notePubkey])
+  const mainAuthorInfo = mainAuthor.get(notePubkey)
+  if (mainAuthorInfo) {
+    authorName = mainAuthorInfo.name
+    authorUsername = mainAuthorInfo.username
+    authorAvatarUrl = mainAuthorInfo.avatarUrl
   }
 
   // Fetch replies, reactions, reposts — uses indexed ref_event_id column
-  const [replies, reactions, reposts] = await Promise.all([
-    db.select({
-      eventId: relayEvents.eventId,
-      pubkey: relayEvents.pubkey,
-      contentPreview: relayEvents.contentPreview,
-      eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 1), eq(relayEvents.refEventId, eventId)))
-      .orderBy(relayEvents.eventCreatedAt).limit(50),
-    db.select({
-      pubkey: relayEvents.pubkey,
-      contentPreview: relayEvents.contentPreview,
-      eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 7), eq(relayEvents.refEventId, eventId)))
-      .orderBy(relayEvents.eventCreatedAt).limit(100),
-    db.select({
-      pubkey: relayEvents.pubkey,
-      eventCreatedAt: relayEvents.eventCreatedAt,
-    }).from(relayEvents).where(and(eq(relayEvents.kind, 6), eq(relayEvents.refEventId, eventId)))
-      .orderBy(relayEvents.eventCreatedAt).limit(100),
-  ])
+  let replies: Array<{ eventId: string; pubkey: string; contentPreview: string | null; eventCreatedAt: number }> = []
+  let reactions: Array<{ pubkey: string; contentPreview: string | null; eventCreatedAt: number }> = []
+  let reposts: Array<{ pubkey: string; eventCreatedAt: number }> = []
+  try {
+    ;[replies, reactions, reposts] = await Promise.all([
+      db.select({
+        eventId: relayEvents.eventId,
+        pubkey: relayEvents.pubkey,
+        contentPreview: relayEvents.contentPreview,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents).where(and(eq(relayEvents.kind, 1), eq(relayEvents.refEventId, eventId)))
+        .orderBy(relayEvents.eventCreatedAt).limit(50),
+      db.select({
+        pubkey: relayEvents.pubkey,
+        contentPreview: relayEvents.contentPreview,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents).where(and(eq(relayEvents.kind, 7), eq(relayEvents.refEventId, eventId)))
+        .orderBy(relayEvents.eventCreatedAt).limit(100),
+      db.select({
+        pubkey: relayEvents.pubkey,
+        eventCreatedAt: relayEvents.eventCreatedAt,
+      }).from(relayEvents).where(and(eq(relayEvents.kind, 6), eq(relayEvents.refEventId, eventId)))
+        .orderBy(relayEvents.eventCreatedAt).limit(100),
+    ])
+  } catch {
+    try {
+      const { fetchEventsFromRelay } = await import('../services/relay-io')
+      const [replyRes, reactionRes, repostRes] = await Promise.all([
+        fetchEventsFromRelay(relayUrl, { kinds: [1], '#e': [eventId], limit: 50 }),
+        fetchEventsFromRelay(relayUrl, { kinds: [7], '#e': [eventId], limit: 100 }),
+        fetchEventsFromRelay(relayUrl, { kinds: [6], '#e': [eventId], limit: 100 }),
+      ])
+      replies = replyRes.events.map((ev) => ({
+        eventId: ev.id,
+        pubkey: ev.pubkey,
+        contentPreview: ev.content || '',
+        eventCreatedAt: ev.created_at,
+      }))
+      reactions = reactionRes.events.map((ev) => ({
+        pubkey: ev.pubkey,
+        contentPreview: ev.content || '',
+        eventCreatedAt: ev.created_at,
+      }))
+      reposts = repostRes.events.map((ev) => ({
+        pubkey: ev.pubkey,
+        eventCreatedAt: ev.created_at,
+      }))
+    } catch {}
+  }
 
   // Resolve interaction author names + avatars in bulk
   const allPubkeys = [...new Set([...replies.map(r => r.pubkey), ...reactions.map(r => r.pubkey), ...reposts.map(r => r.pubkey)])]
-  const interactionAuthors = new Map<string, { name: string; username: string; avatarUrl: string | null }>()
-  if (allPubkeys.length > 0) {
-    const { inArray } = await import('drizzle-orm')
-    const localUsers = await db.select({
-      nostrPubkey: users.nostrPubkey,
-      displayName: users.displayName,
-      username: users.username,
-      avatarUrl: users.avatarUrl,
-    }).from(users).where(inArray(users.nostrPubkey, allPubkeys))
-    for (const u of localUsers) {
-      if (u.nostrPubkey) interactionAuthors.set(u.nostrPubkey, {
-        name: u.displayName || u.username || pubkeyToNpub(u.nostrPubkey).slice(0, 16) + '...',
-        username: u.username || '',
-        avatarUrl: u.avatarUrl || null,
-      })
-    }
-    const remaining = allPubkeys.filter(pk => !interactionAuthors.has(pk))
-    if (remaining.length > 0) {
-      const profiles = await db.select({ pubkey: relayEvents.pubkey, contentPreview: relayEvents.contentPreview })
-        .from(relayEvents).where(and(eq(relayEvents.kind, 0), inArray(relayEvents.pubkey, remaining)))
-      for (const p of profiles) {
-        if (p.contentPreview) {
-          const dashIdx = p.contentPreview.indexOf(' — ')
-          interactionAuthors.set(p.pubkey, { name: dashIdx > 0 ? p.contentPreview.slice(0, dashIdx) : p.contentPreview, username: '', avatarUrl: null })
-        }
-      }
-    }
-  }
+  const interactionAuthors = await resolveAuthors(allPubkeys)
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   const content = fullContent ?? ''
@@ -162,13 +250,14 @@ router.get('/notes/:eventId', async (c) => {
   const avatarImg = (src: string, size = 36, alt = '') =>
     `<img src="${esc(src)}" alt="${esc(alt)}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex-shrink:0" loading="lazy">`
   const avatarFor = (avatarUrl: string | null, username: string, fallbackKey: string, size = 36, altName = '') => {
-    const src = avatarUrl || `https://robohash.org/${encodeURIComponent(username || fallbackKey)}`
+    const seed = username || fallbackKey
+    const src = avatarUrl || `/api/avatar/${encodeURIComponent(seed)}?size=${size * 3}`
     return avatarImg(src, size, altName || username || fallbackKey)
   }
   const nameLink = (name: string, username: string, pubkey: string, style = '') =>
     username
       ? `<a href="/agents/${esc(username)}" style="color:var(--c-accent);text-decoration:none;font-weight:600${style ? ';' + style : ''}">${esc(name)}</a>`
-      : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(pubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;font-weight:600${style ? ';' + style : ''}">${esc(name)}</a>`
+      : `<a href="/agents/${esc(pubkeyToNpub(pubkey))}" style="color:var(--c-accent);text-decoration:none;font-weight:600${style ? ';' + style : ''}">${esc(name)}</a>`
 
   const pageCSS = `
 .note-card{border:1px solid var(--c-border);border-radius:12px;padding:24px 28px;background:var(--c-bg)}
@@ -210,7 +299,7 @@ router.get('/notes/:eventId', async (c) => {
     <span class="kind-tag">note</span>
 
     <div class="post-header">
-      ${avatarFor(authorAvatarUrl, authorUsername, npub, 40, authorName)}
+      ${avatarFor(authorAvatarUrl, authorUsername, notePubkey, 40, authorName)}
       <div class="post-author-info">
         <div class="post-author-name">${nameLink(authorName, authorUsername, notePubkey)}</div>
         <div class="post-time"><time datetime="${createdDate}">${createdDate.slice(0, 16).replace('T', ' ')} UTC</time></div>
@@ -226,7 +315,7 @@ router.get('/notes/:eventId', async (c) => {
           const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '', avatarUrl: null }
           return a.username
             ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
-            : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener">${esc(a.name)}</a>`
+            : `<a href="/agents/${esc(pubkeyToNpub(r.pubkey))}">${esc(a.name)}</a>`
         }).join(', ')}</div>
       </div>` : ''}
       ${reposts.length > 0 ? `<div>
@@ -235,7 +324,7 @@ router.get('/notes/:eventId', async (c) => {
           const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '', avatarUrl: null }
           return a.username
             ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
-            : `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(r.pubkey))}" target="_blank" rel="noopener">${esc(a.name)}</a>`
+            : `<a href="/agents/${esc(pubkeyToNpub(r.pubkey))}">${esc(a.name)}</a>`
         }).join(', ')}</div>
       </div>` : ''}
     </div>` : ''}
@@ -258,7 +347,7 @@ router.get('/notes/:eventId', async (c) => {
           const rDate = new Date(r.eventCreatedAt * 1000).toISOString()
           const rNevent = eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey)
           return `<div class="reply">
-      ${avatarFor(author.avatarUrl, author.username, pubkeyToNpub(r.pubkey), 32, author.name)}
+      ${avatarFor(author.avatarUrl, author.username, r.pubkey, 32, author.name)}
       <div class="reply-body">
         <div class="reply-meta">
           <span class="reply-author-name">${nameLink(author.name, author.username, r.pubkey)}</span>

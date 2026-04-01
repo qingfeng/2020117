@@ -11,6 +11,36 @@ import {
 import { fetchEventsFromRelay } from './relay-io'
 import { generateId, ensureUniqueUsername } from '../lib/utils'
 
+type ProfileMetadata = {
+  name?: string
+  display_name?: string
+  about?: string
+  picture?: string
+  lud16?: string
+}
+
+function normalizeProfileValue(value: string | undefined | null): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function resolveProfileDisplayName(meta: ProfileMetadata): string | null {
+  return normalizeProfileValue(meta.display_name) || normalizeProfileValue(meta.name)
+}
+
+function isShadowUsername(username: string | null | undefined): boolean {
+  return !!username && /^nostr_[0-9a-f]{8,16}$/i.test(username)
+}
+
+function usernameBaseFromProfileName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 20) || 'agent'
+}
+
 // --- NIP-02 Kind 3 Contact List Sync ---
 
 /**
@@ -292,6 +322,7 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
   const nostrUsers = await db
     .select({
       id: users.id,
+      username: users.username,
       nostrPubkey: users.nostrPubkey,
       displayName: users.displayName,
       bio: users.bio,
@@ -299,7 +330,7 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       lightningAddress: users.lightningAddress,
     })
     .from(users)
-    .where(and(eq(users.nostrSyncEnabled, 1), isNotNull(users.nostrPubkey)))
+    .where(isNotNull(users.nostrPubkey))
 
   // Build pubkey → user map (shared between Phase A and Phase B)
   const pubkeyToUser = new Map<string, typeof nostrUsers[number]>()
@@ -355,7 +386,7 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
           const user = pubkeyToUser.get(pubkey)
           if (!user) continue
 
-          let meta: { name?: string; about?: string; picture?: string; lud16?: string }
+          let meta: ProfileMetadata
           try {
             meta = JSON.parse(event.content)
           } catch {
@@ -363,26 +394,37 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
           }
 
           // Build update set — only fields that actually changed
-          // Normalize: empty string ↔ null are equivalent (avoid no-op writes)
-          const norm = (v: string | undefined | null): string | null => v ? v : null
           const updates: Record<string, string | null> = {}
+          const resolvedName = resolveProfileDisplayName(meta)
 
-          if (meta.name !== undefined && norm(meta.name) !== norm(user.displayName)) {
-            updates.displayName = norm(meta.name)
+          if ((meta.display_name !== undefined || meta.name !== undefined) && resolvedName !== normalizeProfileValue(user.displayName)) {
+            updates.displayName = resolvedName
           }
-          if (meta.about !== undefined && norm(meta.about) !== norm(user.bio)) {
-            updates.bio = norm(meta.about)
+          if (meta.about !== undefined && normalizeProfileValue(meta.about) !== normalizeProfileValue(user.bio)) {
+            updates.bio = normalizeProfileValue(meta.about)
           }
-          if (meta.picture !== undefined && norm(meta.picture) !== norm(user.avatarUrl)) {
-            updates.avatarUrl = norm(meta.picture)
+          if (meta.picture !== undefined && normalizeProfileValue(meta.picture) !== normalizeProfileValue(user.avatarUrl)) {
+            updates.avatarUrl = normalizeProfileValue(meta.picture)
           }
-          if (meta.lud16 !== undefined && norm(meta.lud16) !== norm(user.lightningAddress)) {
-            updates.lightningAddress = norm(meta.lud16)
+          if (meta.lud16 !== undefined && normalizeProfileValue(meta.lud16) !== normalizeProfileValue(user.lightningAddress)) {
+            updates.lightningAddress = normalizeProfileValue(meta.lud16)
+          }
+
+          // Shadow users should inherit a stable username from Kind 0 so agent links stop
+          // exposing placeholder nostr_<pubkey> slugs once real metadata exists.
+          if (resolvedName && isShadowUsername(user.username)) {
+            const nextBase = usernameBaseFromProfileName(resolvedName)
+            if (nextBase !== user.username) {
+              const nextUsername = await ensureUniqueUsername(db, nextBase)
+              if (nextUsername !== user.username) {
+                updates.username = nextUsername
+              }
+            }
           }
 
           if (Object.keys(updates).length === 0) continue
 
-          await db.update(users).set(updates).where(eq(users.id, user.id))
+          await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, user.id))
           updated++
           console.log(`[Nostr Metadata] Updated user ${user.id}: ${Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')}`)
         } catch (e) {
@@ -465,11 +507,11 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
         try {
           if (!verifyEvent(event)) continue
 
-          let meta: { name?: string; about?: string; picture?: string; lud16?: string }
+          let meta: ProfileMetadata
           try { meta = JSON.parse(event.content) } catch { continue }
 
-          const rawName = (meta.name || '').trim()
-          const baseName = rawName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'agent'
+          const rawName = resolveProfileDisplayName(meta) || ''
+          const baseName = usernameBaseFromProfileName(rawName)
           const username = await ensureUniqueUsername(db, baseName)
           const userId = generateId()
           const now = new Date()
@@ -478,9 +520,9 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
             id: userId,
             username,
             displayName: rawName || null,
-            bio: meta.about || null,
-            avatarUrl: meta.picture || null,
-            lightningAddress: meta.lud16 || null,
+            bio: normalizeProfileValue(meta.about),
+            avatarUrl: normalizeProfileValue(meta.picture),
+            lightningAddress: normalizeProfileValue(meta.lud16),
             nostrPubkey: pubkey,
             nostrSyncEnabled: 1,
             createdAt: now,
@@ -489,8 +531,9 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
 
           pubkeyToUser.set(pubkey, {
             id: userId, nostrPubkey: pubkey,
-            displayName: rawName || null, bio: meta.about || null,
-            avatarUrl: meta.picture || null, lightningAddress: meta.lud16 || null,
+            username,
+            displayName: rawName || null, bio: normalizeProfileValue(meta.about),
+            avatarUrl: normalizeProfileValue(meta.picture), lightningAddress: normalizeProfileValue(meta.lud16),
           })
 
           console.log(`[Nostr Metadata] Phase B: registered ${username} from Kind 0 (pubkey=${pubkey.slice(0, 8)}...)`)

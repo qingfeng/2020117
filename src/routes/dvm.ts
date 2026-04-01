@@ -1,11 +1,15 @@
 import { Hono } from 'hono'
 import { eq, and, desc, asc, sql, inArray } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { users, dvmJobs, dvmServices, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions, nostrReports } from '../db/schema'
+import { users, dvmJobs, dvmServices, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmSwarms, dvmSwarmSubmissions, nostrReports, externalDvms, relayEvents } from '../db/schema'
 import { pubkeyToNpub } from '../services/nostr'
 import { paginationMeta, getWotData, getReviewData, buildReputationData, DVM_KIND_LABELS, REPORT_FLAG_THRESHOLD } from './helpers'
 
 const dvm = new Hono<AppContext>()
+
+function isShadowUsername(username: string | null | undefined): boolean {
+  return !!username && /^nostr_[0-9a-f]{8,16}$/i.test(username)
+}
 
 // GET /api/dvm/skills — 所有 Agent 的 skill 列表
 dvm.get('/skills', async (c) => {
@@ -63,6 +67,13 @@ dvm.get('/market', async (c) => {
   const conditions = [
     eq(dvmJobs.role, 'customer'),
     ...(isAllStatuses ? [] : [inArray(dvmJobs.status, statuses)]),
+    sql`NOT (
+      COALESCE(${dvmJobs.input}, '') = ''
+      AND COALESCE(${dvmJobs.output}, '') = ''
+      AND ${dvmJobs.params} IS NULL
+      AND COALESCE(${dvmJobs.bidMsats}, 0) = 0
+      AND COALESCE(${dvmJobs.inputType}, '') != 'encrypted'
+    )`,
   ]
   if (kindFilter) {
     const k = parseInt(kindFilter)
@@ -86,16 +97,93 @@ dvm.get('/market', async (c) => {
   ])
 
   const total = countResult[0]?.count || 0
+  const customerPubkeys = [...new Set(jobs.map(j => j.customerPubkey).filter((pk): pk is string => !!pk))]
+  const customerProfiles = new Map<string, { displayName: string | null; username: string | null; avatarUrl: string | null }>()
+
+  if (customerPubkeys.length > 0) {
+    const userRows = await db.select({
+      nostrPubkey: users.nostrPubkey,
+      displayName: users.displayName,
+      username: users.username,
+      avatarUrl: users.avatarUrl,
+    }).from(users).where(inArray(users.nostrPubkey, customerPubkeys))
+
+    for (const row of userRows) {
+      if (!row.nostrPubkey) continue
+      customerProfiles.set(row.nostrPubkey, {
+        displayName: row.displayName,
+        username: row.username,
+        avatarUrl: row.avatarUrl,
+      })
+    }
+
+    const unresolved = customerPubkeys.filter((pk) => {
+      const profile = customerProfiles.get(pk)
+      return !profile || ((!profile.displayName && !profile.avatarUrl) && isShadowUsername(profile.username))
+    })
+
+    if (unresolved.length > 0) {
+      const extRows = await db.select({
+        pubkey: externalDvms.pubkey,
+        name: externalDvms.name,
+        picture: externalDvms.picture,
+      }).from(externalDvms)
+        .where(inArray(externalDvms.pubkey, unresolved))
+        .orderBy(desc(externalDvms.eventCreatedAt))
+
+      for (const row of extRows) {
+        if (!row.name) continue
+        const existing = customerProfiles.get(row.pubkey)
+        customerProfiles.set(row.pubkey, {
+          displayName: existing?.displayName || row.name,
+          username: existing?.username || null,
+          avatarUrl: existing?.avatarUrl || row.picture || null,
+        })
+      }
+
+      const stillUnresolved = unresolved.filter((pk) => {
+        const profile = customerProfiles.get(pk)
+        return !profile || (!profile.displayName && !profile.avatarUrl)
+      })
+
+      if (stillUnresolved.length > 0) {
+        const profileRows = await db.select({
+          pubkey: relayEvents.pubkey,
+          contentPreview: relayEvents.contentPreview,
+        }).from(relayEvents)
+          .where(and(eq(relayEvents.kind, 0), inArray(relayEvents.pubkey, stillUnresolved)))
+
+        for (const row of profileRows) {
+          if (!row.contentPreview) continue
+          const dashIdx = row.contentPreview.indexOf(' — ')
+          const name = dashIdx > 0 ? row.contentPreview.slice(0, dashIdx) : row.contentPreview
+          const existing = customerProfiles.get(row.pubkey)
+          customerProfiles.set(row.pubkey, {
+            displayName: existing?.displayName || name,
+            username: existing?.username || null,
+            avatarUrl: existing?.avatarUrl || null,
+          })
+        }
+      }
+    }
+  }
 
   const marketPayload = {
     jobs: jobs.map(j => {
       const parsedParams = j.params ? JSON.parse(j.params) : null
       const minZap = parsedParams?.min_zap_sats ? parseInt(parsedParams.min_zap_sats) : undefined
+      const profile = j.customerPubkey ? customerProfiles.get(j.customerPubkey) : null
       return {
         id: j.id, kind: j.kind, status: j.status, input: j.input, input_type: j.inputType,
         output: j.output, bid_sats: j.bidMsats ? Math.floor(j.bidMsats / 1000) : 0,
         ...(minZap ? { min_zap_sats: minZap } : {}), params: parsedParams,
-        customer: { username: j.customerUsername, display_name: j.customerDisplayName, avatar_url: j.customerAvatarUrl, pubkey: j.customerPubkey, npub: j.customerPubkey ? pubkeyToNpub(j.customerPubkey) : null },
+        customer: {
+          username: profile?.username || j.customerUsername,
+          display_name: profile?.displayName || j.customerDisplayName,
+          avatar_url: profile?.avatarUrl || j.customerAvatarUrl,
+          pubkey: j.customerPubkey,
+          npub: j.customerPubkey ? pubkeyToNpub(j.customerPubkey) : null,
+        },
         provider_pubkey: j.providerPubkey || null, created_at: j.createdAt,
       }
     }),

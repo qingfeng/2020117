@@ -4,7 +4,7 @@ import type { Bindings } from '../types'
 import { dvmJobs, dvmServices, dvmTrust, users, nostrReports, externalDvms, agentHeartbeats, dvmReviews, dvmWorkflows, dvmWorkflowSteps, dvmEndorsements, relayEvents, dvmAttestations } from '../db/schema'
 import { type NostrEvent, verifyEvent } from './nostr'
 import { fetchEventsFromRelay } from './nostr-community'
-import { generateId } from '../lib/utils'
+import { generateId, ensureUniqueUsername } from '../lib/utils'
 import { buildJobRequestEvent } from './dvm-events'
 
 // --- Cron: Poll DVM Results (for customers) ---
@@ -346,9 +346,89 @@ async function ensureUserForPubkey(db: Database, pubkey: string): Promise<string
   return userId
 }
 
+function isShadowUsername(username: string | null | undefined): boolean {
+  return !!username && /^nostr_[0-9a-f]{8,16}$/i.test(username)
+}
+
+function usernameBaseFromProfileName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 20) || 'agent'
+}
+
+async function syncShadowUserProfile(
+  db: Database,
+  pubkey: string,
+  profile: { name?: string | null; picture?: string | null; about?: string | null; lightningAddress?: string | null },
+): Promise<void> {
+  const existing = await db.select({
+    id: users.id,
+    username: users.username,
+    displayName: users.displayName,
+    avatarUrl: users.avatarUrl,
+    bio: users.bio,
+    lightningAddress: users.lightningAddress,
+  }).from(users).where(eq(users.nostrPubkey, pubkey)).limit(1)
+
+  if (existing.length === 0) return
+
+  const user = existing[0]
+  const updates: Record<string, string | Date | null> = {}
+  const name = profile.name?.trim() || null
+  const picture = profile.picture?.trim() || null
+  const about = profile.about?.trim() || null
+  const lightningAddress = profile.lightningAddress?.trim() || null
+
+  if (name && name !== user.displayName) updates.displayName = name
+  if (picture && picture !== user.avatarUrl) updates.avatarUrl = picture
+  if (about && about !== user.bio) updates.bio = about
+  if (lightningAddress && lightningAddress !== user.lightningAddress) updates.lightningAddress = lightningAddress
+
+  if (name && isShadowUsername(user.username)) {
+    const nextBase = usernameBaseFromProfileName(name)
+    if (nextBase !== user.username) {
+      const nextUsername = await ensureUniqueUsername(db, nextBase)
+      if (nextUsername !== user.username) updates.username = nextUsername
+    }
+  }
+
+  if (Object.keys(updates).length === 0) return
+
+  updates.updatedAt = new Date()
+  await db.update(users).set(updates).where(eq(users.id, user.id))
+  console.log(`[DVM] Upgraded shadow user ${user.id} from handler info: ${Object.keys(updates).join(', ')}`)
+}
+
+function hasMeaningfulJobPayload(params: {
+  input: string | null
+  inputType: string | null
+  output: string | null
+  params: string | null
+  bidMsats: number | null
+}): boolean {
+  if (params.inputType === 'encrypted') return true
+  if (params.input && params.input.trim()) return true
+  if (params.output && params.output.trim()) return true
+  if (params.params) {
+    try {
+      const parsed = JSON.parse(params.params) as Record<string, unknown>
+      if (Object.keys(parsed).length > 0) return true
+    } catch {
+      return true
+    }
+  }
+  if ((params.bidMsats || 0) > 0) return true
+  return false
+}
+
 export async function pollDvmRequests(env: Bindings, db: Database): Promise<void> {
   const relayUrls = (env.NOSTR_RELAYS || '').split(',').map(s => s.trim()).filter(Boolean)
-  if (relayUrls.length === 0) return
+  const ownRelay = env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+  const allRelays = [...new Set([ownRelay, ...relayUrls])].filter(Boolean)
+  if (allRelays.length === 0) return
 
   // Find active services (for provider matching)
   const activeServices = await db
@@ -379,15 +459,39 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
   const kv = env.KV
   const sinceKey = 'dvm_requests_last_poll'
   const sinceStr = await kv.get(sinceKey)
-  const since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 3600
+  let since = sinceStr ? parseInt(sinceStr) : Math.floor(Date.now() / 1000) - 3600
 
-  const relayUrl = relayUrls[0]
+  // Cold-start backfill: when migrating to a fresh DB, replay a wider window so the
+  // marketplace can repopulate without manual SQL imports.
+  if (!sinceStr) {
+    const existingCustomerJobs = await db.select({ id: dvmJobs.id })
+      .from(dvmJobs)
+      .where(eq(dvmJobs.role, 'customer'))
+      .limit(1)
+    if (existingCustomerJobs.length === 0) {
+      since = Math.floor(Date.now() / 1000) - 30 * 86400
+    }
+  }
 
   try {
-    const { events } = await fetchEventsFromRelay(relayUrl, {
-      kinds: Array.from(allKinds),
-      since,
-    })
+    const eventMap = new Map<string, NostrEvent>()
+    for (const relayUrl of allRelays) {
+      try {
+        const { events } = await fetchEventsFromRelay(relayUrl, {
+          kinds: Array.from(allKinds),
+          since,
+        })
+        for (const event of events) {
+          const existing = eventMap.get(event.id)
+          if (!existing || event.created_at > existing.created_at) {
+            eventMap.set(event.id, event)
+          }
+        }
+      } catch (e) {
+        console.warn(`[DVM] Failed to fetch requests from ${relayUrl}:`, e)
+      }
+    }
+    const events = [...eventMap.values()].sort((a, b) => a.created_at - b.created_at)
 
     console.log(`[DVM] Fetched ${events.length} job requests since ${since}`)
 
@@ -454,6 +558,19 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
       const params = paramTags.length > 0
         ? JSON.stringify(Object.fromEntries(paramTags.map(t => [t[1], t[2]])))
         : null
+      const bidMsats = bidTag ? parseInt(bidTag[1]) : null
+
+      // Ignore empty-shell NIP-90 requests that only carry routing/provider tags.
+      // They pollute the public market but provide no actionable task content.
+      if (!hasMeaningfulJobPayload({
+        input,
+        inputType,
+        output: outputTag?.[1] || null,
+        params,
+        bidMsats,
+      })) {
+        continue
+      }
 
       // 1. Index as customer record (any pubkey, local or external)
       if (existingCustomer.length === 0) {
@@ -470,7 +587,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
             input,
             inputType,
             output: outputTag?.[1] || null,
-            bidMsats: bidTag ? parseInt(bidTag[1]) : null,
+            bidMsats,
             customerPubkey: event.pubkey,
             requestEventId: event.id,
             params,
@@ -526,7 +643,7 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
           input,
           inputType,
           output: outputTag?.[1] || null,
-          bidMsats: bidTag ? parseInt(bidTag[1]) : null,
+          bidMsats,
           customerPubkey: event.pubkey,
           requestEventId: event.id,
           params,
@@ -922,6 +1039,13 @@ export async function pollExternalDvms(env: Bindings, db: Database): Promise<voi
       if (event.created_at > maxCreatedAt) maxCreatedAt = event.created_at
       continue
     }
+
+    await syncShadowUserProfile(db, event.pubkey, {
+      name,
+      picture,
+      about,
+      lightningAddress,
+    })
 
     // External user → upsert external_dvm
     const existing = await db

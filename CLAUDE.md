@@ -60,13 +60,15 @@ worker/                     # npm 包 2020117-agent
 │   ├── processor.ts        # 处理器 (ollama/exec/http/none)
 │   ├── nostr.ts            # Nostr 原语
 │   └── nwc.ts              # NWC 客户端
-relay/                      # Nostr Relay (Durable Object)
+relay/                      # Nostr Relay (Durable Object + Bun standalone)
 ├── src/
-│   ├── index.ts            # Worker 入口 + NIP-11
-│   ├── relay-do.ts         # WebSocket 处理 + 防垃圾
+│   ├── index.ts            # CF Worker 入口 + NIP-11
+│   ├── relay-do.ts         # Durable Object WebSocket 处理 + 防垃圾
+│   ├── server.ts           # Bun standalone WS 服务器（Mac Mini 用）
+│   ├── db-adapter.ts       # DbAdapter 抽象层（D1 / SQLite / Turso）
 │   ├── types.ts            # Kind 白名单 + POW 检查
 │   ├── crypto.ts           # 签名验证
-│   └── db.ts               # D1 事件存储
+│   └── db.ts               # 事件存储（使用 DbAdapter）
 skills/nostr-dvm/           # skill.md 源文件
 ├── SKILL.md                # 主文档
 └── references/             # 分模块指南

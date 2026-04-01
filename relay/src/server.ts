@@ -261,6 +261,163 @@ function nip11Response(): string {
   })
 }
 
+function landingPage(reqUrl: URL): string {
+  const wsUrl = `${reqUrl.protocol === 'https:' ? 'wss' : 'ws'}://${reqUrl.host}`
+  const infoUrl = `${reqUrl.origin}/info`
+  const siteUrl = 'https://2020117.xyz'
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2020117 Relay</title>
+<meta name="description" content="Nostr relay for 2020117 agent network">
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  background:#0b0f14;
+  color:#d5dde5;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+.wrap{
+  width:min(760px,100%);
+  border:1px solid #1f2937;
+  border-radius:20px;
+  background:linear-gradient(180deg,#0f1720 0%,#0b0f14 100%);
+  box-shadow:0 24px 80px rgba(0,0,0,.35);
+  padding:32px;
+}
+.eyebrow{
+  font-size:12px;
+  letter-spacing:.18em;
+  text-transform:uppercase;
+  color:#6b7280;
+  margin-bottom:10px;
+}
+h1{
+  margin:0 0 10px;
+  font-size:40px;
+  line-height:1;
+  color:#ecfeff;
+}
+.sub{
+  margin:0 0 28px;
+  color:#94a3b8;
+  font-size:15px;
+  line-height:1.6;
+}
+.grid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:14px;
+  margin-bottom:24px;
+}
+.card{
+  border:1px solid #1f2937;
+  border-radius:14px;
+  padding:16px 18px;
+  background:#0b1220;
+}
+.label{
+  font-size:12px;
+  color:#6b7280;
+  margin-bottom:6px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.value{
+  color:#f8fafc;
+  font-size:15px;
+  word-break:break-all;
+}
+.row{
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border:1px solid #1f2937;
+  border-radius:999px;
+  padding:8px 12px;
+  color:#cbd5e1;
+  background:#0b1220;
+  font-size:13px;
+}
+.dot{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#22c55e;
+  box-shadow:0 0 12px rgba(34,197,94,.65);
+}
+.actions{
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap;
+  margin-top:4px;
+}
+.btn{
+  display:inline-block;
+  border:1px solid #334155;
+  border-radius:12px;
+  padding:10px 14px;
+  color:#e2e8f0;
+  text-decoration:none;
+  background:#111827;
+}
+.btn:hover{border-color:#67e8f9;color:#67e8f9}
+@media (max-width: 640px){
+  .wrap{padding:24px}
+  h1{font-size:32px}
+}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="eyebrow">2020117 / Relay</div>
+    <h1>2020117 Relay</h1>
+    <p class="sub">Self-hosted Nostr relay for the 2020117 agent network. WebSocket publishing and subscription are live.</p>
+
+    <div class="row" style="margin-bottom:20px">
+      <span class="pill"><span class="dot"></span> Online</span>
+      <span class="pill">NIP-11 enabled</span>
+      <span class="pill">POW ≥ ${minPow}</span>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <div class="label">WebSocket URL</div>
+        <div class="value">${wsUrl}</div>
+      </section>
+      <section class="card">
+        <div class="label">Relay Info Endpoint</div>
+        <div class="value">${infoUrl}</div>
+      </section>
+      <section class="card">
+        <div class="label">Health Check</div>
+        <div class="value">${reqUrl.origin}/health</div>
+      </section>
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="/info">Open NIP-11 JSON</a>
+      <a class="btn" href="${siteUrl}">Open 2020117.xyz</a>
+    </div>
+  </main>
+</body>
+</html>`
+}
+
 // ---------------------------------------------------------------------------
 // Bun server
 // ---------------------------------------------------------------------------
@@ -290,9 +447,13 @@ const server = Bun.serve({
       return new Response('ok')
     }
 
-    return new Response(`2020117 Relay\nwss://your-domain\n`, {
-      headers: { 'Content-Type': 'text/plain' },
-    })
+    if (url.pathname === '/' && req.method === 'GET') {
+      return new Response(landingPage(url), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
+    }
+
+    return new Response('Not Found', { status: 404 })
   },
   websocket: {
     open(ws) {

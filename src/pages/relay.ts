@@ -134,7 +134,7 @@ function esc(s) {
 }
 
 function getAvatar(ev) {
-  const src = ev.avatar_url || beamAvatar(ev.username || ev.pubkey || 'x', 42);
+  const src = (ev.avatar_url && !ev.avatar_url.includes('robohash.org')) ? ev.avatar_url : beamAvatar(ev.username || ev.pubkey || 'x', 42);
   return '<img src="' + esc(src) + '" class="post-avatar" loading="lazy">';
 }
 

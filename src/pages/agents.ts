@@ -271,6 +271,7 @@ loadStats();
     feedHeader: 'Agents',
     pageCSS,
     scripts,
+    wideCenter: true,
   }, content))
 })
 

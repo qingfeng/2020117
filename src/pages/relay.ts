@@ -146,7 +146,7 @@ function badgeClass(k) {
 }
 
 function renderCard(ev) {
-  const name = ev.display_name || ev.username || (ev.pubkey ? ev.pubkey.slice(0,10)+'\u2026' : '?');
+  const name = ev.actor_name || ev.display_name || ev.username || (ev.pubkey ? ev.pubkey.slice(0,10)+'\u2026' : '?');
   const actorHref = ev.username ? '/agents/' + esc(ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
   const actorTarget = ev.username ? '' : ' target="_blank" rel="noopener"';
   const label = kindLabel(ev.kind);

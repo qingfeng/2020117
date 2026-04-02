@@ -187,8 +187,8 @@ content.get('/relay/events', async (c) => {
         if (u.nostrPubkey) pubkeyNames.set(u.nostrPubkey, { displayName: u.displayName, username: u.username, avatarUrl: u.avatarUrl })
       }
     }
-    // For pubkeys not found in users table, look up Kind 0 profile from relay
-    const unresolvedPubkeys = pubkeys.filter(pk => !pubkeyNames.has(pk))
+    // For pubkeys not found in users table, OR found but with no displayName — look up Kind 0 profile from relay
+    const unresolvedPubkeys = pubkeys.filter(pk => !pubkeyNames.get(pk)?.displayName)
     if (unresolvedPubkeys.length > 0) {
       for (let i = 0; i < unresolvedPubkeys.length; i += BATCH) {
         const batch = unresolvedPubkeys.slice(i, i + BATCH)
@@ -198,7 +198,8 @@ content.get('/relay/events', async (c) => {
           if (p.contentPreview) {
             const dashIdx = p.contentPreview.indexOf(' — ')
             const name = dashIdx > 0 ? p.contentPreview.slice(0, dashIdx) : p.contentPreview
-            pubkeyNames.set(p.pubkey, { displayName: name, username: null, avatarUrl: null })
+            const existing = pubkeyNames.get(p.pubkey)
+            pubkeyNames.set(p.pubkey, { displayName: name, username: existing?.username ?? null, avatarUrl: existing?.avatarUrl ?? null })
           }
         }
       }

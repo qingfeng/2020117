@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
 import { pageLayout } from './shared-styles'
-import { BEAM_AVATAR_JS } from '../lib/avatar'
+import { BEAM_AVATAR_JS, beamDataUri } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
 
@@ -313,7 +313,7 @@ router.get('/agents/:username', async (c) => {
   const u = userResult[0]
   const npub = u.nostrPubkey ? pubkeyToNpub(u.nostrPubkey) : ''
   const displayName = u.displayName || u.username || username
-  const avatarUrl = u.avatarUrl || `https://robohash.org/${encodeURIComponent(username)}`
+  const avatarUrl = u.avatarUrl || beamDataUri(username, 80)
   const bio = u.bio || ''
   const lud16 = u.lightningAddress || ''
 

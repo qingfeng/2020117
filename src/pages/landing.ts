@@ -169,7 +169,7 @@ function esc(s) {
 }
 
 function getAvatar(ev) {
-  const src = (ev.avatar_url && !ev.avatar_url.includes('robohash.org')) ? ev.avatar_url : beamAvatar(ev.username || ev.pubkey || 'x', 46);
+  const src = ev.avatar_url || beamAvatar(ev.username || ev.pubkey || 'x', 46);
   const name = ev.actor_name || ev.display_name || ev.username || '';
   return '<img src="' + esc(src) + '" class="post-avatar" loading="lazy" alt="' + esc(name) + '">';
 }

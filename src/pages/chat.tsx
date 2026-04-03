@@ -119,7 +119,7 @@ router.get('/chat', (c) => {
     <span class="agent-dot"></span>
     <span class="agent-bar-name">ollama-analyst</span>
     <span class="agent-bar-desc">· BTC / ETH / SOL / BNB price analysis · general Q&amp;A</span>
-    <span class="agent-bar-badge">FREE</span>
+    <span class="agent-bar-badge" id="price-badge">FREE</span>
     <button onclick="chatApp.clearHistory()" style="margin-left:8px;background:none;border:none;font-size:12px;color:var(--c-text-muted);cursor:pointer;padding:2px 6px;border-radius:4px" title="Clear chat history">✕ clear</button>
   </div>
   <div class="messages" id="messages"></div>
@@ -517,6 +517,9 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
     saveToHistory('agent', content, reqId, { reqId, providerPubkey, providerModel: providerModel || '', bolt11: bolt11 || '', amountSats: amountSats || 0 })
     document.title = 'Chat — 2020117'
     try { chatChannel.postMessage({ type: 'response', preview: content.slice(0, 80) }) } catch {}
+    // Update price badge
+    const badge = document.getElementById('price-badge')
+    if (badge) { badge.textContent = amountSats > 0 ? amountSats + ' sat/msg' : 'FREE' }
   }
   const modelLabel = providerModel ? ' · ' + providerModel : (skipSave ? '' : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b'))
   const hasNwc = !!(localStorage.getItem('nostr_nwc') || '').startsWith('nostr+walletconnect://')
@@ -525,19 +528,16 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
   const payId = 'pay-' + uid
   const ratingId = 'rate-' + uid
 
-  // Payment UI: only show for live messages (not history restore) to avoid double-paying
-  let payHtml = ''
-  if (amountSats > 0 && bolt11 && !skipSave) {
-    if (hasNwc) {
-      payHtml = '<div id="' + payId + '" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <span style="opacity:.7">paying…</span></div>'
-    } else {
-      payHtml = '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <a href="/me" style="color:var(--c-text-muted);font-size:11px">set up NWC</a></div>'
-    }
-  }
+  // Payment pending area (shown when there's a price, payment happens after rating)
+  const payHtml = amountSats > 0
+    ? '<div id="' + payId + '" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-text-muted)">⚡ ' + amountSats + ' sats — rate to pay</div>'
+    : ''
 
-  // Rating row: show for any message with reqId+providerPubkey (including history)
+  // Rating row
   const ratingHtml = (reqId && providerPubkey)
-    ? '<div id="' + ratingId + '" data-req="' + reqId + '" data-prov="' + providerPubkey + '" style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate this response">' +
+    ? '<div id="' + ratingId + '" data-req="' + reqId + '" data-prov="' + providerPubkey +
+      '" data-bolt11="' + (bolt11 || '') + '" data-sats="' + (amountSats || 0) + '"' +
+      ' style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate to pay">' +
       [1,2,3,4,5].map(n => '<span data-star="' + n + '" style="opacity:.3;transition:opacity .15s">★</span>').join('') +
       '</div>'
     : ''
@@ -563,7 +563,7 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
         if (rEl.dataset.rated) return
         rEl.querySelectorAll('[data-star]').forEach(s => { s.style.opacity = '0.3' })
       })
-      rEl.addEventListener('click', e => {
+      rEl.addEventListener('click', async e => {
         if (rEl.dataset.rated) return
         const n = Number(e.target.dataset.star)
         if (!n) return
@@ -575,21 +575,26 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
           if (active) s.style.color = 'var(--c-gold)'
         })
         publishReview(rEl.dataset.req, rEl.dataset.prov, n, '', _identity)
+
+        // Pay based on rating (like bot.mjs): >=4 full, 3 = 70%, <=2 skip
+        const sats = Number(rEl.dataset.sats)
+        const b11 = rEl.dataset.bolt11
+        const payEl = document.getElementById(payId)
+        if (sats > 0 && hasNwc) {
+          const paySats = n >= 4 ? sats : n === 3 ? Math.ceil(sats * 0.7) : 0
+          if (paySats === 0) {
+            if (payEl) { payEl.textContent = '⚡ ' + sats + ' sats — skipped (rating too low)'; payEl.style.color = 'var(--c-text-muted)' }
+          } else {
+            if (payEl) { payEl.textContent = '⚡ ' + paySats + ' sats — paying…'; payEl.style.color = 'var(--c-gold)' }
+            const ok = await payWithNwc(b11, paySats)
+            if (payEl) {
+              if (ok) { payEl.innerHTML = '✅ ' + paySats + ' sats paid'; payEl.style.color = 'var(--c-green, #4caf50)' }
+              else { payEl.innerHTML = '⚡ ' + paySats + ' sats — <a href="lightning:' + b11 + '" style="color:var(--c-gold)">pay manually</a>'; payEl.style.color = 'var(--c-gold)' }
+            }
+          }
+        }
       })
     }
-  }
-
-  if (amountSats > 0 && bolt11 && hasNwc) {
-    payWithNwc(bolt11, amountSats).then(ok => {
-      const el = document.getElementById(payId)
-      if (!el) return
-      if (ok) {
-        el.innerHTML = '✅ ' + amountSats + ' sats paid via NWC'
-        el.style.color = 'var(--c-green, #4caf50)'
-      } else {
-        el.innerHTML = '⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <span style="color:var(--c-text-muted);font-size:11px">NWC failed</span>'
-      }
-    })
   }
 }
 

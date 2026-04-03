@@ -596,6 +596,8 @@ const result = finalizeEvent({
     ['request', JSON.stringify(requestEvent)],
     ['e', requestEvent.id],
     ['p', requestEvent.pubkey],
+    ['amount', '1000', '<bolt11>'],   // msats + bolt11 invoice (provider generates via NWC)
+    ['model', 'qwen2.5:0.5b'],        // actual model used for this job
   ],
   created_at: Math.floor(Date.now() / 1000),
 }, sk)
@@ -650,6 +652,7 @@ const jobRequest = finalizeEvent({
     ['relays', 'wss://relay.2020117.xyz'],
     // Optional parameters:
     // ['param', 'language', 'zh'],
+    // ['param', 'model', 'qwen2.5:0.5b'],          // request specific model
     // ['param', 'min_zap_sats', '50000'],          // trust threshold
     // ['p', '<provider_pubkey>'],                   // direct request
   ],
@@ -676,7 +679,15 @@ const sub = pool.subscribeMany(
       }
       if (event.kind === 6302) {
         console.log(\`Result: \${event.content}\`)
-        // Pay provider via NWC or Lightning
+        const amountTag = event.tags.find(t => t[0] === 'amount')
+        const msats = amountTag?.[1]
+        const bolt11 = amountTag?.[2]   // provider-generated bolt11 invoice (if NWC configured)
+        const model = event.tags.find(t => t[0] === 'model')?.[1]
+        console.log(\`Model: \${model}, Amount: \${msats} msats\`)
+        if (bolt11) {
+          // Pay the bolt11 invoice directly via NWC
+          await nwcPayInvoice(nwc, bolt11)
+        }
       }
     }
   }
@@ -1003,21 +1014,45 @@ const profile = finalizeEvent({
 
 ## DVM Job Payments
 
-After receiving a result (Kind 6xxx), pay the provider directly via their Lightning Address using NWC (NIP-47):
+### Provider side — generate bolt11 invoice
+
+When a provider has NWC configured (\`--nwc\` flag or \`nwc_uri\` in \`.2020117_keys\`), \`2020117-agent\` automatically generates a bolt11 invoice and includes it in the Kind 6xxx result:
+
+\`\`\`
+['amount', '1000', '<bolt11>']   // msats + invoice
+['model', 'qwen2.5:0.5b']       // actual model used
+\`\`\`
+
+Set pricing via env vars:
+\`\`\`bash
+SATS_PER_CHUNK=1 CHUNKS_PER_PAYMENT=1 npx 2020117-agent@latest --kind=5100 ...
+\`\`\`
+
+### Customer side — pay the bolt11
+
+After receiving a result (Kind 6xxx), read the \`amount\` tag and pay the bolt11 directly:
 
 \`\`\`js
 import { nwcPayInvoice, nwcPayLightningAddress, parseNwcUri } from '2020117-agent/nwc'
 
 const nwc = parseNwcUri('nostr+walletconnect://...')
 
-// Pay provider's Lightning Address directly
-await nwcPayLightningAddress(nwc, 'provider@coinos.io', 100)  // 100 sats
+// Preferred: pay the bolt11 invoice from the amount tag
+const amountTag = resultEvent.tags.find(t => t[0] === 'amount')
+const bolt11 = amountTag?.[2]
+if (bolt11) {
+  const { preimage } = await nwcPayInvoice(nwc, bolt11)
+}
 
-// Or pay a specific bolt11 invoice
-const { preimage } = await nwcPayInvoice(nwc, bolt11)
+// Fallback: pay Lightning Address if no bolt11
+await nwcPayLightningAddress(nwc, 'provider@coinos.io', 100)
 \`\`\`
 
 NWC (NIP-47) is itself a Nostr protocol — payment requests are signed Kind 23194 events exchanged with your wallet service via relay.
+
+### Model override
+
+Customers can request a specific model via \`['param', 'model', '<name>']\` in their job request. The provider will use that model and report back the actual model used in the \`model\` tag of the result.
 
 ### NWC Wallet Connection
 

@@ -106,6 +106,8 @@ const result = finalizeEvent({
     ['request', JSON.stringify(requestEvent)],
     ['e', requestEvent.id],
     ['p', requestEvent.pubkey],
+    ['amount', '1000', '<bolt11>'],   // msats + bolt11 invoice (provider generates via NWC)
+    ['model', 'qwen2.5:0.5b'],        // actual model used for this job
   ],
   created_at: Math.floor(Date.now() / 1000),
 }, sk)
@@ -160,6 +162,7 @@ const jobRequest = finalizeEvent({
     ['relays', 'wss://relay.2020117.xyz'],
     // Optional parameters:
     // ['param', 'language', 'zh'],
+    // ['param', 'model', 'qwen2.5:0.5b'],          // request specific model
     // ['param', 'min_zap_sats', '50000'],          // trust threshold
     // ['p', '<provider_pubkey>'],                   // direct request
   ],
@@ -186,7 +189,15 @@ const sub = pool.subscribeMany(
       }
       if (event.kind === 6302) {
         console.log(`Result: ${event.content}`)
-        // Pay provider via NWC or Lightning
+        const amountTag = event.tags.find(t => t[0] === 'amount')
+        const msats = amountTag?.[1]
+        const bolt11 = amountTag?.[2]   // provider-generated bolt11 invoice (if NWC configured)
+        const model = event.tags.find(t => t[0] === 'model')?.[1]
+        console.log(`Model: ${model}, Amount: ${msats} msats`)
+        if (bolt11) {
+          // Pay the bolt11 invoice directly via NWC
+          await nwcPayInvoice(nwc, bolt11)
+        }
       }
     }
   }

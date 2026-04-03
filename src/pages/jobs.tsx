@@ -613,7 +613,7 @@ router.get('/jobs/:id', async (c) => {
         </div>`
       } else if (resultPreview) {
         const provNpub = resultProviderPubkey ? pubkeyToNpub(resultProviderPubkey) : null
-        const provAvatarSrc = resultProviderAvatarUrl || (resultProviderUsername ? '/api/avatar/' + encodeURIComponent(resultProviderUsername) + '?size=96' : (provNpub ? '/api/avatar/' + encodeURIComponent(provNpub) + '?size=96' : null))
+        const provAvatarSrc = resultProviderAvatarUrl || (resultProviderPubkey ? '/api/avatar/' + encodeURIComponent(resultProviderPubkey) + '?size=96' : null)
         const provAvatarHtml = provAvatarSrc ? `<img src="${esc(provAvatarSrc)}" class="reply-avatar" loading="lazy" aria-hidden="true">` : ''
         const provNameHtml = resultProviderName
           ? (resultProviderUsername
@@ -653,7 +653,7 @@ router.get('/jobs/:id', async (c) => {
       <span class="kind-tag">${esc(kindLabel)}</span>
     </div>
     <div class="customer">${(() => {
-      const cavSrc = requesterAvatarUrl || (requesterUsername ? '/api/avatar/' + encodeURIComponent(requesterUsername) + '?size=96' : '/api/avatar/' + encodeURIComponent(re.pubkey) + '?size=96')
+      const cavSrc = requesterAvatarUrl || '/api/avatar/' + encodeURIComponent(re.pubkey) + '?size=96'
       const cavHtml = `<img src="${esc(cavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">`
       const nameLink = requesterUsername
         ? `<a href="/agents/${esc(requesterUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(displayLabel)}</a>`
@@ -956,7 +956,7 @@ router.get('/jobs/:id', async (c) => {
     resultHtml = `
     <div class="reply-block">
       <div class="reply-head">${(() => {
-        const pavSrc = providerAvatarUrl || (providerUsername ? '/api/avatar/' + encodeURIComponent(providerUsername) + '?size=96' : (providerNpub ? '/api/avatar/' + encodeURIComponent(providerNpub) + '?size=96' : null))
+        const pavSrc = providerAvatarUrl || (j.providerPubkey ? '/api/avatar/' + encodeURIComponent(j.providerPubkey) + '?size=96' : null)
         const pavHtml = pavSrc ? `<img src="${esc(pavSrc)}" class="reply-avatar" loading="lazy" aria-hidden="true">` : ''
         const pLink = providerName ? (providerUsername ? `<a href="/agents/${esc(providerUsername)}" class="reply-name">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" class="reply-name">${esc(providerName)}</a>`) : ''
         return `${pavHtml}${pLink}<span class="reply-label">${esc(t.jobResult)}</span>`
@@ -1033,13 +1033,13 @@ router.get('/jobs/:id', async (c) => {
     </div>
 
     <div class="customer">${(() => {
-      const cavSrc = j.customerAvatarUrl || (j.customerUsername ? '/api/avatar/' + encodeURIComponent(j.customerUsername) + '?size=96' : (j.customerPubkey ? '/api/avatar/' + encodeURIComponent(j.customerPubkey) + '?size=96' : null))
+      const cavSrc = j.customerAvatarUrl || (j.customerPubkey ? '/api/avatar/' + encodeURIComponent(j.customerPubkey) + '?size=96' : null)
       const cavHtml = cavSrc ? `<img src="${esc(cavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">` : ''
       const nameHtml = j.customerUsername ? `<a href="/agents/${esc(j.customerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : (j.customerPubkey ? `<a href="https://yakihonne.com/profile/${esc(pubkeyToNpub(j.customerPubkey))}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(customerName)}</a>` : `<span>${esc(customerName)}</span>`)
       return `${esc(t.jobBy)} ${cavHtml}${nameHtml}`
     })()}</div>
     ${providerName ? `<div class="customer">${(() => {
-      const pavSrc = providerAvatarUrl || (providerUsername ? '/api/avatar/' + encodeURIComponent(providerUsername) + '?size=96' : (j.providerPubkey ? '/api/avatar/' + encodeURIComponent(j.providerPubkey) + '?size=96' : null))
+      const pavSrc = providerAvatarUrl || (j.providerPubkey ? '/api/avatar/' + encodeURIComponent(j.providerPubkey) + '?size=96' : null)
       const pavHtml = pavSrc ? `<img src="${esc(pavSrc)}" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;object-fit:cover" loading="lazy" aria-hidden="true">` : ''
       const pNameHtml = providerUsername ? `<a href="/agents/${esc(providerUsername)}" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>` : `<a href="https://yakihonne.com/profile/${esc(providerNpub)}" target="_blank" rel="noopener" style="color:var(--c-accent);text-decoration:none;border-bottom:1px solid var(--c-accent-dim)">${esc(providerName)}</a>`
       return `${esc(t.jobProvider)}: ${pavHtml}${pNameHtml}`

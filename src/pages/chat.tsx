@@ -346,10 +346,10 @@ const HISTORY_KEY = 'chat_history'
 const PENDING_KEY = 'chat_pending'
 const MAX_HISTORY = 60
 
-function saveToHistory(role, text, eventId) {
+function saveToHistory(role, text, eventId, extra) {
   try {
     const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
-    h.push({ role, text, ts: Date.now(), eventId: eventId || null })
+    h.push({ role, text, ts: Date.now(), eventId: eventId || null, ...(extra || {}) })
     if (h.length > MAX_HISTORY) h.splice(0, h.length - MAX_HISTORY)
     localStorage.setItem(HISTORY_KEY, JSON.stringify(h))
   } catch {}
@@ -514,19 +514,20 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
 
 function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPubkey, providerModel) {
   if (!skipSave) {
-    saveToHistory('agent', content)
+    saveToHistory('agent', content, reqId, { reqId, providerPubkey, providerModel: providerModel || '', bolt11: bolt11 || '', amountSats: amountSats || 0 })
     document.title = 'Chat — 2020117'
     try { chatChannel.postMessage({ type: 'response', preview: content.slice(0, 80) }) } catch {}
   }
-  const modelLabel = skipSave ? '' : (providerModel ? ' · ' + providerModel : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b'))
+  const modelLabel = providerModel ? ' · ' + providerModel : (skipSave ? '' : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b'))
   const hasNwc = !!(localStorage.getItem('nostr_nwc') || '').startsWith('nostr+walletconnect://')
 
   const uid = Math.random().toString(36).slice(2)
   const payId = 'pay-' + uid
   const ratingId = 'rate-' + uid
 
+  // Payment UI: only show for live messages (not history restore) to avoid double-paying
   let payHtml = ''
-  if (amountSats > 0 && bolt11) {
+  if (amountSats > 0 && bolt11 && !skipSave) {
     if (hasNwc) {
       payHtml = '<div id="' + payId + '" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <span style="opacity:.7">paying…</span></div>'
     } else {
@@ -534,7 +535,8 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
     }
   }
 
-  const ratingHtml = (reqId && providerPubkey && !skipSave)
+  // Rating row: show for any message with reqId+providerPubkey (including history)
+  const ratingHtml = (reqId && providerPubkey)
     ? '<div id="' + ratingId + '" data-req="' + reqId + '" data-prov="' + providerPubkey + '" style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate this response">' +
       [1,2,3,4,5].map(n => '<span data-star="' + n + '" style="opacity:.3;transition:opacity .15s">★</span>').join('') +
       '</div>'
@@ -546,7 +548,7 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
     'msg-agent'
   )
 
-  if (reqId && providerPubkey && !skipSave) {
+  if (reqId && providerPubkey) {
     const rEl = document.getElementById(ratingId)
     if (rEl) {
       rEl.addEventListener('mouseover', e => {
@@ -764,7 +766,7 @@ async function enterChat(identity) {
   if (history.length > 0) {
     for (const m of history) {
       if (m.role === 'user') appendUserMsg(m.text, true)
-      else if (m.role === 'agent') appendAgentMsg(m.text, 0, '', true)
+      else if (m.role === 'agent') appendAgentMsg(m.text, m.amountSats || 0, m.bolt11 || '', true, m.reqId, m.providerPubkey, m.providerModel)
     }
   } else {
     appendSystemMsg('Connected · ' + identity.pubkey.slice(0, 16) + '…')

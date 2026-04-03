@@ -757,20 +757,14 @@ router.get('/jobs/:id', async (c) => {
     ).limit(1)
     if (relayReview.length > 0) {
       const re = relayReview[0]
-      const tags = re.tags ? JSON.parse(re.tags) : {}
-      const rating = tags.rating ? parseInt(tags.rating) : 5
+      const tagArr: string[][] = re.tags ? JSON.parse(re.tags) : []
+      const tagVal = (name: string) => tagArr.find((t: string[]) => t[0] === name)?.[1] || ''
+      const rating = tagVal('rating') ? parseInt(tagVal('rating')) : 5
       const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
-      // Fetch full review text from relay (contentPreview is truncated to 200 chars)
-      let reviewContent: string | null = re.contentPreview || null
-      try {
-        const { fetchEventsFromRelay } = await import('../services/relay-io')
-        const { events: rvEvents } = await fetchEventsFromRelay('wss://relay.2020117.xyz', { ids: [re.eventId], limit: 1 })
-        if (rvEvents.length > 0) reviewContent = rvEvents[0].content || null
-      } catch { /* keep preview */ }
       reviewInfo = {
         rating: Math.min(5, Math.max(1, rating)),
-        content: reviewContent,
-        role: tags.role || 'customer',
+        content: re.contentPreview || null,
+        role: tagVal('role') || 'customer',
         reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
         createdAt: new Date(re.eventCreatedAt * 1000),
       }

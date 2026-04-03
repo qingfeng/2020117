@@ -448,16 +448,18 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798', // secp256k1 generator point (nak test key)
     ])
 
-    // Incremental: only process Kind 0s newer than last run
-    const sinceKey = 'phase_b_kind0_last_ts'
+    // Incremental: use our internal createdAt (indexing time) as cursor, NOT eventCreatedAt
+    // (eventCreatedAt is set by the bot/client and may predate our cron run, causing events
+    //  to be permanently skipped if the relay poll runs after Phase B advances the cursor)
+    const sinceKey = 'phase_b_kind0_indexed_ts'
     const sinceStr = env.KV ? await env.KV.get(sinceKey) : null
     const since = sinceStr ? parseInt(sinceStr) : 0
 
     const kind0Rows = await db
-      .selectDistinct({ pubkey: relayEvents.pubkey, eventCreatedAt: relayEvents.eventCreatedAt })
+      .selectDistinct({ pubkey: relayEvents.pubkey, indexedAt: relayEvents.createdAt })
       .from(relayEvents)
-      .where(and(eq(relayEvents.kind, 0), sql`${relayEvents.eventCreatedAt} > ${since}`))
-      .orderBy(relayEvents.eventCreatedAt)
+      .where(and(eq(relayEvents.kind, 0), sql`${relayEvents.createdAt} > ${since}`))
+      .orderBy(relayEvents.createdAt)
       .limit(50)
 
     if (kind0Rows.length === 0) return
@@ -474,7 +476,10 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
       .filter(pk => !existingPubkeys.has(pk) && !PUBKEY_BLACKLIST.has(pk))
 
     let maxTs = since
-    for (const r of kind0Rows) { if (r.eventCreatedAt > maxTs) maxTs = r.eventCreatedAt }
+    for (const r of kind0Rows) {
+      const ts = r.indexedAt instanceof Date ? Math.floor(r.indexedAt.getTime() / 1000) : Number(r.indexedAt)
+      if (ts > maxTs) maxTs = ts
+    }
 
     console.log(`[Nostr Metadata] Phase B: ${missingPubkeys.length} new Kind 0 pubkeys to register (since ${since})`)
 

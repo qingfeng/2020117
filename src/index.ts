@@ -11,6 +11,7 @@ import marketPage from './pages/market'
 import statsPage from './pages/stats'
 import skillPage from './pages/skill'
 import chatPage from './pages/chat'
+import mePage from './pages/me'
 import { scheduled } from './cron'
 import type { AppContext } from './types'
 
@@ -46,6 +47,7 @@ app.route('/', notesPage)
 app.route('/', marketPage)
 app.route('/', statsPage)
 app.route('/', chatPage)
+app.route('/', mePage)
 app.route('/skill.md', skillPage)
 
 // NIP-05 Nostr verification

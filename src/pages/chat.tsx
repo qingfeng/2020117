@@ -164,7 +164,7 @@ async function payWithNwc(bolt11, amountSats) {
     const secret = url.searchParams.get('secret') || ''
     if (!walletPubkey || !secret) return false
 
-    const secretBytes = hexToBytes(secret)
+    const secretBytes = Uint8Array.from(secret.match(/.{2}/g).map(b => parseInt(b, 16)))
     const clientPubkey = bytesToHex(getPublicKey(secretBytes))
 
     // Encrypt pay_invoice request (NIP-04 style via nostr-tools)

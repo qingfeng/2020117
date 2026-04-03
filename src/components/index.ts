@@ -1,1 +1,1 @@
-export { PageLayout } from './Layout'
+export { Avatar } from './Avatar'

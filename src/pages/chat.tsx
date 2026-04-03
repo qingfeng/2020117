@@ -474,7 +474,7 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
   if (!reqId || !providerPubkey || !identity) return
   try {
     const r = await getRelay()
-    const sk = identity.sk
+    const sk = typeof identity.sk === 'string' ? hexToBytes(identity.sk) : identity.sk
     const now = Math.floor(Date.now() / 1000)
 
     // Kind 31117 — per-job review

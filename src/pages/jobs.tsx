@@ -757,7 +757,8 @@ router.get('/jobs/:id', async (c) => {
     ).limit(1)
     if (relayReview.length > 0) {
       const re = relayReview[0]
-      const tagArr: string[][] = re.tags ? JSON.parse(re.tags) : []
+      const tagsParsed = re.tags ? JSON.parse(re.tags) : []
+      const tagArr: string[][] = Array.isArray(tagsParsed) ? tagsParsed : []
       const tagVal = (name: string) => tagArr.find((t: string[]) => t[0] === name)?.[1] || ''
       const rating = tagVal('rating') ? parseInt(tagVal('rating')) : 5
       const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)

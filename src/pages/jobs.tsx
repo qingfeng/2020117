@@ -553,7 +553,9 @@ router.get('/jobs/:id', async (c) => {
       let activityHtml = ''
       if (activityRows.length > 0) {
         const items = await Promise.all(activityRows.map(async (a) => {
-          const at = a.tags ? JSON.parse(a.tags) : {}
+          const rawAt = a.tags ? JSON.parse(a.tags) : []
+          const atArr: string[][] = Array.isArray(rawAt) ? rawAt : []
+          const atVal = (name: string) => atArr.find((t: string[]) => t[0] === name)?.[1] || ''
           const actorName = await resolveDisplayName(db, c.env, a.pubkey)
           const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
           const actorUser = await db.select({ username: users.username }).from(users).where(eq(users.nostrPubkey, a.pubkey)).limit(1)
@@ -561,7 +563,7 @@ router.get('/jobs/:id', async (c) => {
           const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
           let label = '', cls = '', reason = ''
           if (a.kind === 7000) {
-            const status = at.status || 'unknown'
+            const status = atVal('status') || 'unknown'
             const isCustomer = a.pubkey === re.pubkey
             if (status === 'processing') { label = FEEDBACK_STATUS[status] || status; cls = 'status-processing' }
             else if (status === 'success') { label = FEEDBACK_STATUS[status] || status; cls = 'status-success' }
@@ -569,24 +571,25 @@ router.get('/jobs/:id', async (c) => {
             else if (status === 'error') { label = t.jobFailed; cls = 'status-error'; reason = a.contentPreview || '' }
             else if (status === 'payment-required') { label = FEEDBACK_STATUS[status] || status; cls = 'status-payment' }
             else { label = FEEDBACK_STATUS[status] || status; cls = '' }
-            const amountMsats = at.amount ? parseInt(at.amount) : 0
+            const amountMsats = atVal('amount') ? parseInt(atVal('amount')) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind >= 6000 && a.kind <= 6999) {
             label = t.jobSubmittedResult; cls = 'status-success'
-            const amountMsats = at.amount ? parseInt(at.amount) : 0
+            const amountMsats = atVal('amount') ? parseInt(atVal('amount')) : 0
             if (amountMsats > 0) label += ` — ${Math.floor(amountMsats / 1000)} sats`
           } else if (a.kind === 1) {
-            const commentText = a.contentPreview || ''
             label = '💬 commented'; cls = ''
-            reason = commentText
+            reason = a.contentPreview || ''
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'
             label = emoji === '+' ? '❤ liked' : `${emoji} ${t.jobReacted}`; cls = 'status-success'
           } else if (a.kind === 31117) {
-            const rating = parseInt(at.rating || '0')
-            label = `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} reviewed`; cls = 'status-payment'
+            const ratingV = atVal('rating'); const ratingN = ratingV ? parseInt(ratingV) : 0
+            label = ratingN ? `${'★'.repeat(ratingN)}${'☆'.repeat(5 - ratingN)} reviewed` : 'reviewed'; cls = 'status-payment'
           } else { return '' }
-          const reasonHtml = reason ? `<div style="color:var(--c-text);font-size:14px;line-height:1.6;margin-top:6px;width:100%">${esc(reason.slice(0, 200))}</div>` : ''
+          const reasonHtml = reason
+            ? `<div style="margin-top:8px;width:100%;padding:10px 12px;background:var(--c-surface);border-left:3px solid var(--c-border);border-radius:0 6px 6px 0;color:var(--c-text);font-size:14px;line-height:1.7">${esc(reason.slice(0, 300))}</div>`
+            : ''
           const actorHref = actorUsername ? `/agents/${esc(actorUsername)}` : `https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}`
           const actorExtra = actorUsername ? '' : ' target="_blank" rel="noopener"'
           return `<div class="activity-item" style="flex-wrap:wrap"><a class="actor" href="${actorHref}"${actorExtra}>${esc(actorLabel)}</a> <span class="${cls}">${esc(label)}</span><span class="atime">${timeA}</span>${reasonHtml}</div>`
@@ -1081,12 +1084,14 @@ router.get('/jobs/:id', async (c) => {
       ${(() => {
         const renderItem = (a: ActivityRow, skipActor = false) => {
           const actor = activityActors.get(a.pubkey) || { name: pubkeyToNpub(a.pubkey).slice(0, 16) + '...', username: '' }
-          const tags = a.tags ? JSON.parse(a.tags) : {}
+          const rawTags = a.tags ? JSON.parse(a.tags) : []
+          const tagArr2: string[][] = Array.isArray(rawTags) ? rawTags : []
+          const tagVal2 = (name: string) => tagArr2.find((t: string[]) => t[0] === name)?.[1] || ''
           const aTimeIso = new Date(a.eventCreatedAt * 1000).toISOString()
           const aTime = `<time datetime="${esc(aTimeIso)}">${aTimeIso.slice(0, 16).replace('T', ' ')}</time>`
           let label = '', cls = '', reason = '', resultPreview = ''
           if (a.kind === 7000) {
-            const st = tags.status || 'update'
+            const st = tagVal2('status') || 'update'
             const isCustomer = a.pubkey === j.customerPubkey
             if (st === 'processing') { label = t.jobStarted; cls = 'status-processing' }
             else if (st === 'success') { label = t.jobCompleted; cls = 'status-success' }
@@ -1106,12 +1111,14 @@ router.get('/jobs/:id', async (c) => {
           } else if (a.kind === 7) {
             const emoji = a.contentPreview || '+'; label = emoji === '+' ? '❤ liked' : `${emoji} reacted`; cls = 'status-success'
           } else if (a.kind === 31117) {
-            const ratingVal = tags.rating || ''; label = ratingVal ? `reviewed (${'★'.repeat(parseInt(ratingVal))}${'☆'.repeat(5 - parseInt(ratingVal))})` : 'reviewed'; cls = 'status-payment'
+            const ratingVal = tagVal2('rating'); label = ratingVal ? `reviewed (${'★'.repeat(parseInt(ratingVal))}${'☆'.repeat(5 - parseInt(ratingVal))})` : 'reviewed'; cls = 'status-payment'
           } else { return '' }
           const actorHtml = skipActor ? '' : (actor.username
             ? `<a class="actor" href="/agents/${esc(actor.username)}">${esc(actor.name)}</a> `
             : `<a class="actor" href="https://yakihonne.com/profile/${esc(pubkeyToNpub(a.pubkey))}" target="_blank" rel="noopener">${esc(actor.name)}</a> `)
-          const reasonHtml = reason ? `<div style="color:var(--c-text-muted);font-size:11px;margin-top:3px;font-style:italic;width:100%;padding-left:2px">${esc(reason.slice(0, 200))}</div>` : ''
+          const reasonHtml = reason
+            ? `<div style="margin-top:8px;width:100%;padding:10px 12px;background:var(--c-surface);border-left:3px solid var(--c-border);border-radius:0 6px 6px 0;color:var(--c-text);font-size:14px;line-height:1.7">${esc(reason.slice(0, 300))}</div>`
+            : ''
           let resultPreviewHtml = ''
           if (resultPreview) {
             let dvmHtml: string | null = null

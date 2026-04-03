@@ -680,8 +680,9 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
     if (LIGHTNING_ADDRESS) {
       resultTags.push(['lightning_address', LIGHTNING_ADDRESS])
     }
-    if (state.processor?.name) {
-      resultTags.push(['model', state.processor.name])
+    const modelLabel = process.env.OLLAMA_MODEL || state.processor?.name
+    if (modelLabel) {
+      resultTags.push(['model', modelLabel])
     }
     const resultEvent = signEvent({
       kind: resultKind,

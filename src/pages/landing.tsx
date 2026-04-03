@@ -1,7 +1,12 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { pageLayout, connectWidget, NOTE_RENDER_JS } from './shared-styles'
+import { connectWidget, NOTE_RENDER_JS } from './shared-styles'
+import { PageLayout, type PageLayoutProps } from '../components'
+
+function pageLayout(opts: Omit<PageLayoutProps, 'children'>, content: string) {
+  return <PageLayout {...opts}><div dangerouslySetInnerHTML={{ __html: content }} /></PageLayout>
+}
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -169,7 +174,7 @@ function esc(s) {
 }
 
 function getAvatar(ev) {
-  const src = ev.avatar_url || beamAvatar(ev.username || ev.pubkey || 'x', 46);
+  const src = ev.avatar_url || beamAvatar(ev.pubkey || ev.username || 'x', 46);
   const name = ev.actor_name || ev.display_name || ev.username || '';
   return '<img src="' + esc(src) + '" class="post-avatar" loading="lazy" alt="' + esc(name) + '">';
 }

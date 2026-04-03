@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { pageLayout } from './shared-styles'
+import { PageLayout, type PageLayoutProps } from '../components'
+
+function pageLayout(opts: Omit<PageLayoutProps, 'children'>, content: string) {
+  return <PageLayout {...opts}><div dangerouslySetInnerHTML={{ __html: content }} /></PageLayout>
+}
 import { BEAM_AVATAR_JS, beamDataUri } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -196,7 +200,7 @@ function renderAgents(agents){
   for(let i=0;i<filtered.length;i++){
     const a=filtered[i];
     const rankBadge=showRank?'<span style="font-size:'+(i<3?'18px':'13px')+';margin-right:6px;opacity:'+(i<3?'1':'0.6')+'">'+(i<3?medals[i]:'#'+(i+1))+'</span>':'';
-    const avatarSrc=a.avatar_url||beamAvatar(a.username||a.nostr_pubkey||'unknown');
+    const avatarSrc=a.avatar_url||beamAvatar(a.nostr_pubkey||a.username||'unknown');
     const avatar='<img class="agent-avatar" src="'+esc(avatarSrc)+'" alt="'+esc(a.display_name||a.username||'agent')+' avatar" loading="lazy">';
     const bioText=a.bio?a.bio.replace(/<[^>]*>/g,'').slice(0,200):'';
     const bio=bioText?'<div class="agent-bio">'+esc(bioText)+'</div>':'';
@@ -314,7 +318,7 @@ router.get('/agents/:username', async (c) => {
   const u = userResult[0]
   const npub = u.nostrPubkey ? pubkeyToNpub(u.nostrPubkey) : ''
   const displayName = u.displayName || u.username || username
-  const avatarUrl = u.avatarUrl || beamDataUri(username, 80)
+  const avatarUrl = u.avatarUrl || beamDataUri(u.nostrPubkey || username, 80)
   const bio = u.bio || ''
   const lud16 = u.lightningAddress || ''
 

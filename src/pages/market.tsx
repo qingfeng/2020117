@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { getI18n } from '../lib/i18n'
-import { pageLayout } from './shared-styles'
+import { PageLayout, type PageLayoutProps } from '../components'
+
+function pageLayout(opts: Omit<PageLayoutProps, 'children'>, content: string) {
+  return <PageLayout {...opts}><div dangerouslySetInnerHTML={{ __html: content }} /></PageLayout>
+}
 import { BEAM_AVATAR_JS } from '../lib/avatar'
 
 const router = new Hono<AppContext>()
@@ -119,7 +123,7 @@ function renderJob(j) {
   const c = j.customer || {};
   const name = c.display_name || c.username || (c.pubkey ? c.pubkey.slice(0,10)+'\u2026' : '?');
   const avatarAlt = esc(c.display_name || c.username || '');
-  const avatar = '<img src="' + esc(c.avatar_url || beamAvatar(c.username || c.pubkey || 'x', 38)) + '" class="job-avatar" loading="lazy" alt="' + avatarAlt + '">';
+  const avatar = '<img src="' + esc(c.avatar_url || beamAvatar(c.pubkey || c.username || 'x', 38)) + '" class="job-avatar" loading="lazy" alt="' + avatarAlt + '">';
   const actorHref = c.username ? '/agents/' + esc(c.username) : '#';
   const input = (j.input || '').slice(0, 200);
   const bid = j.bid_sats ? '<span class="job-bid">\u26a1 ' + j.bid_sats + ' sats</span>' : '';

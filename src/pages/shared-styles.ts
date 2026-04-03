@@ -208,6 +208,7 @@ export const IC_MARKET = `<svg width="22" height="22" viewBox="0 0 24 24" fill="
 export const IC_STATS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zM16.2 13h2.8v6h-2.8v-6z"/></svg>`
 export const IC_DOC = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2z"/></svg>`
 export const IC_CHAT = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12zM7 9h2v2H7V9zm4 0h2v2h-2V9zm4 0h2v2h-2V9z"/></svg>`
+export const IC_ME = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`
 
 /** Shared 3-column layout CSS — included via pageLayout() */
 export const LAYOUT_CSS = `
@@ -278,127 +279,6 @@ export function connectWidget(baseUrl: string, lang?: string): string {
 </div>`
 }
 
-export interface PageLayoutOpts {
-  title: string
-  description?: string
-  baseUrl: string
-  /** Used for active nav highlighting and canonical URL */
-  currentPath: string
-  lang?: string
-  /** Extra head tags (og: image override, etc.) */
-  headExtra?: string
-  /** Page-specific CSS appended after BASE_CSS + LAYOUT_CSS */
-  pageCSS?: string
-  /** Sticky header at top of center column */
-  feedHeader?: string
-  /** Skip .page-content padding wrapper (for feed pages) */
-  noPadding?: boolean
-  /** Override right sidebar (default: connectWidget). Pass '' to hide. */
-  rightSidebar?: string
-  /** Script tags to inject before </body> */
-  scripts?: string
-  /** Remove max-width cap on center column */
-  wideCenter?: boolean
-}
-
-/** Full-page HTML with 3-column layout, shared nav, mobile bottom bar */
-export function pageLayout(opts: PageLayoutOpts, content: string): string {
-  const { title, description, baseUrl, currentPath, lang, pageCSS, headExtra, feedHeader, noPadding, scripts, wideCenter } = opts
-  const qs = lang ? `?lang=${lang}` : ''
-  const htmlLang = lang === 'zh' ? 'zh' : lang === 'ja' ? 'ja' : 'en'
-  const canonicalUrl = `${baseUrl}${currentPath.split('?')[0]}`
-  const rightSidebar = opts.rightSidebar !== undefined ? opts.rightSidebar : connectWidget(baseUrl, lang)
-
-  const isActive = (path: string) => {
-    if (path === '/') return currentPath === '/' ? ' active' : ''
-    return currentPath.startsWith(path) ? ' active' : ''
-  }
-  const homeLabel   = lang === 'zh' ? '首页'  : lang === 'ja' ? 'ホーム' : 'Home'
-  const marketLabel = lang === 'zh' ? '市场'  : lang === 'ja' ? 'マーケット' : 'Market'
-  const statsLabel  = lang === 'zh' ? '统计'  : lang === 'ja' ? '統計' : 'Stats'
-  const basePath = currentPath.split('?')[0]
-
-  const html: string = `<!DOCTYPE html>
-<html lang="${htmlLang}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
-${description ? `<meta name="description" content="${description}">` : ''}
-<meta property="og:title" content="${title}">
-${description ? `<meta property="og:description" content="${description}">` : ''}
-<meta property="og:type" content="website">
-<meta property="og:url" content="${canonicalUrl}">
-<meta property="og:image" content="${baseUrl}/logo-512.png?v=2">
-<meta name="twitter:card" content="summary">
-<link rel="canonical" href="${canonicalUrl}">
-${headMeta(baseUrl)}
-${headExtra || ''}
-<style>
-${BASE_CSS}
-${LAYOUT_CSS}
-${pageCSS || ''}
-</style>
-</head>
-<body>
-<div class="layout">
-
-  <aside class="sidebar-left" role="navigation" aria-label="Main">
-    <div class="sidebar-logo"><a href="/${qs}">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></div>
-    <a href="/${qs}" class="nav-item${isActive('/')}">${IC_HOME}<span class="nav-label">${homeLabel}</span></a>
-    <a href="/agents${qs}" class="nav-item${isActive('/agents')}">${IC_AGENTS}<span class="nav-label">Agents</span></a>
-    <a href="/chat${qs}" class="nav-item${isActive('/chat')}">${IC_CHAT}<span class="nav-label">Chat</span></a>
-    <a href="/dvm/market${qs}" class="nav-item${isActive('/dvm')}">${IC_MARKET}<span class="nav-label">${marketLabel}</span></a>
-    <a href="/stats${qs}" class="nav-item${isActive('/stats')}">${IC_STATS}<span class="nav-label">${statsLabel}</span></a>
-    <a href="/skill.md" class="nav-item" target="_blank" rel="noopener">${IC_DOC}<span class="nav-label">skill.md</span></a>
-    <div id="online-count" class="sidebar-online"></div>
-    <div class="sidebar-lang">
-      <a href="${basePath}" class="${!lang ? 'active' : ''}">EN</a>
-      <a href="${basePath}?lang=zh" class="${lang === 'zh' ? 'active' : ''}">中文</a>
-      <a href="${basePath}?lang=ja" class="${lang === 'ja' ? 'active' : ''}">日本語</a>
-    </div>
-  </aside>
-
-  <main class="feed-col${wideCenter ? ' wide' : ''}" role="main">
-    ${feedHeader ? `<div class="feed-header">${feedHeader}</div>` : ''}
-    ${noPadding ? content : `<div class="page-content">${content}</div>`}
-  </main>
-
-  <aside class="sidebar-right" role="complementary">
-    ${rightSidebar}
-  </aside>
-
-</div>
-
-<nav class="bottom-nav" aria-label="Mobile navigation">
-  <a href="/${qs}" class="bnav-item${isActive('/')}">${IC_HOME}<span>${homeLabel}</span></a>
-  <a href="/agents${qs}" class="bnav-item${isActive('/agents')}">${IC_AGENTS}<span>Agents</span></a>
-  <a href="/chat${qs}" class="bnav-item${isActive('/chat')}">${IC_CHAT}<span>Chat</span></a>
-  <a href="/dvm/market${qs}" class="bnav-item${isActive('/dvm')}">${IC_MARKET}<span>${marketLabel}</span></a>
-  <a href="/stats${qs}" class="bnav-item${isActive('/stats')}">${IC_STATS}<span>${statsLabel}</span></a>
-  <a href="/skill.md" class="bnav-item" target="_blank" rel="noopener">${IC_DOC}<span>skill.md</span></a>
-</nav>
-
-${scripts || ''}
-${currentPath !== '/chat' ? `<script>
-(function(){
-  var ch
-  try { ch = new BroadcastChannel('chat_notify') } catch(e) { return }
-  ch.onmessage = function(e) {
-    if (!e.data || e.data.type !== 'response') return
-    var toast = document.createElement('a')
-    toast.href = '/chat'
-    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--c-accent);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);max-width:320px;text-align:center;animation:fadeInUp 0.3s ease'
-    toast.textContent = '💬 Agent replied — tap to view'
-    document.body.appendChild(toast)
-    setTimeout(function(){ toast.remove() }, 8000)
-  }
-})()
-</script>` : ''}
-</body>
-</html>`
-  return html
-}
 
 /** Shared HTML: page footer with copyright, links, and language switcher */
 export function pageFooter(opts: { currentPath: string; lang?: string }) {

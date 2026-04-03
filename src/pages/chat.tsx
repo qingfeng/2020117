@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
-import { pageLayout } from './shared-styles'
+import { PageLayout, type PageLayoutProps } from '../components'
+
+function pageLayout(opts: Omit<PageLayoutProps, 'children'>, content: string) {
+  return <PageLayout {...opts}><div dangerouslySetInnerHTML={{ __html: content }} /></PageLayout>
+}
 
 const router = new Hono<AppContext>()
 

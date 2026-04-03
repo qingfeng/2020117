@@ -53,6 +53,8 @@ export function PageLayout({
 </script>` : ''
 
   return (
+    <>
+    {raw('<!DOCTYPE html>')}
     <html lang={htmlLang}>
       <head>
         <meta charset="utf-8" />
@@ -115,5 +117,6 @@ export function PageLayout({
         {notChatScript && <div dangerouslySetInnerHTML={{ __html: notChatScript }} />}
       </body>
     </html>
+    </>
   )
 }

@@ -10,7 +10,7 @@
 
 import { spawn } from 'child_process'
 import { access, constants } from 'fs/promises'
-import type { Processor, JobRequest } from '../processor.js'
+import type { Processor, JobRequest, GenerateResult } from '../processor.js'
 
 export class ExecProcessor implements Processor {
   private cmd: string
@@ -34,7 +34,8 @@ export class ExecProcessor implements Processor {
     }
   }
 
-  generate(req: JobRequest): Promise<string> {
+  generate(req: JobRequest): Promise<GenerateResult> {
+    const model = this.name
     return new Promise((resolve, reject) => {
       const env = { ...process.env } as Record<string, string>
       if (req.params) env.JOB_PARAMS = JSON.stringify(req.params)
@@ -50,7 +51,7 @@ export class ExecProcessor implements Processor {
         if (code !== 0) {
           reject(new Error(`Exec process exited with code ${code}: ${stderr}`))
         } else {
-          resolve(Buffer.concat(chunks).toString('utf-8'))
+          resolve({ result: Buffer.concat(chunks).toString('utf-8'), model })
         }
       })
 

@@ -14,8 +14,16 @@
 export interface JobRequest {
   /** The text input (prompt / source text / query) */
   input: string
+  /** Optional model override from the DVM request ['param','model','...'] tag */
+  model?: string
   /** Optional extra parameters (model overrides, LoRA, ControlNet, etc.) */
   params?: Record<string, unknown>
+}
+
+export interface GenerateResult {
+  result: string
+  /** The actual model used (may differ from requested if not available) */
+  model: string
 }
 
 export interface Processor {
@@ -23,8 +31,8 @@ export interface Processor {
   readonly name: string
   /** Startup check — may throw to abort launch */
   verify(): Promise<void>
-  /** Non-streaming generation */
-  generate(req: JobRequest): Promise<string>
+  /** Non-streaming generation — returns result and actual model used */
+  generate(req: JobRequest): Promise<GenerateResult>
   /** Streaming generation — yields chunks as they arrive */
   generateStream(req: JobRequest): AsyncGenerator<string>
 }

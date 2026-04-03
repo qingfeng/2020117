@@ -8,7 +8,7 @@
  * - generateStream(): POST with Accept: application/x-ndjson, yields lines
  */
 
-import type { Processor, JobRequest } from '../processor.js'
+import type { Processor, JobRequest, GenerateResult } from '../processor.js'
 
 export class HttpProcessor implements Processor {
   private url: string
@@ -33,11 +33,13 @@ export class HttpProcessor implements Processor {
     }
   }
 
-  async generate(req: JobRequest): Promise<string> {
+  async generate(req: JobRequest): Promise<GenerateResult> {
+    const body: Record<string, any> = { input: req.input, ...req.params }
+    if (req.model) body.model = req.model
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: req.input, ...req.params }),
+      body: JSON.stringify(body),
     })
 
     if (!res.ok) {
@@ -46,12 +48,12 @@ export class HttpProcessor implements Processor {
     }
 
     const data = await res.json() as Record<string, any>
-    // Try common field names
     const output = data.result ?? data.data ?? data.output ?? data.text ?? data.response
     if (output === undefined) {
       throw new Error(`HTTP processor: response has no result/data/output/text/response field`)
     }
-    return String(output)
+    const model = data.model || req.model || this.name
+    return { result: String(output), model }
   }
 
   async *generateStream(req: JobRequest): AsyncGenerator<string> {

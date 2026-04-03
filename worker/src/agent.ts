@@ -572,7 +572,7 @@ async function handleAiPrompt(label: string, event: NostrEvent) {
     await publishAiStatus(clientPubkey, promptId, 'thinking')
 
     // Process
-    const result = await state.processor.generate({ input: message, params: content.params })
+    const { result } = await state.processor.generate({ input: message, params: content.params })
     console.log(`[${label}] NIP-XX response: ${result.length} chars`)
 
     // Build ai.response (Kind 25803)
@@ -617,9 +617,10 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
   if (!acquireSlot()) return
 
   try {
-    // Parse DVM request: input is in 'i' tag
+    // Parse DVM request: input is in 'i' tag, optional model in ['param','model','...']
     const inputTag = event.tags.find(t => t[0] === 'i')
     const input = inputTag?.[1] || ''
+    const requestedModel = event.tags.find(t => t[0] === 'param' && t[1] === 'model')?.[2]
     if (!input) {
       console.warn(`[${label}] DVM request ${event.id.slice(0, 8)} has no input`)
       return
@@ -641,18 +642,19 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     // Process (with optional pipeline: delegate sub-task first)
     let result: string
+    let actualModel: string
     if (SUB_KIND) {
       console.log(`[${label}] Pipeline: delegating to kind ${SUB_KIND}...`)
       try {
         const subResult = await delegateNostr(label, SUB_KIND, input, SUB_BID, SUB_PROVIDER)
         console.log(`[${label}] Sub-task returned ${subResult.length} chars`)
-        result = await state.processor.generate({ input: subResult })
+        ;({ result, model: actualModel } = await state.processor.generate({ input: subResult, model: requestedModel }))
       } catch (e: any) {
         console.error(`[${label}] Sub-task failed: ${e.message}, using original input`)
-        result = await state.processor.generate({ input })
+        ;({ result, model: actualModel } = await state.processor.generate({ input, model: requestedModel }))
       }
     } else {
-      result = await state.processor.generate({ input })
+      ;({ result, model: actualModel } = await state.processor.generate({ input, model: requestedModel }))
     }
     console.log(`[${label}] DVM result: ${result.length} chars`)
 
@@ -680,9 +682,8 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
     if (LIGHTNING_ADDRESS) {
       resultTags.push(['lightning_address', LIGHTNING_ADDRESS])
     }
-    const modelLabel = process.env.OLLAMA_MODEL || state.processor?.name
-    if (modelLabel) {
-      resultTags.push(['model', modelLabel])
+    if (actualModel) {
+      resultTags.push(['model', actualModel])
     }
     const resultEvent = signEvent({
       kind: resultKind,
@@ -1307,7 +1308,7 @@ async function startSwarmListener(label: string) {
       }
       console.log(`[${label}] Session job ${msg.id}: "${(msg.input || '').slice(0, 60)}..."`)
       try {
-        const result = await state.processor!.generate({ input: msg.input || '', params: msg.params })
+        const { result } = await state.processor!.generate({ input: msg.input || '', params: msg.params })
         node.send(socket, { type: 'result', id: msg.id, output: result })
         console.log(`[${label}] Session job ${msg.id}: ${result.length} chars`)
       } catch (e: any) {

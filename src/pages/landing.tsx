@@ -260,7 +260,8 @@ function renderCard(ev) {
   const replies2 = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
   const reactions2 = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
   const footer2 = (replies2 || reactions2) ? '<div class="post-footer">' + replies2 + reactions2 + '</div>' : '';
-  return '<div class="post">' + getAvatar(ev)
+  const reviewJobHref = (ev.kind === 30311 || ev.kind === 31117) ? (ev.ref_event_id ? '/jobs/' + esc(ev.ref_event_id) : (ev.job_id ? '/jobs/' + esc(ev.job_id) : '')) : '';
+  return '<div class="post"' + (reviewJobHref ? ' data-href="' + reviewJobHref + '"' : '') + '>' + getAvatar(ev)
     + '<div class="post-right">' + header
     + (detail ? '<div class="post-body-dim">' + esc(detail.slice(0,400)).replace(/([★☆]+)/g, '<span style="color:var(--c-gold)">$1</span>') + '</div>' : '')
     + footer2

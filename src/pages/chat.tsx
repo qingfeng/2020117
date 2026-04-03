@@ -297,8 +297,9 @@ function subscribeForRequest(r, eventId, thinkingEl) {
           const amountTag = ev.tags.find(t => t[0] === 'amount')
           const bolt11 = amountTag?.[2] || ''
           const amountSats = bolt11 ? Math.floor(Number(amountTag?.[1] || '0') / 1000) : 0
+          const providerModel = ev.tags.find(t => t[0] === 'model')?.[1] || ''
           thinkingEl.remove()
-          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId || eventId, ev.pubkey)
+          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId || eventId, ev.pubkey, providerModel)
           enableInput()
         }
       }
@@ -403,7 +404,8 @@ async function resolvePending(r) {
           const amountTag = ev.tags.find(t => t[0] === 'amount')
           const bolt11 = amountTag?.[2] || ''
           const amountSats = bolt11 ? Math.floor(Number(amountTag?.[1] || '0') / 1000) : 0
-          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId, ev.pubkey)
+          const providerModel = ev.tags.find(t => t[0] === 'model')?.[1] || ''
+          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId, ev.pubkey, providerModel)
         },
         oneose() {
           sub.close()
@@ -510,13 +512,13 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
   }
 }
 
-function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPubkey) {
+function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPubkey, providerModel) {
   if (!skipSave) {
     saveToHistory('agent', content)
     document.title = 'Chat — 2020117'
     try { chatChannel.postMessage({ type: 'response', preview: content.slice(0, 80) }) } catch {}
   }
-  const modelLabel = skipSave ? '' : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b')
+  const modelLabel = skipSave ? '' : (providerModel ? ' · ' + providerModel : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b'))
   const hasNwc = !!(localStorage.getItem('nostr_nwc') || '').startsWith('nostr+walletconnect://')
 
   const uid = Math.random().toString(36).slice(2)

@@ -658,14 +658,30 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     // Send result (Kind 6xxx = request kind + 1000)
     const resultKind = KIND + 1000
+    const amountMsats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT * 1000
+    let amountTag: string[]
+    if (amountMsats > 0 && state.nwcParsed) {
+      try {
+        const { bolt11 } = await nwcMakeInvoice(state.nwcParsed, amountMsats, `DVM job ${event.id.slice(0, 8)}`)
+        amountTag = ['amount', String(amountMsats), bolt11]
+      } catch (e) {
+        console.warn(`[${label}] Failed to generate invoice via NWC, falling back to amount-only:`, e)
+        amountTag = ['amount', String(amountMsats)]
+      }
+    } else {
+      amountTag = ['amount', String(amountMsats)]
+    }
     const resultTags: string[][] = [
       ['p', event.pubkey],
       ['e', event.id],
       ['request', JSON.stringify(event)],
-      ['amount', String(SATS_PER_CHUNK * CHUNKS_PER_PAYMENT * 1000)],  // msats
+      amountTag,
     ]
     if (LIGHTNING_ADDRESS) {
       resultTags.push(['lightning_address', LIGHTNING_ADDRESS])
+    }
+    if (state.processor?.name) {
+      resultTags.push(['model', state.processor.name])
     }
     const resultEvent = signEvent({
       kind: resultKind,

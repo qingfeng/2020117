@@ -165,7 +165,6 @@ async function payWithNwc(bolt11, amountSats) {
     if (!walletPubkey || !secret) return false
 
     const secretBytes = Uint8Array.from(secret.match(/.{2}/g).map(b => parseInt(b, 16)))
-    const clientPubkey = bytesToHex(getPublicKey(secretBytes))
 
     // Encrypt pay_invoice request (NIP-04 style via nostr-tools)
     const { nip04 } = await import('https://esm.sh/nostr-tools@2.23.3/nip04')

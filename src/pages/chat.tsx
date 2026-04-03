@@ -167,9 +167,9 @@ async function payWithNwc(bolt11, amountSats) {
     const secretBytes = Uint8Array.from(secret.match(/.{2}/g).map(b => parseInt(b, 16)))
 
     // Encrypt pay_invoice request (NIP-04 style via nostr-tools)
-    const { nip04 } = await import('https://esm.sh/nostr-tools@2.23.3/nip04')
+    const { encrypt: nip04encrypt, decrypt: nip04decrypt } = await import('https://esm.sh/nostr-tools@2.23.3/nip04')
     const reqContent = JSON.stringify({ method: 'pay_invoice', params: { invoice: bolt11 } })
-    const encrypted = await nip04.encrypt(secret, walletPubkey, reqContent)
+    const encrypted = await nip04encrypt(secret, walletPubkey, reqContent)
 
     const reqEvent = finalizeEvent({
       kind: 23194,
@@ -189,7 +189,7 @@ async function payWithNwc(bolt11, amountSats) {
           clearTimeout(timer)
           wRelay.close()
           try {
-            const decrypted = await nip04.decrypt(secret, walletPubkey, ev.content)
+            const decrypted = await nip04decrypt(secret, walletPubkey, ev.content)
             const resp = JSON.parse(decrypted)
             resolve(!resp.error)
           } catch { resolve(false) }

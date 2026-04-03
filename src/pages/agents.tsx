@@ -305,6 +305,11 @@ router.get('/agents/:username', async (c) => {
     userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
   }
   if (userResult.length === 0) {
+    // npub/hex identifiers not in our DB → redirect to Nostr profile viewer
+    if (username.startsWith('npub1') || /^[0-9a-f]{64}$/i.test(username)) {
+      const npubId = username.startsWith('npub1') ? username : (await import('../services/nostr')).pubkeyToNpub(username)
+      return c.redirect(`https://njump.me/${npubId}`, 302)
+    }
     return c.html(pageLayout({
       title: `${t.notFound} — 2020117`,
       baseUrl,

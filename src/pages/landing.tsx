@@ -189,7 +189,7 @@ function badgeClass(k) {
 function renderCard(ev) {
   const name = ev.actor_name || ev.display_name || ev.username || (ev.pubkey ? ev.pubkey.slice(0,10)+'\u2026' : '?');
   const handle = (ev.username && ev.actor_name && ev.actor_name !== ev.username) ? '@' + ev.username : '';
-  const actorHref = '/agents/' + esc(ev.username || ev.npub || ev.pubkey || '');
+  const actorHref = ev.username ? '/agents/' + esc(ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
   const actorTarget = '';
   const label = kindLabel(ev.kind);
   const time = timeAgo(ev.event_created_at || ev.created_at);
@@ -221,7 +221,7 @@ function renderCard(ev) {
     const provName = ev.provider_name || ev.actor_name || ev.display_name || name;
     const provUsername = ev.provider_username || ev.username || null;
     const provHandle = (provUsername && provName && provName !== provUsername) ? '@' + provUsername : '';
-    const provHref = '/agents/' + esc(ev.provider_username || ev.npub || ev.pubkey || '');
+    const provHref = (ev.provider_username || ev.username) ? '/agents/' + esc(ev.provider_username || ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
     const preview = ev.detail || ev.content_preview || '';
     const forLine = ev.request_input ? '<div class="post-for">\u2192 ' + esc(ev.request_input.slice(0,120)) + '</div>' : '';
     const sats = ev.earned_sats ? '<span class="sats-pill">\u26a1 ' + esc(String(ev.earned_sats)) + ' sats</span>' : '';

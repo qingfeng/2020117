@@ -298,7 +298,7 @@ function subscribeForRequest(r, eventId, thinkingEl) {
           const bolt11 = amountTag?.[2] || ''
           const amountSats = bolt11 ? Math.floor(Number(amountTag?.[1] || '0') / 1000) : 0
           thinkingEl.remove()
-          appendAgentMsg(ev.content, amountSats, bolt11)
+          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId || eventId, ev.pubkey)
           enableInput()
         }
       }
@@ -403,7 +403,7 @@ async function resolvePending(r) {
           const amountTag = ev.tags.find(t => t[0] === 'amount')
           const bolt11 = amountTag?.[2] || ''
           const amountSats = bolt11 ? Math.floor(Number(amountTag?.[1] || '0') / 1000) : 0
-          appendAgentMsg(ev.content, amountSats, bolt11)
+          appendAgentMsg(ev.content, amountSats, bolt11, false, reqId, ev.pubkey)
         },
         oneose() {
           sub.close()
@@ -468,7 +468,49 @@ function clearThinkingTimer(el) {
 
 const chatChannel = new BroadcastChannel('chat_notify')
 
-function appendAgentMsg(content, amountSats, bolt11, skipSave) {
+async function publishReview(reqId, providerPubkey, rating, content, identity) {
+  if (!reqId || !providerPubkey || !identity) return
+  try {
+    const r = await getRelay()
+    const sk = identity.sk
+    const now = Math.floor(Date.now() / 1000)
+
+    // Kind 31117 — per-job review
+    const review = finalizeEvent({
+      kind: 31117,
+      content: content || '',
+      tags: [
+        ['d', reqId],
+        ['e', reqId],
+        ['p', providerPubkey],
+        ['rating', String(rating)],
+        ['role', 'customer'],
+        ['k', '5100'],
+      ],
+      created_at: now,
+      pubkey: bytesToHex(getPublicKey(sk)),
+    }, sk)
+    await r.publish(review)
+
+    // Kind 30311 — rolling endorsement
+    const endorsement = finalizeEvent({
+      kind: 30311,
+      content: JSON.stringify({ rating, trusted: rating >= 4 }),
+      tags: [
+        ['d', providerPubkey],
+        ['p', providerPubkey],
+        ['rating', String(rating)],
+      ],
+      created_at: now,
+      pubkey: bytesToHex(getPublicKey(sk)),
+    }, sk)
+    await r.publish(endorsement)
+  } catch (e) {
+    console.warn('publishReview failed:', e)
+  }
+}
+
+function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPubkey) {
   if (!skipSave) {
     saveToHistory('agent', content)
     document.title = 'Chat — 2020117'
@@ -477,9 +519,12 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave) {
   const modelLabel = skipSave ? '' : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b')
   const hasNwc = !!(localStorage.getItem('nostr_nwc') || '').startsWith('nostr+walletconnect://')
 
+  const uid = Math.random().toString(36).slice(2)
+  const payId = 'pay-' + uid
+  const ratingId = 'rate-' + uid
+
   let payHtml = ''
   if (amountSats > 0 && bolt11) {
-    const payId = 'pay-' + Math.random().toString(36).slice(2)
     if (hasNwc) {
       payHtml = '<div id="' + payId + '" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <span style="opacity:.7">paying…</span></div>'
     } else {
@@ -487,26 +532,29 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave) {
     }
   }
 
+  const ratingHtml = (reqId && providerPubkey && !skipSave)
+    ? '<div id="' + ratingId + '" style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate this response">' +
+      [1,2,3,4,5].map(n => '<span data-star="' + n + '" style="opacity:.3;transition:opacity .15s" onmouseenter="rateHover(\'' + ratingId + '\',' + n + ')" onmouseleave="rateOut(\'' + ratingId + '\')" onclick="ratePick(\'' + ratingId + '\',' + n + ',\'' + (reqId||'') + '\',\'' + (providerPubkey||'') + '\')">★</span>').join('') +
+      '</div>'
+    : ''
+
   appendMsg(
-    '<div class="bubble bubble-agent">' + renderText(content) + payHtml + '</div>' +
+    '<div class="bubble bubble-agent">' + renderText(content) + payHtml + ratingHtml + '</div>' +
     '<div class="msg-meta">ollama-analyst' + modelLabel + ' · Nostr DVM</div>',
     'msg-agent'
   )
 
   if (amountSats > 0 && bolt11 && hasNwc) {
-    const payId = payHtml.match(/id="(pay-[^"]+)"/)?.[1]
-    if (payId) {
-      payWithNwc(bolt11, amountSats).then(ok => {
-        const el = document.getElementById(payId)
-        if (!el) return
-        if (ok) {
-          el.innerHTML = '✅ ' + amountSats + ' sats paid via NWC'
-          el.style.color = 'var(--c-green, #4caf50)'
-        } else {
-          el.innerHTML = '⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <span style="color:var(--c-text-muted);font-size:11px">NWC failed</span>'
-        }
-      })
-    }
+    payWithNwc(bolt11, amountSats).then(ok => {
+      const el = document.getElementById(payId)
+      if (!el) return
+      if (ok) {
+        el.innerHTML = '✅ ' + amountSats + ' sats paid via NWC'
+        el.style.color = 'var(--c-green, #4caf50)'
+      } else {
+        el.innerHTML = '⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <span style="color:var(--c-text-muted);font-size:11px">NWC failed</span>'
+      }
+    })
   }
 }
 
@@ -710,6 +758,34 @@ async function enterChat(identity) {
 // ─────────────────────────────────────────────────────────
 let _identity = null
 let _model = 'fast'   // 'fast' | 'deep'
+
+// ─────────────────────────────────────────────────────────
+// Star rating helpers (called via inline onclick)
+// ─────────────────────────────────────────────────────────
+window.rateHover = function(id, n) {
+  const el = document.getElementById(id)
+  if (!el || el.dataset.rated) return
+  el.querySelectorAll('[data-star]').forEach(s => {
+    s.style.opacity = Number(s.dataset.star) <= n ? '1' : '0.25'
+  })
+}
+window.rateOut = function(id) {
+  const el = document.getElementById(id)
+  if (!el || el.dataset.rated) return
+  el.querySelectorAll('[data-star]').forEach(s => { s.style.opacity = '0.3' })
+}
+window.ratePick = function(id, n, reqId, providerPubkey) {
+  const el = document.getElementById(id)
+  if (!el || el.dataset.rated) return
+  el.dataset.rated = '1'
+  el.querySelectorAll('[data-star]').forEach(s => {
+    const active = Number(s.dataset.star) <= n
+    s.style.opacity = active ? '1' : '0.2'
+    s.style.cursor = 'default'
+    s.style.color = active ? 'var(--c-gold)' : ''
+  })
+  publishReview(reqId, providerPubkey, n, '', _identity)
+}
 
 window.chatApp = {
   setModel(m) {

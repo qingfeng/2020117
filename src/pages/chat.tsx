@@ -533,8 +533,8 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
   }
 
   const ratingHtml = (reqId && providerPubkey && !skipSave)
-    ? '<div id="' + ratingId + '" style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate this response">' +
-      [1,2,3,4,5].map(n => '<span data-star="' + n + '" style="opacity:.3;transition:opacity .15s" onmouseenter="rateHover(\'' + ratingId + '\',' + n + ')" onmouseleave="rateOut(\'' + ratingId + '\')" onclick="ratePick(\'' + ratingId + '\',' + n + ',\'' + (reqId||'') + '\',\'' + (providerPubkey||'') + '\')">★</span>').join('') +
+    ? '<div id="' + ratingId + '" data-req="' + reqId + '" data-prov="' + providerPubkey + '" style="margin-top:8px;font-size:18px;line-height:1;display:flex;gap:4px;cursor:pointer" title="Rate this response">' +
+      [1,2,3,4,5].map(n => '<span data-star="' + n + '" style="opacity:.3;transition:opacity .15s">★</span>').join('') +
       '</div>'
     : ''
 
@@ -543,6 +543,37 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
     '<div class="msg-meta">ollama-analyst' + modelLabel + ' · Nostr DVM</div>',
     'msg-agent'
   )
+
+  if (reqId && providerPubkey && !skipSave) {
+    const rEl = document.getElementById(ratingId)
+    if (rEl) {
+      rEl.addEventListener('mouseover', e => {
+        if (rEl.dataset.rated) return
+        const n = Number(e.target.dataset.star)
+        if (!n) return
+        rEl.querySelectorAll('[data-star]').forEach(s => {
+          s.style.opacity = Number(s.dataset.star) <= n ? '1' : '0.25'
+        })
+      })
+      rEl.addEventListener('mouseout', () => {
+        if (rEl.dataset.rated) return
+        rEl.querySelectorAll('[data-star]').forEach(s => { s.style.opacity = '0.3' })
+      })
+      rEl.addEventListener('click', e => {
+        if (rEl.dataset.rated) return
+        const n = Number(e.target.dataset.star)
+        if (!n) return
+        rEl.dataset.rated = '1'
+        rEl.querySelectorAll('[data-star]').forEach(s => {
+          const active = Number(s.dataset.star) <= n
+          s.style.opacity = active ? '1' : '0.2'
+          s.style.cursor = 'default'
+          if (active) s.style.color = 'var(--c-gold)'
+        })
+        publishReview(rEl.dataset.req, rEl.dataset.prov, n, '', _identity)
+      })
+    }
+  }
 
   if (amountSats > 0 && bolt11 && hasNwc) {
     payWithNwc(bolt11, amountSats).then(ok => {
@@ -758,34 +789,6 @@ async function enterChat(identity) {
 // ─────────────────────────────────────────────────────────
 let _identity = null
 let _model = 'fast'   // 'fast' | 'deep'
-
-// ─────────────────────────────────────────────────────────
-// Star rating helpers (called via inline onclick)
-// ─────────────────────────────────────────────────────────
-window.rateHover = function(id, n) {
-  const el = document.getElementById(id)
-  if (!el || el.dataset.rated) return
-  el.querySelectorAll('[data-star]').forEach(s => {
-    s.style.opacity = Number(s.dataset.star) <= n ? '1' : '0.25'
-  })
-}
-window.rateOut = function(id) {
-  const el = document.getElementById(id)
-  if (!el || el.dataset.rated) return
-  el.querySelectorAll('[data-star]').forEach(s => { s.style.opacity = '0.3' })
-}
-window.ratePick = function(id, n, reqId, providerPubkey) {
-  const el = document.getElementById(id)
-  if (!el || el.dataset.rated) return
-  el.dataset.rated = '1'
-  el.querySelectorAll('[data-star]').forEach(s => {
-    const active = Number(s.dataset.star) <= n
-    s.style.opacity = active ? '1' : '0.2'
-    s.style.cursor = 'default'
-    s.style.color = active ? 'var(--c-gold)' : ''
-  })
-  publishReview(reqId, providerPubkey, n, '', _identity)
-}
 
 window.chatApp = {
   setModel(m) {

@@ -490,7 +490,6 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
         ['k', '5100'],
       ],
       created_at: now,
-      pubkey: bytesToHex(getPublicKey(sk)),
     }, sk)
     await r.publish(review)
 
@@ -504,7 +503,6 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
         ['rating', String(rating)],
       ],
       created_at: now,
-      pubkey: bytesToHex(getPublicKey(sk)),
     }, sk)
     await r.publish(endorsement)
   } catch (e) {

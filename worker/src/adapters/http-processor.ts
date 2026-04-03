@@ -18,7 +18,7 @@ export class HttpProcessor implements Processor {
   }
 
   get name(): string {
-    return `http:${this.url}`
+    try { return new URL(this.url).host } catch { return this.url }
   }
 
   async verify(): Promise<void> {

@@ -138,10 +138,12 @@ router.get('/chat', (c) => {
 </div>
 `
 
-  const scripts = `<script type="module">
+  const scripts = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script type="module">
 import { generateSecretKey, getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
 import { bytesToHex, hexToBytes } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
+import renderMathInElement from 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.mjs'
 
 const RELAY_URL = '${RELAY_URL}'
 const PROVIDER_PUBKEY = '${PROVIDER_PUBKEY}'
@@ -170,17 +172,12 @@ async function payWithNwc(bolt11, amountSats) {
     const reqContent = JSON.stringify({ method: 'pay_invoice', params: { invoice: bolt11 } })
     const encrypted = await nip04.encrypt(secret, walletPubkey, reqContent)
 
-    const reqEvent = await (async () => {
-      const template = {
-        kind: 23194,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [['p', walletPubkey]],
-        content: encrypted,
-        pubkey: clientPubkey,
-      }
-      template.id = getEventHash(template)
-      return finalizeEvent(template, secretBytes)
-    })()
+    const reqEvent = finalizeEvent({
+      kind: 23194,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', walletPubkey]],
+      content: encrypted,
+    }, secretBytes)
 
     const wRelay = await Relay.connect(relayUrl)
     await wRelay.publish(reqEvent)
@@ -334,6 +331,7 @@ function appendMsg(html, cls) {
   el.className = 'msg ' + cls
   el.innerHTML = html
   document.getElementById('messages').appendChild(el)
+  try { renderMathInElement(el, { delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}], throwOnError: false }) } catch {}
   const msgs = document.getElementById('messages')
   msgs.scrollTop = msgs.scrollHeight
   return el

@@ -497,6 +497,7 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
       tags: [
         ['d', providerPubkey],
         ['p', providerPubkey],
+        ['e', reqId],
         ['rating', String(rating)],
       ],
       created_at: now,

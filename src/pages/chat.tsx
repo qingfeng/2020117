@@ -109,7 +109,7 @@ router.get('/chat', (c) => {
     </div>
     <div class="onboard-note">
       Your private key stays in your browser.<br>
-      Want to pay agents? <a href="https://coinos.io" target="_blank" rel="noopener">Get a coinos wallet →</a>
+      Want to pay agents? <a href="/me" target="_blank" rel="noopener">Set up NWC wallet →</a>
     </div>
   </div>
 </div>
@@ -147,6 +147,64 @@ const RELAY_URL = '${RELAY_URL}'
 const PROVIDER_PUBKEY = '${PROVIDER_PUBKEY}'
 const POW_DVM = ${POW_DVM}
 const POW_PROFILE = ${POW_PROFILE}
+
+// ─────────────────────────────────────────────────────────
+// NWC auto-payment (NIP-47)
+// ─────────────────────────────────────────────────────────
+async function payWithNwc(bolt11, amountSats) {
+  const nwcUri = localStorage.getItem('nostr_nwc') || ''
+  if (!nwcUri.startsWith('nostr+walletconnect://')) return false
+
+  try {
+    const url = new URL(nwcUri.replace('nostr+walletconnect://', 'https://'))
+    const walletPubkey = url.hostname
+    const relayUrl = url.searchParams.get('relay') || RELAY_URL
+    const secret = url.searchParams.get('secret') || ''
+    if (!walletPubkey || !secret) return false
+
+    const secretBytes = hexToBytes(secret)
+    const clientPubkey = bytesToHex(getPublicKey(secretBytes))
+
+    // Encrypt pay_invoice request (NIP-04 style via nostr-tools)
+    const { nip04 } = await import('https://esm.sh/nostr-tools@2.23.3/nip04')
+    const reqContent = JSON.stringify({ method: 'pay_invoice', params: { invoice: bolt11 } })
+    const encrypted = await nip04.encrypt(secret, walletPubkey, reqContent)
+
+    const reqEvent = await (async () => {
+      const template = {
+        kind: 23194,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['p', walletPubkey]],
+        content: encrypted,
+        pubkey: clientPubkey,
+      }
+      template.id = getEventHash(template)
+      return finalizeEvent(template, secretBytes)
+    })()
+
+    const wRelay = await Relay.connect(relayUrl)
+    await wRelay.publish(reqEvent)
+
+    // Wait for response (Kind 23195)
+    return await new Promise((resolve) => {
+      const timer = setTimeout(() => { wRelay.close(); resolve(false) }, 30000)
+      wRelay.subscribe([{ kinds: [23195], authors: [walletPubkey], '#e': [reqEvent.id], limit: 1 }], {
+        onevent: async (ev) => {
+          clearTimeout(timer)
+          wRelay.close()
+          try {
+            const decrypted = await nip04.decrypt(secret, walletPubkey, ev.content)
+            const resp = JSON.parse(decrypted)
+            resolve(!resp.error)
+          } catch { resolve(false) }
+        }
+      })
+    })
+  } catch (e) {
+    console.warn('NWC pay failed:', e)
+    return false
+  }
+}
 
 // ─────────────────────────────────────────────────────────
 // POW mining (chunked, non-blocking)
@@ -416,15 +474,40 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave) {
     document.title = 'Chat — 2020117'
     try { chatChannel.postMessage({ type: 'response', preview: content.slice(0, 80) }) } catch {}
   }
-  const payHtml = amountSats > 0 && bolt11
-    ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a></div>'
-    : ''
   const modelLabel = skipSave ? '' : (_model === 'deep' ? ' · qwen3.5:9b' : ' · qwen2.5:0.5b')
+  const hasNwc = !!(localStorage.getItem('nostr_nwc') || '').startsWith('nostr+walletconnect://')
+
+  let payHtml = ''
+  if (amountSats > 0 && bolt11) {
+    const payId = 'pay-' + Math.random().toString(36).slice(2)
+    if (hasNwc) {
+      payHtml = '<div id="' + payId + '" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <span style="opacity:.7">paying…</span></div>'
+    } else {
+      payHtml = '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-gold)">⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <a href="/me" style="color:var(--c-text-muted);font-size:11px">set up NWC</a></div>'
+    }
+  }
+
   appendMsg(
     '<div class="bubble bubble-agent">' + renderText(content) + payHtml + '</div>' +
     '<div class="msg-meta">ollama-analyst' + modelLabel + ' · Nostr DVM</div>',
     'msg-agent'
   )
+
+  if (amountSats > 0 && bolt11 && hasNwc) {
+    const payId = payHtml.match(/id="(pay-[^"]+)"/)?.[1]
+    if (payId) {
+      payWithNwc(bolt11, amountSats).then(ok => {
+        const el = document.getElementById(payId)
+        if (!el) return
+        if (ok) {
+          el.innerHTML = '✅ ' + amountSats + ' sats paid via NWC'
+          el.style.color = 'var(--c-green, #4caf50)'
+        } else {
+          el.innerHTML = '⚡ ' + amountSats + ' sats — <a href="lightning:' + bolt11 + '" style="color:var(--c-gold)">pay invoice</a> · <span style="color:var(--c-text-muted);font-size:11px">NWC failed</span>'
+        }
+      })
+    }
+  }
 }
 
 function appendSystemMsg(text) {

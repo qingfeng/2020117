@@ -207,6 +207,7 @@ export const IC_AGENTS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="
 export const IC_MARKET = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>`
 export const IC_STATS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zM16.2 13h2.8v6h-2.8v-6z"/></svg>`
 export const IC_DOC = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2z"/></svg>`
+export const IC_CHAT = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12zM7 9h2v2H7V9zm4 0h2v2h-2V9zm4 0h2v2h-2V9z"/></svg>`
 
 /** Shared 3-column layout CSS — included via pageLayout() */
 export const LAYOUT_CSS = `
@@ -227,6 +228,7 @@ body{padding:0}
 .sidebar-lang a{color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
 .sidebar-lang a:hover,.sidebar-lang a.active{color:var(--c-accent)}
 .feed-header{padding:14px 20px;border-bottom:1px solid var(--c-border);font-size:18px;font-weight:700;position:sticky;top:0;background:rgba(255,255,255,0.88);backdrop-filter:blur(10px);z-index:10;display:flex;align-items:center;gap:12px}
+@keyframes fadeInUp{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 .feed-back{font-size:14px;font-weight:400;color:var(--c-text-muted);text-decoration:none;transition:color 0.15s}
 .feed-back:hover{color:var(--c-text)}
 .page-content{padding:24px 28px}
@@ -345,6 +347,7 @@ ${pageCSS || ''}
     <div class="sidebar-logo"><a href="/${qs}">2020117<span class="blink" style="color:var(--c-accent)">_</span></a></div>
     <a href="/${qs}" class="nav-item${isActive('/')}">${IC_HOME}<span class="nav-label">${homeLabel}</span></a>
     <a href="/agents${qs}" class="nav-item${isActive('/agents')}">${IC_AGENTS}<span class="nav-label">Agents</span></a>
+    <a href="/chat${qs}" class="nav-item${isActive('/chat')}">${IC_CHAT}<span class="nav-label">Chat</span></a>
     <a href="/dvm/market${qs}" class="nav-item${isActive('/dvm')}">${IC_MARKET}<span class="nav-label">${marketLabel}</span></a>
     <a href="/stats${qs}" class="nav-item${isActive('/stats')}">${IC_STATS}<span class="nav-label">${statsLabel}</span></a>
     <a href="/skill.md" class="nav-item" target="_blank" rel="noopener">${IC_DOC}<span class="nav-label">skill.md</span></a>
@@ -370,12 +373,28 @@ ${pageCSS || ''}
 <nav class="bottom-nav" aria-label="Mobile navigation">
   <a href="/${qs}" class="bnav-item${isActive('/')}">${IC_HOME}<span>${homeLabel}</span></a>
   <a href="/agents${qs}" class="bnav-item${isActive('/agents')}">${IC_AGENTS}<span>Agents</span></a>
+  <a href="/chat${qs}" class="bnav-item${isActive('/chat')}">${IC_CHAT}<span>Chat</span></a>
   <a href="/dvm/market${qs}" class="bnav-item${isActive('/dvm')}">${IC_MARKET}<span>${marketLabel}</span></a>
   <a href="/stats${qs}" class="bnav-item${isActive('/stats')}">${IC_STATS}<span>${statsLabel}</span></a>
   <a href="/skill.md" class="bnav-item" target="_blank" rel="noopener">${IC_DOC}<span>skill.md</span></a>
 </nav>
 
 ${scripts || ''}
+${currentPath !== '/chat' ? `<script>
+(function(){
+  var ch
+  try { ch = new BroadcastChannel('chat_notify') } catch(e) { return }
+  ch.onmessage = function(e) {
+    if (!e.data || e.data.type !== 'response') return
+    var toast = document.createElement('a')
+    toast.href = '/chat'
+    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--c-accent);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);max-width:320px;text-align:center;animation:fadeInUp 0.3s ease'
+    toast.textContent = '💬 Agent replied — tap to view'
+    document.body.appendChild(toast)
+    setTimeout(function(){ toast.remove() }, 8000)
+  }
+})()
+</script>` : ''}
 </body>
 </html>`
   return html

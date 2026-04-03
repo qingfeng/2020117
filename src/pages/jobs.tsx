@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import type { AppContext } from '../types'
-import { pageLayout } from './shared-styles'
+import { PageLayout, type PageLayoutProps } from '../components'
+
+function pageLayout(opts: Omit<PageLayoutProps, 'children'>, content: string) {
+  return <PageLayout {...opts}><div dangerouslySetInnerHTML={{ __html: content }} /></PageLayout>
+}
 import { getI18n } from '../lib/i18n'
 
 // Shared CSS for job detail pages (used in both main path and fallback path)

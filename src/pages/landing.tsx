@@ -381,31 +381,28 @@ document.getElementById('feed').addEventListener('click', function(e) {
   location.href = post.dataset.href;
 });
 
-let latestKnownAt = 0;
 let pendingNewCount = 0;
+let suppressNewPostsUntil = 0;
+let latestKnownAt = 0;
 
-async function pollForNew() {
-  if (currentFilter !== 'all') return;
-  try {
-    const res = await fetch('/api/relay/events?limit=5&page=1');
-    const data = await res.json();
-    const items = data.events || [];
-    if (!items.length) return;
-    const newestAt = items[0].sort_at || items[0].created_at || 0;
-    if (latestKnownAt === 0) { latestKnownAt = newestAt; return; }
-    if (newestAt > latestKnownAt) {
-      pendingNewCount = items.filter(e => (e.sort_at || e.created_at) > latestKnownAt).length;
-      const btn = document.getElementById('new-posts-btn');
-      btn.textContent = pendingNewCount + ' new post' + (pendingNewCount > 1 ? 's' : '') + ' \u2191';
-      btn.style.display = 'block';
-    }
-  } catch {}
-}
+const JOB_KINDS = [5100,5200,5250,5300,5302,5303];
+const DONE_KINDS = [6100,6200,6250,6300,6302,6303];
+
+window.notifyNewPost = function(kind) {
+  if (Date.now() < suppressNewPostsUntil) return;
+  if (currentFilter === 'jobs' && !JOB_KINDS.includes(kind)) return;
+  if (currentFilter === 'completed' && !DONE_KINDS.includes(kind)) return;
+  if (currentFilter === 'notes' && kind !== 1) return;
+  pendingNewCount++;
+  const btn = document.getElementById('new-posts-btn');
+  btn.textContent = pendingNewCount + ' new post' + (pendingNewCount > 1 ? 's' : '') + ' \u2191';
+  btn.style.display = 'block';
+};
 
 function loadNewPosts() {
   document.getElementById('new-posts-btn').style.display = 'none';
   pendingNewCount = 0;
-  latestKnownAt = 0;
+  suppressNewPostsUntil = Date.now() + 3000;
   currentPage = 0;
   _hasMore = true;
   _loading = false;
@@ -414,24 +411,58 @@ function loadNewPosts() {
   scrollTo(0, 0);
 }
 
-setInterval(pollForNew, 30000);
 loadStats();
 loadMore();
 window.loadNewPosts = loadNewPosts;
 </script>
 <script type="module">
-import { getPublicKey, finalizeEvent } from 'https://esm.sh/nostr-tools@2.23.3/pure'
-import { bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
+import { getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
+import { hexToBytes, bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
 
 const RELAY_URL = 'wss://relay.2020117.xyz'
+const POW_DIFFICULTY = 20
+
+function leadingZeroBits(hex) {
+  let n = 0
+  for (const c of hex) {
+    const v = parseInt(c, 16)
+    if (v === 0) { n += 4; continue }
+    n += Math.clz32(v) - 28; break
+  }
+  return n
+}
+
+function minePoW(template, difficulty, onProgress) {
+  return new Promise(resolve => {
+    let nonce = 0
+    function step() {
+      const t = performance.now() + 12
+      while (performance.now() < t) {
+        const tags = template.tags.filter(t => t[0] !== 'nonce')
+        tags.push(['nonce', String(nonce), String(difficulty)])
+        const ev = Object.assign({}, template, { tags })
+        ev.id = getEventHash(ev)
+        if (leadingZeroBits(ev.id) >= difficulty) { resolve(ev); return }
+        nonce++
+      }
+      onProgress(nonce)
+      setTimeout(step, 0)
+    }
+    step()
+  })
+}
 
 function loadIdentity() {
-  const pk = localStorage.getItem('nostr_privkey')
-  if (!pk) return null
+  const privkeyHex = localStorage.getItem('nostr_privkey')
+  if (!privkeyHex) return null
   try {
-    const sk = Uint8Array.from(pk.match(/.{2}/g).map(b => parseInt(b, 16)))
-    const pubkey = bytesToHex(getPublicKey(sk))
+    const sk = hexToBytes(privkeyHex)
+    let pubkey = localStorage.getItem('nostr_pubkey')
+    if (!pubkey) {
+      pubkey = bytesToHex(getPublicKey(sk))
+      localStorage.setItem('nostr_pubkey', pubkey)
+    }
     return {
       sk,
       pubkey,
@@ -458,16 +489,23 @@ async function publishNote(text) {
   const statusEl = document.getElementById('composer-status')
   const textarea = document.getElementById('composer-text')
   sendBtn.disabled = true
-  sendBtn.textContent = 'Posting…'
+  sendBtn.textContent = 'Mining…'
   statusEl.textContent = ''
   let relay
   try {
-    const event = finalizeEvent({
+    const template = {
       kind: 1,
+      pubkey: identity.pubkey,
       content: text,
       tags: [],
       created_at: Math.floor(Date.now() / 1000),
-    }, identity.sk)
+    }
+    const mined = await minePoW(template, POW_DIFFICULTY, n => {
+      statusEl.textContent = '⛏ ' + n + ' hashes…'
+    })
+    statusEl.textContent = ''
+    sendBtn.textContent = 'Posting…'
+    const event = finalizeEvent(mined, identity.sk)
     relay = await Relay.connect(RELAY_URL)
     await relay.publish(event)
     textarea.value = ''
@@ -495,6 +533,27 @@ if (identity) {
     }
   })
 }
+
+// Live relay subscription — replace HTTP polling
+const FEED_KINDS = [1, 5100, 5200, 5250, 5300, 5302, 5303, 6100, 6200, 6250, 6300, 6302, 6303]
+
+async function startLiveFeed() {
+  try {
+    const liveRelay = await Relay.connect(RELAY_URL)
+    liveRelay.subscribe(
+      [{ kinds: FEED_KINDS, since: Math.floor(Date.now() / 1000) }],
+      {
+        onevent(event) {
+          if (typeof window.notifyNewPost === 'function') window.notifyNewPost(event.kind)
+        }
+      }
+    )
+  } catch {
+    setTimeout(startLiveFeed, 10000)
+  }
+}
+
+startLiveFeed()
 </script>`
 
   return c.html(pageLayout({

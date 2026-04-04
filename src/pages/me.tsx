@@ -292,6 +292,7 @@ async function init() {
   document.getElementById('has-identity').style.display = 'block'
 
   const { pubkey, name, bio, lud16 } = _identity
+  localStorage.setItem('nostr_pubkey', pubkey)
   _identity.npub = npubEncode(pubkey)
 
   // Avatar + header
@@ -538,7 +539,7 @@ window.meApp = {
 
   resetIdentity() {
     if (!confirm('This will delete your private key from this browser. You will get a new identity. Are you sure?')) return
-    ;['nostr_privkey','nostr_name','nostr_bio','nostr_lud16','nostr_nwc','chat_history','chat_pending'].forEach(k => localStorage.removeItem(k))
+    ;['nostr_privkey','nostr_pubkey','nostr_name','nostr_bio','nostr_lud16','nostr_nwc','chat_history','chat_pending'].forEach(k => localStorage.removeItem(k))
     location.href = '/chat'
   },
 }

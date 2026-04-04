@@ -253,6 +253,7 @@ function loadIdentity() {
 
 function saveIdentity(sk, pubkey, name) {
   localStorage.setItem('nostr_privkey', bytesToHex(sk))
+  localStorage.setItem('nostr_pubkey', bytesToHex(pubkey))
   localStorage.setItem('nostr_name', name || '')
 }
 
@@ -349,6 +350,15 @@ function saveToHistory(role, text, eventId, extra) {
     h.push({ role, text, ts: Date.now(), eventId: eventId || null, ...(extra || {}) })
     if (h.length > MAX_HISTORY) h.splice(0, h.length - MAX_HISTORY)
     localStorage.setItem(HISTORY_KEY, JSON.stringify(h))
+  } catch {}
+}
+
+function updateRatingInHistory(reqId, rating) {
+  try {
+    const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
+    const item = h.findLast ? h.findLast(m => m.reqId === reqId && m.role === 'agent')
+                            : [...h].reverse().find(m => m.reqId === reqId && m.role === 'agent')
+    if (item) { item.rated = rating; localStorage.setItem(HISTORY_KEY, JSON.stringify(h)) }
   } catch {}
 }
 
@@ -503,6 +513,34 @@ async function publishReview(reqId, providerPubkey, rating, content, identity) {
       created_at: now,
     }, sk)
     await r.publish(endorsement)
+
+    // Low rating (≤2): publish Kind 7000 status=error so scan knows to retry
+    if (rating <= 2) {
+      const feedback = finalizeEvent({
+        kind: 7000,
+        content: '',
+        tags: [
+          ['status', 'error'],
+          ['e', reqId],
+          ['p', providerPubkey],
+        ],
+        created_at: now,
+      }, sk)
+      await r.publish(feedback)
+    } else if (rating >= 4) {
+      // High rating: publish Kind 7000 status=success to close the job
+      const feedback = finalizeEvent({
+        kind: 7000,
+        content: '',
+        tags: [
+          ['status', 'success'],
+          ['e', reqId],
+          ['p', providerPubkey],
+        ],
+        created_at: now,
+      }, sk)
+      await r.publish(feedback)
+    }
   } catch (e) {
     console.warn('publishReview failed:', e)
   }
@@ -570,6 +608,7 @@ function appendAgentMsg(content, amountSats, bolt11, skipSave, reqId, providerPu
           s.style.cursor = 'default'
           if (active) s.style.color = 'var(--c-gold)'
         })
+        updateRatingInHistory(rEl.dataset.req, n)
         publishReview(rEl.dataset.req, rEl.dataset.prov, n, '', _identity)
 
         // Pay based on rating (like bot.mjs): >=4 full, 3 = 70%, <=2 skip
@@ -767,7 +806,21 @@ async function enterChat(identity) {
   if (history.length > 0) {
     for (const m of history) {
       if (m.role === 'user') appendUserMsg(m.text, true)
-      else if (m.role === 'agent') appendAgentMsg(m.text, m.amountSats || 0, m.bolt11 || '', true, m.reqId, m.providerPubkey, m.providerModel)
+      else if (m.role === 'agent') {
+        appendAgentMsg(m.text, m.amountSats || 0, m.bolt11 || '', true, m.reqId, m.providerPubkey, m.providerModel)
+        if (m.rated && m.reqId) {
+          const rEl = document.querySelector('[data-req="' + m.reqId + '"]')
+          if (rEl) {
+            rEl.dataset.rated = '1'
+            rEl.querySelectorAll('[data-star]').forEach(s => {
+              const active = Number(s.dataset.star) <= m.rated
+              s.style.opacity = active ? '1' : '0.2'
+              s.style.cursor = 'default'
+              if (active) s.style.color = 'var(--c-gold)'
+            })
+          }
+        }
+      }
     }
   } else {
     appendSystemMsg('Connected · ' + identity.pubkey.slice(0, 16) + '…')

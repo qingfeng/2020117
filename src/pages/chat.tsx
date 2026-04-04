@@ -804,6 +804,11 @@ async function enterChat(identity) {
   // Restore history
   const history = loadHistory()
   if (history.length > 0) {
+    const lastAgent = [...history].reverse().find(m => m.role === 'agent')
+    if (lastAgent) {
+      const badge = document.getElementById('price-badge')
+      if (badge) badge.textContent = (lastAgent.amountSats || 0) > 0 ? lastAgent.amountSats + ' sat/msg' : 'FREE'
+    }
     for (const m of history) {
       if (m.role === 'user') appendUserMsg(m.text, true)
       else if (m.role === 'agent') {

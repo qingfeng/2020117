@@ -171,6 +171,7 @@ router.get('/me', (c) => {
             <button class="save-btn" onclick="meApp.saveNwc()">Save</button>
           </div>
           <div class="nwc-hint" id="nwc-hint">NWC lets Chat auto-pay agents. Stored only in this browser — never sent anywhere.</div>
+          <div id="nwc-balance" style="font-size:13px;color:var(--c-text-muted);margin-top:4px"></div>
           <div class="save-status" id="status-nwc"></div>
         </div>
       </div>
@@ -525,9 +526,12 @@ window.meApp = {
     if (val) {
       localStorage.setItem('nostr_nwc', val)
       setStatus('nwc', '\\u2713 Wallet saved locally', 'ok')
+      setTimeout(() => fetchNwcBalance(), 300)
     } else {
       localStorage.removeItem('nostr_nwc')
       setStatus('nwc', '\\u2713 Wallet removed', 'ok')
+      const el = document.getElementById('nwc-balance')
+      if (el) el.textContent = ''
     }
     // Mask the input after saving
     if (val) {
@@ -544,7 +548,59 @@ window.meApp = {
   },
 }
 
+async function fetchNwcBalance() {
+  const nwcUri = localStorage.getItem('nostr_nwc') || ''
+  const el = document.getElementById('nwc-balance')
+  if (!el || !nwcUri.startsWith('nostr+walletconnect://')) return
+  el.textContent = '⚡ Checking balance…'
+  try {
+    const url = new URL(nwcUri.replace('nostr+walletconnect://', 'https://'))
+    const walletPubkey = url.hostname
+    const relayUrl = url.searchParams.get('relay') || RELAY_URL
+    const secret = url.searchParams.get('secret') || ''
+    if (!walletPubkey || !secret) { el.textContent = ''; return }
+
+    const secretBytes = hexToBytes(secret)
+    const { encrypt: nip04encrypt, decrypt: nip04decrypt } = await import('https://esm.sh/nostr-tools@2.23.3/nip04')
+    const encrypted = await nip04encrypt(secret, walletPubkey, JSON.stringify({ method: 'get_balance' }))
+    const reqEvent = finalizeEvent({
+      kind: 23194,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', walletPubkey]],
+      content: encrypted,
+    }, secretBytes)
+
+    const wRelay = await Relay.connect(relayUrl)
+    await wRelay.publish(reqEvent)
+
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => { wRelay.close(); el.textContent = '⚡ Balance unavailable'; resolve(null) }, 10000)
+      wRelay.subscribe([{ kinds: [23195], authors: [walletPubkey], '#e': [reqEvent.id], limit: 1 }], {
+        onevent: async (ev) => {
+          clearTimeout(timer)
+          wRelay.close()
+          try {
+            const resp = JSON.parse(await nip04decrypt(secret, walletPubkey, ev.content))
+            if (resp.result?.balance != null) {
+              const sats = Math.floor(resp.result.balance / 1000)
+              el.textContent = '⚡ Balance: ' + sats.toLocaleString() + ' sats'
+              el.style.color = 'var(--c-gold)'
+            } else {
+              el.textContent = '⚡ Balance unavailable'
+            }
+          } catch { el.textContent = '' }
+          resolve(null)
+        }
+      })
+    })
+  } catch (e) {
+    el.textContent = ''
+    console.warn('NWC balance failed:', e)
+  }
+}
+
 init()
+fetchNwcBalance()
 </script>`
 
   return c.html(pageLayout({

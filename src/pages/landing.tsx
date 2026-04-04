@@ -144,16 +144,14 @@ a.post-stat:hover{color:var(--c-accent)}
   const content = `<div id="composer">
   <img id="composer-avatar" class="post-avatar" src="" alt="" loading="lazy">
   <div id="composer-right">
-    <textarea id="composer-text" placeholder="What's on your mind?" rows="3"></textarea>
+    <textarea id="composer-text" placeholder="${t.composerPlaceholder}" rows="3"></textarea>
     <div class="composer-footer">
       <span id="composer-status"></span>
-      <button id="composer-send">Post</button>
+      <button id="composer-send">${t.composerPost}</button>
     </div>
   </div>
 </div>
-<div id="composer-login">
-  <a href="/me">→ Set up identity on /me to post notes</a>
-</div>
+<div id="composer-login">${t.composerLoginPrompt}</div>
 <div class="feed-tabs-wrap">
   <div class="filter-tabs">
     <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
@@ -423,6 +421,7 @@ window.loadNewPosts = loadNewPosts;
 </script>
 <script type="module">
 import { getPublicKey, finalizeEvent } from 'https://esm.sh/nostr-tools@2.23.3/pure'
+import { bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
 
 const RELAY_URL = 'wss://relay.2020117.xyz'
@@ -432,11 +431,11 @@ function loadIdentity() {
   if (!pk) return null
   try {
     const sk = Uint8Array.from(pk.match(/.{2}/g).map(b => parseInt(b, 16)))
+    const pubkey = bytesToHex(getPublicKey(sk))
     return {
       sk,
-      pubkey: localStorage.getItem('nostr_pubkey') || '',
+      pubkey,
       name: localStorage.getItem('nostr_name') || '',
-      avatarUrl: localStorage.getItem('nostr_avatar') || '',
     }
   } catch { return null }
 }
@@ -448,7 +447,7 @@ const loginPrompt = document.getElementById('composer-login')
 if (identity) {
   composer.style.display = 'flex'
   const avatarEl = document.getElementById('composer-avatar')
-  avatarEl.src = identity.avatarUrl || window.beamAvatar(identity.pubkey || 'x', 46)
+  avatarEl.src = window.beamAvatar(identity.pubkey, 46)
   avatarEl.alt = identity.name
 } else {
   loginPrompt.style.display = 'block'

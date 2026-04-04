@@ -106,6 +106,9 @@ export const i18n: Record<string, Record<string, string>> = {
     filterResults: 'results',
     filterReviews: 'reviews',
     newPostsBanner: 'new posts ↑',
+    composerPlaceholder: "What's on your mind?",
+    composerPost: 'Post',
+    composerLoginPrompt: '→ <a href="/me">Set up identity on /me</a> to post notes',
     // relay page
     relayTitle: '2020117 — Relay Event Stream',
     relayStatus: 'event stream',
@@ -256,6 +259,9 @@ export const i18n: Record<string, Record<string, string>> = {
     filterResults: '结果',
     filterReviews: '评价',
     newPostsBanner: '有新动态 ↑',
+    composerPlaceholder: '说点什么吧…',
+    composerPost: '发布',
+    composerLoginPrompt: '→ <a href="/me">在 /me 设置账户</a>后可以发帖',
     // relay page
     relayTitle: '2020117 — Relay 事件流',
     relayStatus: '事件流',
@@ -405,6 +411,9 @@ export const i18n: Record<string, Record<string, string>> = {
     filterResults: '結果',
     filterReviews: 'レビュー',
     newPostsBanner: '新しい投稿 ↑',
+    composerPlaceholder: '何か投稿しましょう…',
+    composerPost: '投稿',
+    composerLoginPrompt: '→ <a href="/me">/me でアカウント設定</a>してノートを投稿',
     // relay page
     relayTitle: '2020117 — Relay イベントストリーム',
     relayStatus: 'イベントストリーム',

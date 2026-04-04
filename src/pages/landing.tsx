@@ -126,9 +126,35 @@ a.post-stat:hover{color:var(--c-accent)}
 .sats-pill{font-size:12px;font-weight:600;color:var(--c-gold);display:flex;align-items:center;gap:3px}
 .post-for{font-size:13px;color:var(--c-text-muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:480px){.post-time{display:none}.post-name{max-width:min(140px,28vw)}.post-handle{display:none}}
+/* Composer */
+#composer{display:none;gap:12px;padding:16px 20px;border-bottom:1px solid var(--c-border);align-items:flex-start}
+#composer-right{flex:1;display:flex;flex-direction:column;gap:8px}
+#composer-text{width:100%;min-height:72px;resize:vertical;border:1px solid var(--c-border);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;background:var(--c-bg);color:var(--c-text);line-height:1.5;transition:border-color 0.15s;box-sizing:border-box}
+#composer-text:focus{outline:none;border-color:var(--c-accent)}
+.composer-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+#composer-status{font-size:13px;color:var(--c-text-muted);flex:1}
+#composer-send{padding:7px 18px;background:var(--c-accent);color:#fff;border:none;border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.15s}
+#composer-send:hover{opacity:0.85}
+#composer-send:disabled{opacity:0.5;cursor:default}
+#composer-login{display:none;padding:14px 20px;border-bottom:1px solid var(--c-border);font-size:14px;color:var(--c-text-muted)}
+#composer-login a{color:var(--c-accent);text-decoration:none}
+#composer-login a:hover{text-decoration:underline}
 `
 
-  const content = `<div class="feed-tabs-wrap">
+  const content = `<div id="composer">
+  <img id="composer-avatar" class="post-avatar" src="" alt="" loading="lazy">
+  <div id="composer-right">
+    <textarea id="composer-text" placeholder="What's on your mind?" rows="3"></textarea>
+    <div class="composer-footer">
+      <span id="composer-status"></span>
+      <button id="composer-send">Post</button>
+    </div>
+  </div>
+</div>
+<div id="composer-login">
+  <a href="/me">→ Set up identity on /me to post notes</a>
+</div>
+<div class="feed-tabs-wrap">
   <div class="filter-tabs">
     <button class="tab-btn active" onclick="setFilter(this,'all')">${t.filterAll}</button>
     <button class="tab-btn" onclick="setFilter(this,'jobs')">${t.filterJobs}</button>
@@ -393,6 +419,83 @@ function loadNewPosts() {
 setInterval(pollForNew, 30000);
 loadStats();
 loadMore();
+window.loadNewPosts = loadNewPosts;
+</script>
+<script type="module">
+import { getPublicKey, finalizeEvent } from 'https://esm.sh/nostr-tools@2.23.3/pure'
+import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
+
+const RELAY_URL = 'wss://relay.2020117.xyz'
+
+function loadIdentity() {
+  const pk = localStorage.getItem('nostr_privkey')
+  if (!pk) return null
+  try {
+    const sk = Uint8Array.from(pk.match(/.{2}/g).map(b => parseInt(b, 16)))
+    return {
+      sk,
+      pubkey: localStorage.getItem('nostr_pubkey') || '',
+      name: localStorage.getItem('nostr_name') || '',
+      avatarUrl: localStorage.getItem('nostr_avatar') || '',
+    }
+  } catch { return null }
+}
+
+const identity = loadIdentity()
+const composer = document.getElementById('composer')
+const loginPrompt = document.getElementById('composer-login')
+
+if (identity) {
+  composer.style.display = 'flex'
+  const avatarEl = document.getElementById('composer-avatar')
+  avatarEl.src = identity.avatarUrl || window.beamAvatar(identity.pubkey || 'x', 46)
+  avatarEl.alt = identity.name
+} else {
+  loginPrompt.style.display = 'block'
+}
+
+async function publishNote(text) {
+  const sendBtn = document.getElementById('composer-send')
+  const statusEl = document.getElementById('composer-status')
+  const textarea = document.getElementById('composer-text')
+  sendBtn.disabled = true
+  sendBtn.textContent = 'Posting…'
+  statusEl.textContent = ''
+  let relay
+  try {
+    const event = finalizeEvent({
+      kind: 1,
+      content: text,
+      tags: [],
+      created_at: Math.floor(Date.now() / 1000),
+    }, identity.sk)
+    relay = await Relay.connect(RELAY_URL)
+    await relay.publish(event)
+    textarea.value = ''
+    statusEl.textContent = '✓ Posted'
+    setTimeout(() => { statusEl.textContent = '' }, 3000)
+    if (typeof window.loadNewPosts === 'function') window.loadNewPosts()
+  } catch (e) {
+    statusEl.textContent = '✗ ' + (e.message || 'Failed')
+  } finally {
+    if (relay) relay.close()
+    sendBtn.disabled = false
+    sendBtn.textContent = 'Post'
+  }
+}
+
+if (identity) {
+  document.getElementById('composer-send').addEventListener('click', () => {
+    const text = document.getElementById('composer-text').value.trim()
+    if (text) publishNote(text)
+  })
+  document.getElementById('composer-text').addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      const text = e.target.value.trim()
+      if (text) publishNote(text)
+    }
+  })
+}
 </script>`
 
   return c.html(pageLayout({

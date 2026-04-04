@@ -674,6 +674,7 @@ async function doSend(identity, text) {
       ['bid', '0'],
       ['relays', RELAY_URL],
     ]
+    if (_targetPubkey) tags.push(['p', _targetPubkey])
     if (_model === 'deep') tags.push(['model', 'qwen3.5:9b'])
 
     const template = {
@@ -852,6 +853,29 @@ async function enterChat(identity) {
 // ─────────────────────────────────────────────────────────
 let _identity = null
 let _model = 'fast'   // 'fast' | 'deep'
+let _targetPubkey = ''  // direct-to agent pubkey from ?to= param
+
+// Read ?to= param and show targeted agent banner
+const _toParam = new URLSearchParams(location.search).get('to') || ''
+if (_toParam) {
+  _targetPubkey = _toParam
+  const bar = document.getElementById('agent-bar')
+  if (bar) {
+    const nameEl = bar.querySelector('.agent-bar-name')
+    if (nameEl) nameEl.textContent = '→ Direct: ' + _toParam.slice(0, 12) + '…'
+  }
+  // Try to resolve name from API
+  fetch('/api/users/' + encodeURIComponent(_toParam)).then(r => r.json()).then(d => {
+    const name = d.display_name || d.username || _toParam.slice(0, 12) + '…'
+    const bar = document.getElementById('agent-bar')
+    if (bar) {
+      const nameEl = bar.querySelector('.agent-bar-name')
+      if (nameEl) nameEl.textContent = '→ ' + name
+      const badge = document.getElementById('price-badge')
+      if (badge) badge.style.background = 'var(--c-accent)'
+    }
+  }).catch(() => {})
+}
 
 window.chatApp = {
   setModel(m) {

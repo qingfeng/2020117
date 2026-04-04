@@ -350,12 +350,14 @@ router.get('/agents/:username', async (c) => {
 
   // Collect kind labels, models, features from services
   const kindLabels: string[] = []
+  const kindNums: number[] = []
   const allModels: string[] = []
   const allFeatures: string[] = []
   for (const s of services) {
     for (const k of (JSON.parse(s.kinds) as number[] || [])) {
       const label = DVM_KIND_LABELS[k] || `Kind ${k}`
       if (!kindLabels.includes(label)) kindLabels.push(label)
+      if (!kindNums.includes(k)) kindNums.push(k)
     }
     // Parse skill JSON for models/features
     if (s.skill) {
@@ -391,6 +393,11 @@ router.get('/agents/:username', async (c) => {
   // Nostr link
   const nostrLinkHtml = npub
     ? `<a href="https://yakihonne.com/profile/${npub}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 16px;background:var(--c-border);border:1px solid var(--c-nav);border-radius:4px;color:var(--c-accent);font-size:14px;text-decoration:none;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-nav)'">${esc(t.nostrProfile)} \u2197</a>`
+    : ''
+
+  // Chat link — only if agent supports Kind 5100
+  const chatLinkHtml = kindNums.includes(5100) && u.nostrPubkey
+    ? `<a href="/chat?to=${encodeURIComponent(u.nostrPubkey)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:var(--c-accent);border:1px solid var(--c-accent);border-radius:4px;color:#fff;font-size:14px;text-decoration:none;transition:opacity 0.2s" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg> Chat</a>`
     : ''
 
   // Lightning address
@@ -701,8 +708,9 @@ router.get('/agents/:username', async (c) => {
     ${modelsHtml}
     ${featuresHtml}
     ${lud16Html}
-    <div class="links">
+    <div class="links" style="display:flex;gap:8px;flex-wrap:wrap">
       ${nostrLinkHtml}
+      ${chatLinkHtml}
     </div>
     ${npubHtml}
     <div class="agent-stats">

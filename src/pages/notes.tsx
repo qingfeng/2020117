@@ -241,6 +241,19 @@ router.get('/notes/:eventId', async (c) => {
     } catch {}
   }
 
+  // Supplement DB replies with live relay fetch (catches newly published replies not yet indexed by cron)
+  try {
+    const { events: freshReplies } = await fetchEventsFromRelay(relayUrl, { kinds: [1], '#e': [eventId], limit: 50 })
+    const existingIds = new Set(replies.map(r => r.eventId))
+    for (const ev of freshReplies) {
+      if (!existingIds.has(ev.id)) {
+        replies.push({ eventId: ev.id, pubkey: ev.pubkey, contentPreview: ev.content || '', eventCreatedAt: ev.created_at })
+        existingIds.add(ev.id)
+      }
+    }
+    replies.sort((a, b) => a.eventCreatedAt - b.eventCreatedAt)
+  } catch {}
+
   // Resolve interaction author names + avatars in bulk
   const allPubkeys = [...new Set([...replies.map(r => r.pubkey), ...reactions.map(r => r.pubkey), ...reposts.map(r => r.pubkey)])]
   const interactionAuthors = await resolveAuthors(allPubkeys)

@@ -657,6 +657,13 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
       return
     }
 
+    // Reject jobs with bid below minimum price
+    const jobBidMsats = Number(event.tags.find(t => t[0] === 'bid')?.[1] || '0')
+    if (jobBidMsats > 0 && jobBidMsats < MIN_BID_SATS * 1000) {
+      console.log(`[${label}] DVM request ${event.id.slice(0, 8)} bid ${jobBidMsats} msats below minimum ${MIN_BID_SATS * 1000} msats, skipping`)
+      return
+    }
+
     console.log(`[${label}] DVM request from ${event.pubkey.slice(0, 8)}: "${input.slice(0, 60)}..."`)
 
     // Send feedback (Kind 7000)
@@ -691,7 +698,11 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
 
     // Send result (Kind 6xxx = request kind + 1000)
     const resultKind = KIND + 1000
-    const amountMsats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT * 1000
+    // Prefer the bid the customer declared in the job; fall back to local fixed price.
+    // bid tag is in the outer (unencrypted) event tags per NIP-90.
+    const bidMsats = Number(event.tags.find(t => t[0] === 'bid')?.[1] || '0')
+    const fixedPriceMsats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT * 1000
+    const amountMsats = bidMsats > 0 ? bidMsats : fixedPriceMsats
     let amountTag: string[]
     if (amountMsats > 0 && state.nwcParsed) {
       try {

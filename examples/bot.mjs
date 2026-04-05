@@ -1700,6 +1700,10 @@ async function main() {
       }
     } catch {}
 
+    // Optimistic claim — prevents concurrent settlement (subscription + poll arriving at same time)
+    if (settledJobs.has(requestId)) return
+    settledJobs.add(requestId)
+
     console.log(`\n[${ts()}] [${identity.name}] DVM result received!`)
     console.log(`  Job:      ${requestId.slice(0,12)}... ${job ? `(${job.param})` : ''}`)
     console.log(`  Provider: ${providerPubkey.slice(0,12)}...`)
@@ -1728,11 +1732,11 @@ async function main() {
         }, identity.sk)
         await publishEvent(r, fe)
       }
-      return  // Do NOT settle — keep job open for better responses
+      settledJobs.delete(requestId)  // release claim — keep job open for better responses
+      return
     }
 
-    // Quality acceptable — settle immediately, reject all future responses
-    settledJobs.add(requestId)
+    // Quality acceptable — already claimed above, proceed to settle
 
     if (!canAutoPay) {
       console.log(`  Acceptable quality but auto-pay disabled`)
@@ -2270,7 +2274,7 @@ async function main() {
     const hasPending = pendingJobs.size > 0
     if (hasPending) console.log(`  Skipping first DVM job — ${pendingJobs.size} pending job(s) already in queue`)
     else await postDVMJob(relay, identity, opts.dvmBid, pendingJobs)
-    await postDVM5300Job(relay, identity, opts.dvm5300Bid, pending5300Jobs)
+    if (opts.dvm5300Bid > 0) await postDVM5300Job(relay, identity, opts.dvm5300Bid, pending5300Jobs)
   }
   if (isProvider && opts.noteInterval === 0 && opts.dvmInterval === 0) console.log('  (Provider only mode — waiting for jobs)')
 
@@ -2298,7 +2302,7 @@ async function main() {
         } catch (e) { console.error(`DVM err (attempt ${attempt}/3): ${e.message}`) }
       }
       // Also post a 5300 content discovery job each interval
-      try {
+      if (opts.dvm5300Bid > 0) try {
         const r = await ensureRelay()
         if (r) await postDVM5300Job(r, identity, opts.dvm5300Bid, pending5300Jobs)
       } catch (e) { console.error(`DVM 5300 err: ${e.message}`) }

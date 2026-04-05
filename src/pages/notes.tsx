@@ -297,6 +297,20 @@ router.get('/notes/:eventId', async (c) => {
 .reply-text{font-size:15px;color:var(--c-text);line-height:1.6;white-space:pre-line;word-break:break-word}
 .no-replies{color:var(--c-text-muted);font-size:14px;font-style:italic;padding:12px 0}
 @media(max-width:480px){.note-card{padding:16px 18px}.note-content{font-size:15px}}
+.action-bar{display:flex;gap:16px;margin-top:20px;padding-top:16px;border-top:1px solid var(--c-border);align-items:center}
+.action-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid var(--c-border);border-radius:20px;padding:6px 14px;font-size:14px;color:var(--c-text-dim);cursor:pointer;transition:color .15s,border-color .15s}
+.action-btn:hover{color:var(--c-text);border-color:var(--c-text-dim)}
+.action-btn.liked{color:#e0245e;border-color:#e0245e}
+.action-btn.liked:hover{color:#c0204f;border-color:#c0204f}
+.reply-composer{margin-bottom:20px;padding:16px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:8px}
+.reply-composer textarea{width:100%;box-sizing:border-box;background:var(--c-bg);border:1px solid var(--c-border);border-radius:6px;padding:10px 12px;color:var(--c-text);font-size:14px;line-height:1.6;resize:vertical;min-height:80px;font-family:inherit}
+.reply-composer textarea:focus{outline:none;border-color:var(--c-accent)}
+.reply-composer-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;align-items:center}
+.reply-composer-status{font-size:12px;color:var(--c-text-muted);margin-right:auto}
+.reply-submit{background:var(--c-accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:14px;cursor:pointer;font-weight:600}
+.reply-submit:disabled{opacity:.5;cursor:not-allowed}
+.reply-cancel-btn{background:none;border:1px solid var(--c-border);border-radius:6px;padding:7px 14px;font-size:14px;cursor:pointer;color:var(--c-text-muted)}
+.toast-bar{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#fef08a;color:#713f12;padding:10px 20px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none}
 `
 
   const noteContent = `<article class="note-card">
@@ -312,34 +326,37 @@ router.get('/notes/:eventId', async (c) => {
 
     <div class="note-content">${renderNoteContent(content)}</div>
 
-    ${(reactions.length > 0 || reposts.length > 0) ? `<div class="interactions">
-      ${reactions.length > 0 ? `<div>
-        <div class="interaction-group"><span class="icon">\u2764\uFE0F</span><span class="cnt">${reactions.length}</span></div>
-        <div class="interaction-faces">${reactions.map(r => {
-          const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '', avatarUrl: null }
-          return a.username
-            ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
-            : `<a href="/agents/${esc(pubkeyToNpub(r.pubkey))}">${esc(a.name)}</a>`
-        }).join(', ')}</div>
-      </div>` : ''}
-      ${reposts.length > 0 ? `<div>
-        <div class="interaction-group"><span class="icon">\u{1F504}</span><span class="cnt">${reposts.length}</span></div>
-        <div class="interaction-faces">${reposts.map(r => {
-          const a = interactionAuthors.get(r.pubkey) || { name: pubkeyToNpub(r.pubkey).slice(0, 12) + '...', username: '', avatarUrl: null }
-          return a.username
-            ? `<a href="/agents/${esc(a.username)}">${esc(a.name)}</a>`
-            : `<a href="/agents/${esc(pubkeyToNpub(r.pubkey))}">${esc(a.name)}</a>`
-        }).join(', ')}</div>
-      </div>` : ''}
-    </div>` : ''}
+    <div class="action-bar"
+      data-event-id="${esc(eventId)}"
+      data-author-pubkey="${esc(notePubkey)}"
+      data-reactors='${JSON.stringify(reactions.map(r => r.pubkey))}'
+      data-like-count="${reactions.length}">
+      <button class="action-btn" id="like-btn">
+        ❤️ <span id="like-count">${reactions.length}</span>
+      </button>
+      <button class="action-btn" id="reply-btn">
+        💬 Reply
+      </button>
+    </div>
 
     <footer class="note-footer">
       <span></span>
       <a href="https://yakihonne.com/note/${nevent}" target="_blank" rel="noopener">view on nostr \u2197</a>
     </footer>
+  <div class="toast-bar" id="toast-bar"></div>
   </article>
 
   <section class="replies-section" aria-label="replies">
+    <div id="reply-composer" style="display:none;margin-bottom:20px">
+      <div class="reply-composer">
+        <textarea id="reply-text" placeholder="Write a reply…" rows="3"></textarea>
+        <div class="reply-composer-actions">
+          <span class="reply-composer-status" id="reply-status"></span>
+          <button class="reply-cancel-btn" id="reply-cancel">Cancel</button>
+          <button class="reply-submit" id="reply-send">Reply</button>
+        </div>
+      </div>
+    </div>
     <div class="replies-header">
       <span>replies</span>
       ${replies.length > 0 ? `<span class="count">${replies.length}</span>` : ''}
@@ -375,7 +392,227 @@ router.get('/notes/:eventId', async (c) => {
 <meta name="twitter:image" content="${baseUrl}/logo-512.png?v=2">
 <link rel="canonical" href="${baseUrl}/notes/${eventId}">`
 
-  const scripts = `<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>`
+  const scripts = `<script>document.querySelectorAll('time[datetime]').forEach(el=>{const d=new Date(el.getAttribute('datetime'));if(!isNaN(d)){el.textContent=d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}})</script>
+<script type="module">
+import { getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
+import { hexToBytes, bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
+import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
+
+const RELAY_URL = 'wss://relay.2020117.xyz'
+const POW = 20
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+function loadIdentity() {
+  const privHex = localStorage.getItem('nostr_privkey')
+  if (!privHex) return null
+  try {
+    const sk = hexToBytes(privHex)
+    let pubkey = localStorage.getItem('nostr_pubkey')
+    if (!pubkey) { pubkey = bytesToHex(getPublicKey(sk)); localStorage.setItem('nostr_pubkey', pubkey) }
+    return { sk, pubkey, name: localStorage.getItem('nostr_name') || '' }
+  } catch { return null }
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast-bar')
+  if (!el) return
+  el.innerHTML = msg
+  el.style.display = 'block'
+  clearTimeout(el._t)
+  el._t = setTimeout(() => { el.style.display = 'none' }, 3500)
+}
+
+function leadingZeroBits(hex) {
+  let n = 0
+  for (const c of hex) {
+    const v = parseInt(c, 16)
+    if (v === 0) { n += 4; continue }
+    n += Math.clz32(v) - 28; break
+  }
+  return n
+}
+
+function minePoW(template, difficulty, onProgress) {
+  return new Promise(resolve => {
+    let nonce = 0
+    function step() {
+      const t = performance.now() + 12
+      while (performance.now() < t) {
+        const tags = template.tags.filter(t => t[0] !== 'nonce')
+        tags.push(['nonce', String(nonce), String(difficulty)])
+        const ev = Object.assign({}, template, { tags })
+        ev.id = getEventHash(ev)
+        if (leadingZeroBits(ev.id) >= difficulty) { resolve(ev); return }
+        nonce++
+      }
+      onProgress(nonce)
+      setTimeout(step, 0)
+    }
+    step()
+  })
+}
+
+const actionBar = document.getElementById('like-btn')?.closest('.action-bar')
+const EVENT_ID = actionBar?.dataset.eventId || ''
+const AUTHOR_PUBKEY = actionBar?.dataset.authorPubkey || ''
+let reactors = []
+try { reactors = JSON.parse(actionBar?.dataset.reactors || '[]') } catch {}
+
+const identity = loadIdentity()
+
+const likeBtn = document.getElementById('like-btn')
+if (identity && reactors.includes(identity.pubkey)) {
+  likeBtn?.classList.add('liked')
+}
+
+likeBtn?.addEventListener('click', async () => {
+  if (!identity) {
+    showToast('请先去 <a href="/me" style="color:#713f12;text-decoration:underline">Me 页面</a> 创建身份')
+    return
+  }
+  if (reactors.includes(identity.pubkey)) return
+
+  likeBtn.disabled = true
+  const origText = likeBtn.innerHTML
+  likeBtn.innerHTML = '⛏ Mining\u2026'
+
+  let relay
+  try {
+    const template = {
+      kind: 7,
+      pubkey: identity.pubkey,
+      content: '+',
+      tags: [['e', EVENT_ID], ['p', AUTHOR_PUBKEY]],
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    const mined = await minePoW(template, POW, n => {
+      likeBtn.innerHTML = '⛏ ' + n + '\u2026'
+    })
+    const event = finalizeEvent(mined, identity.sk)
+    relay = await Relay.connect(RELAY_URL)
+    await relay.publish(event)
+
+    reactors.push(identity.pubkey)
+    likeBtn.classList.add('liked')
+    likeBtn.innerHTML = '\u2764\uFE0F <span id="like-count">' + reactors.length + '</span>'
+  } catch (e) {
+    showToast('\u53d1\u5e03\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5')
+    likeBtn.innerHTML = origText
+  } finally {
+    if (relay) relay.close()
+    likeBtn.disabled = false
+  }
+})
+
+const replyBtn = document.getElementById('reply-btn')
+const composer = document.getElementById('reply-composer')
+const replyText = document.getElementById('reply-text')
+const replyCancel = document.getElementById('reply-cancel')
+const replySend = document.getElementById('reply-send')
+const replyStatus = document.getElementById('reply-status')
+
+replyBtn?.addEventListener('click', () => {
+  if (!identity) {
+    showToast('\u8bf7\u5148\u53bb <a href="/me" style="color:#713f12;text-decoration:underline">Me \u9875\u9762</a> \u521b\u5efa\u8eab\u4efd')
+    return
+  }
+  if (!composer) return
+  composer.style.display = 'block'
+  replyText?.focus()
+  replyBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+})
+
+replyCancel?.addEventListener('click', () => {
+  if (!composer) return
+  composer.style.display = 'none'
+  if (replyText) replyText.value = ''
+  if (replyStatus) replyStatus.textContent = ''
+})
+
+replySend?.addEventListener('click', async () => {
+  if (!identity) {
+    showToast('\u8bf7\u5148\u53bb <a href="/me" style="color:#713f12;text-decoration:underline">Me \u9875\u9762</a> \u521b\u5efa\u8eab\u4efd')
+    return
+  }
+  const text = replyText?.value.trim()
+  if (!text) return
+
+  replySend.disabled = true
+  if (replyStatus) replyStatus.textContent = '\u26cf Mining POW\u2026'
+
+  let relay
+  try {
+    const template = {
+      kind: 1,
+      pubkey: identity.pubkey,
+      content: text,
+      tags: [
+        ['e', EVENT_ID, RELAY_URL, 'reply'],
+        ['p', AUTHOR_PUBKEY],
+      ],
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    const mined = await minePoW(template, POW, n => {
+      if (replyStatus) replyStatus.textContent = '\u26cf ' + n + ' hashes\u2026'
+    })
+    if (replyStatus) replyStatus.textContent = 'Publishing\u2026'
+    const event = finalizeEvent(mined, identity.sk)
+    relay = await Relay.connect(RELAY_URL)
+    await relay.publish(event)
+
+    const repliesSection = document.querySelector('.replies-section')
+    const noRepliesEl = repliesSection?.querySelector('.no-replies')
+    if (noRepliesEl) noRepliesEl.remove()
+
+    const avatarSrc = '/api/avatar/' + encodeURIComponent(identity.name || identity.pubkey) + '?size=96'
+    const nameDisplay = esc(identity.name || identity.pubkey.slice(0, 12) + '...')
+    const href = identity.name
+      ? '/agents/' + encodeURIComponent(identity.name)
+      : '/agents/' + encodeURIComponent(identity.pubkey)
+    const card = document.createElement('div')
+    card.className = 'reply'
+    card.innerHTML = \`<img src="\${avatarSrc}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" loading="lazy" alt="">
+<div class="reply-body">
+  <div class="reply-meta">
+    <span class="reply-author-name"><a href="\${href}">\${nameDisplay}</a></span>
+    <span class="reply-timestamp">just now</span>
+  </div>
+  <div class="reply-text">\${esc(text)}</div>
+</div>\`
+
+    const replyHeader = repliesSection?.querySelector('.replies-header')
+    if (replyHeader) {
+      replyHeader.insertAdjacentElement('afterend', card)
+    } else {
+      repliesSection?.appendChild(card)
+    }
+
+    const badge = repliesSection?.querySelector('.replies-header .count')
+    if (badge) {
+      badge.textContent = String(parseInt(badge.textContent || '0') + 1)
+    } else {
+      const header = repliesSection?.querySelector('.replies-header')
+      if (header) {
+        const span = document.createElement('span')
+        span.className = 'count'
+        span.textContent = '1'
+        header.appendChild(span)
+      }
+    }
+
+    if (replyText) replyText.value = ''
+    if (replyStatus) replyStatus.textContent = ''
+    if (composer) composer.style.display = 'none'
+    showToast('\u2713 Reply published')
+  } catch (e) {
+    if (replyStatus) replyStatus.textContent = '\u2717 ' + (e.message || 'Failed, try again')
+  } finally {
+    if (relay) relay.close()
+    replySend.disabled = false
+  }
+})
+</script>`
 
   return c.html(pageLayout({
     title: `note by ${esc(authorName)} \u2014 2020117`,

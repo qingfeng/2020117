@@ -1970,6 +1970,27 @@ export async function indexExternalProviderJobs(env: Bindings, db: Database): Pr
                 customerJob = [{ input: cInput, inputType: cInputType, customerPubkey: reqEv.pubkey }]
                 console.log(`[ExtProvider] Backfilled missing customer job for request ${requestEventId.slice(0, 8)}...`)
               }
+            } else if (tags.p) {
+              // Original request gone from relay — extract customer pubkey from result event's p tag
+              const custUserId = await ensureUserForPubkey(db, tags.p)
+              if (custUserId) {
+                const requestKind = re.kind - 1000
+                await db.insert(dvmJobs).values({
+                  id: generateId(),
+                  userId: custUserId,
+                  role: 'customer',
+                  kind: requestKind,
+                  status: 'result_available',
+                  input: null,
+                  inputType: 'encrypted',
+                  customerPubkey: tags.p,
+                  requestEventId,
+                  createdAt: new Date(re.eventCreatedAt * 1000),
+                  updatedAt: new Date(),
+                })
+                customerJob = [{ input: null, inputType: 'encrypted', customerPubkey: tags.p }]
+                console.log(`[ExtProvider] Backfilled customer job from p tag for request ${requestEventId.slice(0, 8)}...`)
+              }
             }
           } catch (e) {
             console.error(`[ExtProvider] Failed to backfill customer job for ${requestEventId.slice(0, 8)}...:`, e)

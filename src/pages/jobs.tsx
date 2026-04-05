@@ -437,6 +437,37 @@ router.get('/jobs/:id', async (c) => {
       r.customerUsername = realCustomer[0]?.username || ''
       r.customerAvatarUrl = realCustomer[0]?.avatarUrl || null
     }
+    // Guard: if customer == provider, the join gave us the wrong record — clear customer info
+    if (r.customerPubkey && r.providerPubkey && r.customerPubkey === r.providerPubkey) {
+      r.customerName = null
+      r.customerUsername = ''
+      r.customerAvatarUrl = null
+      r.customerPubkey = r.customerPubkeyDirect || null
+    }
+  }
+
+  // If customerPubkey is still null (backfill missed), try to extract from result event's p tag
+  if (result.length > 0 && !result[0].customerPubkey && result[0].resultEventId) {
+    const { relayEvents: reSchema } = await import('../db/schema')
+    const resultEvRow = await db.select({ tags: reSchema.tags })
+      .from(reSchema)
+      .where(eq(reSchema.eventId, result[0].resultEventId))
+      .limit(1)
+    if (resultEvRow.length > 0) {
+      let rTags: Record<string, string> = {}
+      try { rTags = JSON.parse(resultEvRow[0].tags || '{}') } catch {}
+      if (rTags.p) {
+        result[0].customerPubkey = rTags.p
+        const custUser = await db.select({
+          displayName: users.displayName,
+          username: users.username,
+          avatarUrl: users.avatarUrl,
+        }).from(users).where(eq(users.nostrPubkey, rTags.p)).limit(1)
+        result[0].customerName = custUser[0]?.displayName || null
+        result[0].customerUsername = custUser[0]?.username || ''
+        result[0].customerAvatarUrl = custUser[0]?.avatarUrl || null
+      }
+    }
   }
 
   if (result.length === 0) {
@@ -835,13 +866,15 @@ router.get('/jobs/:id', async (c) => {
   const localTime = (iso: string) => `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace('T', ' '))}</time>`
 
   // Build result section
-  const jobIsEncrypted = j.inputType === 'encrypted'
+  // inputType may be 'text' (default) for old encrypted jobs where backfill failed — treat as encrypted
+  // if input is null: either explicitly encrypted, or a failed backfill that set no input
+  const jobIsEncrypted = j.inputType === 'encrypted' || !j.input
 
   // Fetch full content for ALL 6xxx events in the activity log (including rejected ones)
   // Batch into a single relay request so we can display each provider's submission
   const activityResultContent = new Map<string, string>()
   const activityResultIds = jobActivity.filter(a => a.kind >= 6100 && a.kind <= 6303).map(a => a.eventId)
-  if (activityResultIds.length > 0 && !jobIsEncrypted) {
+  if (activityResultIds.length > 0) {
     try {
       const { fetchEventsFromRelay: ferBatch } = await import('../services/relay-io')
       const _relayUrlBatch = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
@@ -852,7 +885,7 @@ router.get('/jobs/:id', async (c) => {
 
   // Batch-fetch curated note content for all 6300 results in activity log
   const activityNoteMap = new Map<string, string>()
-  if (!jobIsEncrypted) {
+  {
     const allCuratedIds: string[] = []
     for (const a of jobActivity.filter(a => a.kind === 6300)) {
       const raw = activityResultContent.get(a.eventId) || a.contentPreview || ''
@@ -877,30 +910,27 @@ router.get('/jobs/:id', async (c) => {
   }
 
   // Fetch full result from relay using result_event_id (DB may have truncated content_preview)
+  // Note: even if the request was encrypted, the result (provider's response) is typically plaintext
   let resultText: string | null = null
-  if (!jobIsEncrypted) {
-    const resultEventId = j.resultEventId || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.eventId || null
-    if (resultEventId) {
-      // Already fetched in batch above if it's in activityResultIds
-      resultText = activityResultContent.get(resultEventId) || null
-      if (!resultText) {
-        try {
-          const { fetchEventsFromRelay: fer } = await import('../services/relay-io')
-          const _relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
-          const { events: rEvs } = await fer(_relayUrl, { ids: [resultEventId], limit: 1 })
-          if (rEvs.length > 0) resultText = rEvs[0].content || null
-        } catch { /* fall back to DB */ }
-      }
-    }
+  const resultEventId = j.resultEventId || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.eventId || null
+  if (resultEventId) {
+    // Already fetched in batch above if it's in activityResultIds
+    resultText = activityResultContent.get(resultEventId) || null
     if (!resultText) {
-      resultText = j.result || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.contentPreview || null
+      try {
+        const { fetchEventsFromRelay: fer } = await import('../services/relay-io')
+        const _relayUrl = c.env.NOSTR_RELAY_URL || 'wss://relay.2020117.xyz'
+        const { events: rEvs } = await fer(_relayUrl, { ids: [resultEventId], limit: 1 })
+        if (rEvs.length > 0) resultText = rEvs[0].content || null
+      } catch { /* fall back to DB */ }
     }
+  }
+  if (!resultText) {
+    resultText = j.result || jobActivity.find(a => a.kind >= 6100 && a.kind <= 6303)?.contentPreview || null
   }
 
   let resultHtml = ''
-  if (jobIsEncrypted) {
-    resultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
-  } else if (resultText) {
+  if (resultText) {
     const j_result_compat = resultText
     let resultBody = ''
     if (j.kind === 5300) {
@@ -961,6 +991,8 @@ router.get('/jobs/:id', async (c) => {
       })()}</div>
       ${resultBody}
     </div>`
+  } else if (jobIsEncrypted) {
+    resultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
   }
 
   // Build rejection history section
@@ -1043,7 +1075,7 @@ router.get('/jobs/:id', async (c) => {
       return `${esc(t.jobProvider)}: ${pavHtml}${pNameHtml}`
     })()}</div>` : ''}
 
-    ${(!jobIsEncrypted && j.input) ? `<div class="section">
+    ${jobIsEncrypted ? `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>` : j.input ? `<div class="section">
       <div class="section-label">${esc(t.jobInput)}</div>
       <div class="result-content md-body">${(() => {
         const raw = j.input!

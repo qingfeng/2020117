@@ -617,10 +617,41 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
   if (!acquireSlot()) return
 
   try {
-    // Parse DVM request: input is in 'i' tag, optional model in ['param','model','...']
-    const inputTag = event.tags.find(t => t[0] === 'i')
-    const input = inputTag?.[1] || ''
-    const requestedModel = event.tags.find(t => t[0] === 'param' && t[1] === 'model')?.[2]
+    // Step 1: p-tag filter — if request is directed (has p tags) but not to us, skip
+    const pTags = event.tags.filter(t => t[0] === 'p').map(t => t[1])
+    if (pTags.length > 0 && !pTags.includes(state.sovereignKeys.pubkey)) {
+      console.log(`[${label}] DVM request ${event.id.slice(0, 8)} directed to another agent, skipping`)
+      return
+    }
+
+    // Step 2: handle NIP-44 encrypted requests
+    const isEncrypted = event.tags.some(t => t[0] === 'encrypted')
+    let rawInput: string
+    if (isEncrypted) {
+      try {
+        rawInput = await nip44Decrypt(state.sovereignKeys.privkey, event.pubkey, event.content)
+        console.log(`[${label}] DVM request ${event.id.slice(0, 8)} decrypted successfully`)
+      } catch {
+        console.log(`[${label}] DVM request ${event.id.slice(0, 8)} decryption failed (not for us), skipping`)
+        return
+      }
+    } else {
+      rawInput = ''
+    }
+
+    // Parse DVM request: for encrypted jobs, decrypted content is a JSON array of tags
+    // Per NIP-90: [["i","actual input","text"],["param","model","..."],...]
+    let effectiveTags: string[][] = event.tags
+    if (isEncrypted) {
+      try {
+        const parsed = JSON.parse(rawInput)
+        if (Array.isArray(parsed)) effectiveTags = parsed
+      } catch { /* rawInput is plain text — fall through, handled below */ }
+    }
+    const inputTag = effectiveTags.find(t => t[0] === 'i')
+    // For encrypted plain-text fallback: rawInput itself is the input
+    const input = inputTag?.[1] || (isEncrypted ? rawInput : '')
+    const requestedModel = effectiveTags.find(t => t[0] === 'param' && t[1] === 'model')?.[2]
     if (!input) {
       console.warn(`[${label}] DVM request ${event.id.slice(0, 8)} has no input`)
       return

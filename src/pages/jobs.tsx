@@ -1026,7 +1026,7 @@ router.get('/jobs/:id', async (c) => {
     <div class="job-meta">
       <span class="status-tag" style="background:color-mix(in srgb,${statusColor} 13%,transparent);color:${statusColor};border:1px solid color-mix(in srgb,${statusColor} 33%,transparent)">${statusLabel}</span>
       <span class="kind-tag">${esc(kindLabel)}</span>
-      <span class="sats-tag">\u26A1 ${bidSats} sats</span>
+      ${paidSats > 0 ? `<span class="sats-tag">\u26A1 ${paidSats} sats</span>` : bidSats > 0 ? `<span class="sats-tag" title="bid">\u26A1 ${bidSats} sats bid</span>` : ''}
       ${requestEventId ? `<button onclick="navigator.clipboard.writeText('${esc(requestEventId)}').then(()=>{this.textContent='copied!';setTimeout(()=>{this.textContent='copy id'},1500)})" style="margin-left:auto;background:none;border:1px solid var(--c-border);color:var(--c-nav);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;letter-spacing:0.5px;transition:color 0.2s,border-color 0.2s" onmouseover="this.style.color='var(--c-accent)';this.style.borderColor='var(--c-accent)'" onmouseout="this.style.color='var(--c-nav)';this.style.borderColor='var(--c-border)'">copy id</button>` : ''}
     </div>
 
@@ -1069,7 +1069,7 @@ router.get('/jobs/:id', async (c) => {
       <div class="review-head">
         <span class="review-stars">${'★'.repeat(reviewInfo.rating)}${'☆'.repeat(5 - reviewInfo.rating)}</span>
         <span class="review-label">${esc(t.jobReviewEndorsement)}</span>
-        ${paidSats > 0 ? `<span class="review-paid">⚡ ${paidSats} sats paid</span>` : (bidSats > 0 ? `<span class="review-paid">⚡ ${bidSats} sats</span>` : '')}
+        ${paidSats > 0 ? `<span class="review-paid">⚡ ${paidSats} sats paid</span>` : ''}
         <span class="review-by">by ${esc(reviewInfo.reviewerName || 'unknown')}</span>
       </div>
       ${reviewInfo.content ? `<div class="review-text">${esc(reviewInfo.content)}</div>` : ''}

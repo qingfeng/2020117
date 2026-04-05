@@ -19,8 +19,11 @@ router.get('/chat', (c) => {
 
   const pageCSS = `
 /* ── Layout ── */
-.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 52px)}
-.messages{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px}
+body{overflow:hidden}
+.layout{height:100vh;min-height:0}
+.feed-col{overflow:hidden;display:flex;flex-direction:column}
+.chat-wrap{display:flex;flex-direction:column;flex:1;min-height:0}
+.messages{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
 .chat-input-bar{padding:12px 16px;border-top:1px solid var(--c-border);display:flex;gap:8px;align-items:flex-end;background:var(--c-bg);flex-shrink:0}
 .chat-textarea{flex:1;resize:none;border:1px solid var(--c-border);border-radius:12px;padding:10px 14px;font-size:14px;font-family:inherit;background:var(--c-surface);color:var(--c-text);outline:none;min-height:44px;max-height:160px;line-height:1.5;transition:border-color 0.2s}
 .chat-textarea:focus{border-color:var(--c-accent)}

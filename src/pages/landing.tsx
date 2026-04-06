@@ -429,6 +429,8 @@ window.renderLiveNote = function(ev) {
   if (currentFilter !== 'all' && currentFilter !== 'notes') return;
   if (_liveRendered.has(ev.id)) return;
   _liveRendered.add(ev.id);
+  // Skip replies (Kind 1 with an 'e' tag referencing another event)
+  if (ev.tags && ev.tags.some(t => t[0] === 'e')) return;
   // Use stored identity name for self-posts; truncated pubkey for others
   const isSelf = window._nostrPubkey && ev.pubkey === window._nostrPubkey;
   const card = {

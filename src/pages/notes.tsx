@@ -267,8 +267,7 @@ router.get('/notes/:eventId', async (c) => {
   const avatarImg = (src: string, size = 36, alt = '') =>
     `<img src="${esc(src)}" alt="${esc(alt)}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex-shrink:0" loading="lazy">`
   const avatarFor = (avatarUrl: string | null, username: string, fallbackKey: string, size = 36, altName = '') => {
-    const seed = username || fallbackKey
-    const src = avatarUrl || `/api/avatar/${encodeURIComponent(seed)}?size=${size * 3}`
+    const src = avatarUrl || `/api/avatar/${encodeURIComponent(fallbackKey)}?size=${size * 3}`
     return avatarImg(src, size, altName || username || fallbackKey)
   }
   const nameLink = (name: string, username: string, pubkey: string, style = '') =>

@@ -513,7 +513,23 @@ async function publishNote(text) {
     textarea.value = ''
     statusEl.textContent = '✓ Posted'
     setTimeout(() => { statusEl.textContent = '' }, 3000)
-    if (typeof window.loadNewPosts === 'function') window.loadNewPosts()
+    // Inject note directly into feed — don't wait for cron to sync the platform DB
+    if (currentFilter === 'all' || currentFilter === 'notes') {
+      const feed = document.getElementById('feed')
+      const syntheticEv = {
+        kind: 1,
+        pubkey: identity.pubkey,
+        event_id: event.id,
+        event_created_at: event.created_at,
+        actor_name: identity.name || identity.pubkey.slice(0, 10) + '\u2026',
+        avatar_url: null,
+        detail: text,
+        pow: leadingZeroBits(event.id),
+      }
+      feed.insertAdjacentHTML('afterbegin', renderCard(syntheticEv))
+      // Suppress live feed notification for this event (it'll arrive via WebSocket shortly)
+      suppressNewPostsUntil = Date.now() + 5000
+    }
   } catch (e) {
     statusEl.textContent = '✗ ' + (e.message || 'Failed')
   } finally {

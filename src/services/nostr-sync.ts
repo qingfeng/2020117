@@ -434,6 +434,8 @@ export async function pollUserMetadata(env: Bindings, db: Database) {
 
       if (updated > 0) {
         console.log(`[Nostr Metadata] Synced ${updated} user profiles`)
+        // Bump cache version so relay_events KV caches across all pages are invalidated
+        await env.KV.put('relay_cache_version', String(Date.now()))
       }
     } catch (e) {
       console.error('[Nostr Metadata] Poll failed:', e)

@@ -137,7 +137,8 @@ content.get('/relay/events', async (c) => {
   const page = Math.max(1, Number(c.req.query('page')) || 1)
   const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 50))
   const kindParam = c.req.query('kind')
-  const cacheKey = `relay_events:${kindParam || 'all'}:${page}:${limit}`
+  const cacheVer = await c.env.KV.get('relay_cache_version') || '0'
+  const cacheKey = `relay_events:${kindParam || 'all'}:${page}:${limit}:${cacheVer}`
   const cached = await c.env.KV.get(cacheKey)
   if (cached) return c.json(JSON.parse(cached))
   const offset = (page - 1) * limit

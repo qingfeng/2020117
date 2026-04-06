@@ -326,6 +326,13 @@ async function init() {
   // Load platform data in parallel
   loadPlatformData(pubkey)
   loadActivity(pubkey)
+
+  // One-time migration: republish Kind 0 with picture URL for existing users
+  if (!localStorage.getItem('nostr_picture_published')) {
+    publishKind0(buildProfile()).then(() => {
+      localStorage.setItem('nostr_picture_published', '1')
+    }).catch(() => {})
+  }
 }
 
 async function loadPlatformData(pubkey) {

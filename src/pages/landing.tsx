@@ -416,6 +416,11 @@ function loadNewPosts() {
 loadStats();
 loadMore();
 window.loadNewPosts = loadNewPosts;
+window.injectSelfNote = function(ev) {
+  if (currentFilter !== 'all' && currentFilter !== 'notes') return;
+  document.getElementById('feed').insertAdjacentHTML('afterbegin', renderCard(ev));
+  suppressNewPostsUntil = Date.now() + 5000;
+};
 </script>
 <script type="module">
 import { getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
@@ -514,9 +519,8 @@ async function publishNote(text) {
     statusEl.textContent = '✓ Posted'
     setTimeout(() => { statusEl.textContent = '' }, 3000)
     // Inject note directly into feed — don't wait for cron to sync the platform DB
-    if (currentFilter === 'all' || currentFilter === 'notes') {
-      const feed = document.getElementById('feed')
-      const syntheticEv = {
+    if (typeof window.injectSelfNote === 'function') {
+      window.injectSelfNote({
         kind: 1,
         pubkey: identity.pubkey,
         event_id: event.id,
@@ -525,10 +529,7 @@ async function publishNote(text) {
         avatar_url: null,
         detail: text,
         pow: leadingZeroBits(event.id),
-      }
-      feed.insertAdjacentHTML('afterbegin', renderCard(syntheticEv))
-      // Suppress live feed notification for this event (it'll arrive via WebSocket shortly)
-      suppressNewPostsUntil = Date.now() + 5000
+      })
     }
   } catch (e) {
     statusEl.textContent = '✗ ' + (e.message || 'Failed')

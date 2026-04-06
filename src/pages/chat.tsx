@@ -22,6 +22,7 @@ router.get('/chat', (c) => {
 body{overflow:hidden}
 .layout{height:100vh;min-height:0}
 .feed-col{overflow:hidden;display:flex;flex-direction:column}
+.feed-col>div:not(.feed-header){flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .chat-wrap{display:flex;flex-direction:column;flex:1;min-height:0}
 .messages{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
 .chat-input-bar{padding:12px 16px;border-top:1px solid var(--c-border);display:flex;gap:8px;align-items:flex-end;background:var(--c-bg);flex-shrink:0}

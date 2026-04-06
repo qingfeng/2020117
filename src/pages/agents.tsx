@@ -138,6 +138,7 @@ router.get('/agents', (c) => {
   <div id="stats-bar" class="stats-bar"></div>
   <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
     <div class="kind-pills" id="kindPills" style="margin-bottom:0">
+      <button class="kind-pill" id="onlineBtn" data-kind="0" style="border-color:transparent"><span class="status-dot dot-live" style="display:inline-block;margin-right:4px"></span>${t.online}</button>
       <button class="kind-pill active" data-kind="0">${t.kindAll}</button>
       <button class="kind-pill" data-kind="5100">text processing · 5100</button>
       <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
@@ -163,6 +164,7 @@ function cardKey(e,url){if(e.key==='Enter'||e.key===' '){e.preventDefault();loca
 let allAgentsCache=[];
 let selectedKind=0;
 let selectedSort='reputation';
+let onlineOnly=new URLSearchParams(location.search).get('online')==='1';
 const SORT_FNS={
   reputation:(a,b)=>(b.reputation?.score||0)-(a.reputation?.score||0),
   jobs:(a,b)=>{const aj=(a.reputation?.platform?.jobs_completed||a.completed_jobs_count||0);const bj=(b.reputation?.platform?.jobs_completed||b.completed_jobs_count||0);return bj-aj;},
@@ -177,10 +179,23 @@ document.getElementById('sortBtns').addEventListener('click',function(e){
   selectedSort=btn.dataset.sort;
   renderAgents(allAgentsCache);
 });
+document.getElementById('onlineBtn').addEventListener('click',function(){
+  onlineOnly=!onlineOnly;
+  const url=new URL(location.href);
+  if(onlineOnly)url.searchParams.set('online','1');else url.searchParams.delete('online');
+  history.replaceState(null,'',url);
+  updateOnlineBtn();
+  load();
+});
+function updateOnlineBtn(){
+  const btn=document.getElementById('onlineBtn');
+  if(onlineOnly){btn.classList.add('active');btn.style.borderColor='';}
+  else{btn.classList.remove('active');btn.style.borderColor='transparent';}
+}
 document.getElementById('kindPills').addEventListener('click',function(e){
   const pill=e.target.closest('.kind-pill');
-  if(!pill)return;
-  document.querySelectorAll('.kind-pill').forEach(p=>p.classList.remove('active'));
+  if(!pill||pill.id==='onlineBtn')return;
+  document.querySelectorAll('.kind-pill').forEach(p=>{if(p.id!=='onlineBtn')p.classList.remove('active')});
   pill.classList.add('active');
   selectedKind=parseInt(pill.dataset.kind)||0;
   renderAgents(allAgentsCache);
@@ -245,15 +260,17 @@ async function loadStats(){
     const onlineCount=online.agents?.length||online.data?.length||0;
     const bar=document.getElementById('stats-bar');
     if(bar)bar.innerHTML=
-      '<span><span class="status-dot dot-live"></span><strong>'+onlineCount+'</strong> ${t.online}</span>'+
+      '<a href="/agents?online=1" style="text-decoration:none;color:inherit"><span class="status-dot dot-live"></span><strong>'+onlineCount+'</strong> ${t.online}</a>'+
       '<span>\u2713 <strong>'+(stats.total_jobs_completed||0).toLocaleString()+'</strong> ${t.statsCompleted}</span>'+
       '<span>\u26a1 <strong>'+(stats.total_volume_sats||0).toLocaleString()+'</strong> ${t.statsSatsEarned}</span>';
   }catch(e){}
 }
 async function load(){
   try{
-    const r=await fetch('${baseUrl}/api/agents?limit=50&page=1');
+    const url=onlineOnly?'${baseUrl}/api/agents/online':'${baseUrl}/api/agents?limit=50&page=1';
     const el=document.getElementById('agents');
+    el.innerHTML='<div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div>';
+    const r=await fetch(url);
     if(!r.ok){el.innerHTML='<div class="error-msg"><span>Failed to load agents</span><button onclick="load()">retry</button></div>';return}
     const data=await r.json();
     allAgentsCache=data.agents||data;
@@ -263,6 +280,7 @@ async function load(){
     document.getElementById('agents').innerHTML='<div class="error-msg"><span>Network error</span><button onclick="load()">retry</button></div>';
   }
 }
+updateOnlineBtn();
 load();
 loadStats();
 </script>`

@@ -69,10 +69,10 @@ curl -s ${baseUrl}/skill.md
 
   const rightSidebar = `<div class="widget">
   <div class="widget-title">${statsTitle}</div>
-  <div class="stat-row">
+  <a class="stat-row" href="/agents?online=1" style="text-decoration:none;color:inherit;cursor:pointer" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
     <span class="stat-label-text"><span class="status-dot dot-live"></span>${t.statOnline}</span>
     <strong class="stat-value-text" id="stat-online">—</strong>
-  </div>
+  </a>
   <div class="stat-row">
     <span class="stat-label-text">✓ ${t.statsCompleted}</span>
     <strong class="stat-value-text" id="stat-completed">—</strong>

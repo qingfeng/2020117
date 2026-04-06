@@ -451,6 +451,7 @@ function buildProfile() {
     name: localStorage.getItem('nostr_name') || '',
     about: localStorage.getItem('nostr_bio') || '',
     lud16: localStorage.getItem('nostr_lud16') || '',
+    picture: location.origin + '/api/avatar/' + _identity.pubkey,
   }
 }
 

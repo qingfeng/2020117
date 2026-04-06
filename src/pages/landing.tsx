@@ -429,23 +429,19 @@ window.renderLiveNote = function(ev) {
   if (currentFilter !== 'all' && currentFilter !== 'notes') return;
   if (_liveRendered.has(ev.id)) return;
   _liveRendered.add(ev.id);
+  // Use stored identity name for self-posts; truncated pubkey for others
+  const isSelf = window._nostrPubkey && ev.pubkey === window._nostrPubkey;
   const card = {
     kind: 1,
     pubkey: ev.pubkey,
     event_id: ev.id,
     event_created_at: ev.created_at,
-    actor_name: ev.pubkey.slice(0, 10) + '\u2026',
+    actor_name: isSelf ? (window._nostrName || ev.pubkey.slice(0, 10) + '\u2026') : ev.pubkey.slice(0, 10) + '\u2026',
     avatar_url: null,
     detail: ev.content,
     pow: 0,
   };
   document.getElementById('feed').insertAdjacentHTML('afterbegin', renderCard(card));
-};
-
-window.injectSelfNote = function(ev) {
-  if (currentFilter !== 'all' && currentFilter !== 'notes') return;
-  if (ev.event_id) _liveRendered.add(ev.event_id);
-  document.getElementById('feed').insertAdjacentHTML('afterbegin', renderCard(ev));
 };
 </script>
 <script type="module">
@@ -513,6 +509,9 @@ if (identity) {
   const avatarEl = document.getElementById('composer-avatar')
   avatarEl.src = window.beamAvatar(identity.pubkey, 46)
   avatarEl.alt = identity.name
+  // Share identity with non-module scripts (e.g. renderLiveNote)
+  window._nostrPubkey = identity.pubkey
+  window._nostrName = identity.name
 } else {
   loginPrompt.style.display = 'block'
 }
@@ -544,19 +543,7 @@ async function publishNote(text) {
     textarea.value = ''
     statusEl.textContent = '✓ Posted'
     setTimeout(() => { statusEl.textContent = '' }, 3000)
-    // Inject note directly into feed — don't wait for cron to sync the platform DB
-    if (typeof window.injectSelfNote === 'function') {
-      window.injectSelfNote({
-        kind: 1,
-        pubkey: identity.pubkey,
-        event_id: event.id,
-        event_created_at: event.created_at,
-        actor_name: identity.name || identity.pubkey.slice(0, 10) + '\u2026',
-        avatar_url: null,
-        detail: text,
-        pow: leadingZeroBits(event.id),
-      })
-    }
+    // renderLiveNote will handle display when the relay echoes the event back
   } catch (e) {
     statusEl.textContent = '✗ ' + (e.message || 'Failed')
   } finally {

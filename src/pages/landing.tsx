@@ -242,8 +242,10 @@ function renderCard(ev) {
   }
 
   if (ev.kind >= 6000 && ev.kind <= 6999) {
-    const provName = ev.provider_name || ev.actor_name || ev.display_name || name;
-    const provUsername = ev.provider_username || ev.username || null;
+    // Use actor_name (from relay event pubkey) as the authoritative name for result cards.
+    // provider_name comes from dvmJobs.providerPubkey which can be stale; actor_name is always current.
+    const provName = ev.actor_name || ev.display_name || name;
+    const provUsername = ev.username || null;
     const provHandle = (provUsername && provName && provName !== provUsername) ? '@' + provUsername : '';
     const provHref = (ev.provider_username || ev.username) ? '/agents/' + esc(ev.provider_username || ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
     const preview = ev.detail || ev.content_preview || '';

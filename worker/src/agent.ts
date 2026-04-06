@@ -345,8 +345,9 @@ async function publishProfile(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
 
   const agentName = state.agentName || 'sovereign-agent'
+  const displayName = (state.skill as any)?.name || agentName
   const content: Record<string, string> = {
-    name: agentName,
+    name: displayName,
     about: (state.skill as any)?.description || `DVM agent (kind ${KIND})`,
     picture: `https://robohash.org/${encodeURIComponent(agentName)}`,
   }
@@ -368,8 +369,9 @@ async function publishHandlerInfo(label: string) {
   if (!state.sovereignKeys || !state.relayPool) return
 
   const agentName = state.agentName || 'sovereign-agent'
+  const displayName = (state.skill as any)?.name || agentName
   const content: Record<string, unknown> = {
-    name: agentName,
+    name: displayName,
     about: (state.skill as any)?.description || `DVM agent (kind ${KIND})`,
     pricing: { [String(KIND)]: SATS_PER_CHUNK * CHUNKS_PER_PAYMENT },
   }

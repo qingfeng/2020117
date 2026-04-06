@@ -185,6 +185,20 @@ export class SwarmNode extends EventEmitter {
     })
   }
 
+  /** Wait for the NEXT peer connection (does not shortcut on existing connections) */
+  waitForNextPeer(timeoutMs = 15000): Promise<{ socket: any; peerId: string }> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`No peer found within ${timeoutMs}ms`))
+      }, timeoutMs)
+
+      this.once('peer-join', (socket, peerId) => {
+        clearTimeout(timer)
+        resolve({ socket, peerId })
+      })
+    })
+  }
+
   async destroy() {
     await this.swarm.destroy()
     console.log('[swarm] Destroyed')

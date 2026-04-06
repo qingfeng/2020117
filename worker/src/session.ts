@@ -47,6 +47,7 @@ import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 const KIND = Number(process.env.DVM_KIND) || 5200
 const BUDGET = Number(process.env.BUDGET_SATS) || 500
 const PORT = Number(process.env.SESSION_PORT) || 8080
+const PROVIDER_PEER = process.env.PROVIDER_PEER || null  // --provider=<nostr-hex-pubkey>
 // Load sovereign keys (for pubkey exchange + endorsement publishing)
 const sovereignKeys = loadSovereignKeys(process.env.AGENT)
 
@@ -58,6 +59,8 @@ const nwcUri = process.env.NWC_URI
 
 // Track provider's Nostr pubkey (received in session_ack)
 let providerPubkey: string | null = null
+// Prevent premature peer-leave cleanup during provider discovery
+let sessionEstablished = false
 
 const TICK_INTERVAL_MS = 60_000
 const HTTP_TIMEOUT_MS = 60_000
@@ -156,6 +159,19 @@ function sendAndWait(msg: SwarmMessage, timeoutMs: number): Promise<SwarmMessage
 
     state.pendingRequests.set(msg.id, { resolve, reject, timer })
     state.node!.send(state.socket, msg)
+  })
+}
+
+/** Like sendAndWait but targets an explicit socket (used during provider discovery) */
+function sendAndWaitTo(socket: any, msg: SwarmMessage, timeoutMs: number): Promise<SwarmMessage> {
+  return new Promise<SwarmMessage>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      state.pendingRequests.delete(msg.id)
+      reject(new Error(`Timeout waiting for response to ${msg.type} (${timeoutMs}ms)`))
+    }, timeoutMs)
+
+    state.pendingRequests.set(msg.id, { resolve, reject, timer })
+    state.node!.send(socket, msg)
   })
 }
 
@@ -318,9 +334,9 @@ function setupMessageHandler() {
     }
   })
 
-  // Handle provider disconnect
+  // Handle provider disconnect (only after session is established — not during discovery)
   state.node!.on('peer-leave', (peerId: string) => {
-    if (peerId === state.peerId) {
+    if (sessionEstablished && peerId === state.peerId) {
       warn('Provider disconnected')
       cleanup()
     }
@@ -831,23 +847,95 @@ function cleanup() {
 
 async function main() {
   log(`Connecting to kind ${KIND} provider (budget: ${BUDGET} sats)`)
+  if (PROVIDER_PEER) log(`Targeting provider: ${PROVIDER_PEER.slice(0, 12)}...`)
 
-  // 1. Connect to provider via Hyperswarm
+  // 1. Connect to Hyperswarm topic
   const node = new SwarmNode()
   state.node = node
   const topic = topicFromKind(KIND)
-
   await node.connect(topic)
-  const { socket, peerId } = await node.waitForPeer(30_000)
-  state.socket = socket
-  state.peerId = peerId
-  log(`Connected to provider: ${peerId.slice(0, 12)}...`)
 
-  // Setup message handler before any messages
+  // Setup message handler once (handles all peers during discovery)
   setupMessageHandler()
 
-  // 2. Query skill
-  const skill = await queryProviderSkill(node, socket, KIND)
+  // 2. Find the right provider (retry loop if --provider specified)
+  const MAX_PEER_ATTEMPTS = PROVIDER_PEER ? 10 : 1
+  let foundAck: SwarmMessage | null = null
+  let foundSkill: Record<string, unknown> | null = null
+
+  for (let attempt = 1; attempt <= MAX_PEER_ATTEMPTS; attempt++) {
+    let socket: any
+    let peerId: string
+
+    try {
+      const result = attempt === 1
+        ? await node.waitForPeer(30_000)
+        : await node.waitForNextPeer(15_000)
+      socket = result.socket
+      peerId = result.peerId
+    } catch (e: any) {
+      warn(`No more peers available: ${e.message}`)
+      break
+    }
+
+    log(`Connected to peer: ${peerId.slice(0, 12)}... (attempt ${attempt}/${MAX_PEER_ATTEMPTS})`)
+
+    // Query skill to get provisional pricing
+    const skill = await queryProviderSkill(node, socket, KIND)
+    const pricing = skill?.pricing as Record<string, unknown> | undefined
+    const satsPerMinuteProbe = Number(pricing?.sats_per_minute) || 10
+
+    // Send session_start to discover provider's Nostr pubkey
+    const startId = randomBytes(4).toString('hex')
+    let ackResp: SwarmMessage
+    try {
+      ackResp = await sendAndWaitTo(socket, {
+        type: 'session_start',
+        id: startId,
+        budget: BUDGET,
+        sats_per_minute: satsPerMinuteProbe,
+        payment_method: 'invoice',
+        pubkey: sovereignKeys?.pubkey,
+      }, 15_000)
+    } catch (e: any) {
+      warn(`Peer ${peerId.slice(0, 12)} session_start failed: ${e.message}`)
+      socket.destroy()
+      continue
+    }
+
+    if (ackResp.type !== 'session_ack' || !ackResp.session_id) {
+      warn(`Peer ${peerId.slice(0, 12)} unexpected response: ${ackResp.type}`)
+      socket.destroy()
+      continue
+    }
+
+    const peerPubkey = ackResp.pubkey || null
+
+    if (PROVIDER_PEER && peerPubkey !== PROVIDER_PEER) {
+      warn(`Peer ${peerId.slice(0, 12)} pubkey ${peerPubkey?.slice(0, 12)}... ≠ target ${PROVIDER_PEER.slice(0, 12)}..., skipping`)
+      try { node.send(socket, { type: 'session_end', id: startId, session_id: ackResp.session_id, total_sats: 0, duration_s: 0 }) } catch {}
+      socket.destroy()
+      continue
+    }
+
+    // Found the right provider
+    state.socket = socket
+    state.peerId = peerId
+    foundAck = ackResp
+    foundSkill = skill
+    break
+  }
+
+  if (!foundAck) {
+    warn(`Could not find provider${PROVIDER_PEER ? ` with pubkey ${PROVIDER_PEER}` : ''}`)
+    await node.destroy()
+    process.exit(1)
+  }
+
+  const ackResp = foundAck
+
+  // 3. Display skill info and pricing
+  const skill = foundSkill
   state.skill = skill
 
   if (skill) {
@@ -859,9 +947,10 @@ async function main() {
     log('Provider did not report a skill manifest')
   }
 
-  // 3. Extract pricing — sats_per_minute from skill or fallback
-  const pricing = skill?.pricing as Record<string, unknown> | undefined
-  const satsPerMinute = Number(pricing?.sats_per_minute) || 10
+  // Use rate from session_ack (provider may override the probe value)
+  const satsPerMinute = ackResp.sats_per_minute
+    || Number((skill?.pricing as Record<string, unknown> | undefined)?.sats_per_minute)
+    || 10
   state.satsPerMinute = satsPerMinute
 
   // Price confirmation
@@ -881,12 +970,13 @@ async function main() {
     const confirmed = await confirmPrompt('Start session? (y/n): ')
     if (!confirmed) {
       log('Session cancelled.')
+      try { node.send(state.socket, { type: 'session_end', id: ackResp.session_id!, session_id: ackResp.session_id!, total_sats: 0, duration_s: 0 }) } catch {}
       await node.destroy()
       process.exit(0)
     }
   }
 
-  // 4. Determine payment method: NWC (Lightning invoice) only
+  // 4. Validate NWC wallet
   const paymentMethod: 'invoice' = 'invoice'
 
   if (nwcUri) {
@@ -909,33 +999,12 @@ async function main() {
     process.exit(1)
   }
 
-  // 5. Send session_start, wait for session_ack
-  const startId = randomBytes(4).toString('hex')
-  const ackResp = await sendAndWait({
-    type: 'session_start',
-    id: startId,
-    budget: BUDGET,
-    sats_per_minute: satsPerMinute,
-    payment_method: paymentMethod,
-    pubkey: sovereignKeys?.pubkey,
-  }, 15_000)
-
-  if (ackResp.type !== 'session_ack' || !ackResp.session_id) {
-    warn(`Unexpected response: ${ackResp.type}`)
-    await node.destroy()
-    process.exit(1)
-  }
-
-  state.sessionId = ackResp.session_id
+  // 5. Commit to this session
+  state.sessionId = ackResp.session_id!
   state.startedAt = Date.now()
   providerPubkey = ackResp.pubkey || null
   state.isProxyMode = !!ackResp.proxy_mode
-
-  // If the provider dictated a different rate, use it
-  if (ackResp.sats_per_minute && ackResp.sats_per_minute !== satsPerMinute) {
-    state.satsPerMinute = ackResp.sats_per_minute
-    log(`Provider adjusted rate: ${ackResp.sats_per_minute} sats/min`)
-  }
+  sessionEstablished = true  // peer-leave now triggers cleanup
 
   log(`Session started: ${state.sessionId}`)
   if (state.isProxyMode) {

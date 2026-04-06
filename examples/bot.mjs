@@ -10,17 +10,27 @@ process.on('unhandledRejection', (err) => {
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { generateSecretKey } from 'nostr-tools/pure'
 import { Relay } from 'nostr-tools/relay'
+import { decode as decodeNip19 } from 'nostr-tools/nip19'
 import { hexToBytes, bytesToHex } from 'nostr-tools/utils'
 import { minePow } from 'nostr-tools/nip13'
 import { encrypt as nip04Encrypt, decrypt as nip04Decrypt } from 'nostr-tools/nip04'
 import crypto from 'crypto'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
 import { spawn } from 'child_process'
+import { fileURLToPath } from 'url'
 import Hyperswarm from 'hyperswarm'
 import { createXai } from '@ai-sdk/xai'
 import { generateText } from 'ai'
 import b4a from 'b4a'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+function resolveProjectBin(name) {
+  const binName = process.platform === 'win32' ? `${name}.cmd` : name
+  const localBin = resolve(__dirname, 'node_modules', '.bin', binName)
+  return existsSync(localBin) ? localBin : name
+}
 
 // ============================================================
 //  CLI Argument Parsing
@@ -91,6 +101,24 @@ function parseArgs() {
     }
   }
   return opts
+}
+
+function normalizeDvmBackendTarget(rawValue) {
+  if (!rawValue || rawValue === true) return null
+  const value = String(rawValue).trim()
+  if (!value || value === 'true' || value === '1') return null
+
+  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase()
+
+  if (value.startsWith('npub1')) {
+    const decoded = decodeNip19(value)
+    if (decoded.type !== 'npub' || typeof decoded.data !== 'string') {
+      throw new Error(`Invalid npub for --dvm-backend: ${value}`)
+    }
+    return decoded.data.toLowerCase()
+  }
+
+  throw new Error(`Invalid --dvm-backend value: ${value}. Use true, a 64-char hex pubkey, or an npub.`)
 }
 
 function printHelp() {
@@ -987,7 +1015,7 @@ function evaluateResult(content) {
 //  Features — Customer
 // ============================================================
 
-const SOCIAL_MODEL = 'qwen2.5:0.5b'  // fast model for notes/replies, no reasoning overhead
+const SOCIAL_MODEL = 'gemma4:e2b'  // local Ollama model for notes/replies
 
 async function postNote(relay, identity, ollamaUrl = null, model = null) {
   let content
@@ -1245,7 +1273,7 @@ async function processJobWithXai(apiKey, input, kind) {
 // Restarts automatically if the session drops.
 const p2pSession = { proc: null, proxyUrl: null, ready: false, starting: false, providerPubkey: null }
 
-async function ensureP2PSession(nwcUri, kind, budget = 100) {
+async function ensureP2PSession(nwcUri, kind, budget = 100, providerPubkey = null) {
   if (p2pSession.ready && p2pSession.proxyUrl) return p2pSession.proxyUrl
 
   if (p2pSession.starting) {
@@ -1271,8 +1299,11 @@ async function ensureP2PSession(nwcUri, kind, budget = 100) {
     `--nwc=${nwcUri}`,
     `--port=${port}`,
   ]
+  if (providerPubkey) args.push(`--provider=${providerPubkey}`)
 
-  const proc = spawn('2020117-session', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  const sessionBin = resolveProjectBin('2020117-session')
+  console.log(`  P2P: using session binary ${sessionBin}`)
+  const proc = spawn(sessionBin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
   p2pSession.proc = proc
 
   proc.on('exit', () => {
@@ -1332,12 +1363,12 @@ async function ensureP2PSession(nwcUri, kind, budget = 100) {
   })
 }
 
-async function processJobViaP2P(nwcUri, input, kind, timeoutSecs, budget = 100, model = 'qwen3.5:9b') {
+async function processJobViaP2P(nwcUri, input, kind, timeoutSecs, budget = 100, providerPubkey = null) {
   if (!nwcUri) throw new Error('P2P: no NWC URI configured')
 
-  const proxyUrl = await ensureP2PSession(nwcUri, kind, budget)
+  const proxyUrl = await ensureP2PSession(nwcUri, kind, budget, providerPubkey)
   console.log(`  P2P: proxy at ${proxyUrl}, calling Ollama...`)
-  return await processJobWithOllama(proxyUrl, model, input, kind, timeoutSecs * 1000)
+  return await processJobWithOllama(proxyUrl, undefined, input, kind, timeoutSecs * 1000)
 }
 
 // ============================================================
@@ -1346,6 +1377,7 @@ async function processJobViaP2P(nwcUri, input, kind, timeoutSecs, budget = 100, 
 
 async function main() {
   const opts = parseArgs()
+  const dvmBackendProvider = normalizeDvmBackendTarget(opts.dvmBackend)
   console.log('='.repeat(60))
   console.log('  2020117 Bot')
   console.log('='.repeat(60))
@@ -1396,7 +1428,7 @@ async function main() {
   console.log(`  NWC Wallet:    ${nwc ? 'connected' : 'not set'}`)
   if (isProvider) {
     if (opts.dvmBackend) {
-      console.log(`  P2P Backend:   Hyperswarm topic=SHA256(2020117-dvm-kind-${opts.provide}) timeout=${opts.dvmBackendTimeout}s`)
+      console.log(`  P2P Backend:   Hyperswarm topic=SHA256(2020117-dvm-kind-${opts.provide}) timeout=${opts.dvmBackendTimeout}s${dvmBackendProvider ? ` provider=${dvmBackendProvider}` : ''}`)
     } else if (opts.simpleBackend) {
       console.log(`  Backend:       Simple (rule-based, no AI)`)
     } else if (opts.xaiBackend) {
@@ -2072,7 +2104,7 @@ async function main() {
     try {
       if (opts.dvmBackend) {
         console.log(`  Connecting via P2P (Hyperswarm) to process job...`)
-        result = await processJobViaP2P(identity.nwcUri, input, opts.provide, opts.dvmBackendTimeout, 100, opts.ollamaModel || 'qwen3.5:9b')
+        result = await processJobViaP2P(identity.nwcUri, input, opts.provide, opts.dvmBackendTimeout, 100, dvmBackendProvider)
       } else if (opts.simpleBackend) {
         console.log(`  Processing with simple backend (no AI)...`)
         result = processJobSimple(input, opts.provide)

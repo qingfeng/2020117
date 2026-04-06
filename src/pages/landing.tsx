@@ -336,6 +336,9 @@ async function loadMore() {
     const items = data.events || data.items || data.data || [];
     const meta = data.meta || {};
 
+    // Collect pubkeys from platform feed for live note filtering
+    items.forEach(function(item) { if (item.pubkey) _platformPubkeys.add(item.pubkey); });
+
     if (currentPage === 1) {
       feed.innerHTML = items.length
         ? items.map(renderCard).join('')
@@ -418,6 +421,8 @@ loadMore();
 window.loadNewPosts = loadNewPosts;
 
 const _liveRendered = new Set();
+// Pubkeys seen in the platform HTTP feed — live notes from unknown pubkeys are skipped
+const _platformPubkeys = new Set();
 
 // Render a raw Nostr event directly into the feed (Kind 1 only).
 // Other kinds still use the notification button since they need platform DB data.
@@ -431,8 +436,9 @@ window.renderLiveNote = function(ev) {
   _liveRendered.add(ev.id);
   // Skip replies (Kind 1 with an 'e' tag referencing another event)
   if (ev.tags && ev.tags.some(t => t[0] === 'e')) return;
-  // Use stored identity name for self-posts; truncated pubkey for others
+  // Only render notes from platform-registered users or self; skip external relay noise
   const isSelf = window._nostrPubkey && ev.pubkey === window._nostrPubkey;
+  if (!isSelf && !_platformPubkeys.has(ev.pubkey)) return;
   const card = {
     kind: 1,
     pubkey: ev.pubkey,

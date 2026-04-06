@@ -416,10 +416,36 @@ function loadNewPosts() {
 loadStats();
 loadMore();
 window.loadNewPosts = loadNewPosts;
+
+const _liveRendered = new Set();
+
+// Render a raw Nostr event directly into the feed (Kind 1 only).
+// Other kinds still use the notification button since they need platform DB data.
+window.renderLiveNote = function(ev) {
+  if (ev.kind !== 1) {
+    if (typeof window.notifyNewPost === 'function') window.notifyNewPost(ev.kind);
+    return;
+  }
+  if (currentFilter !== 'all' && currentFilter !== 'notes') return;
+  if (_liveRendered.has(ev.id)) return;
+  _liveRendered.add(ev.id);
+  const card = {
+    kind: 1,
+    pubkey: ev.pubkey,
+    event_id: ev.id,
+    event_created_at: ev.created_at,
+    actor_name: ev.pubkey.slice(0, 10) + '\u2026',
+    avatar_url: null,
+    detail: ev.content,
+    pow: 0,
+  };
+  document.getElementById('feed').insertAdjacentHTML('afterbegin', renderCard(card));
+};
+
 window.injectSelfNote = function(ev) {
   if (currentFilter !== 'all' && currentFilter !== 'notes') return;
+  if (ev.event_id) _liveRendered.add(ev.event_id);
   document.getElementById('feed').insertAdjacentHTML('afterbegin', renderCard(ev));
-  suppressNewPostsUntil = Date.now() + 5000;
 };
 </script>
 <script type="module">
@@ -563,7 +589,8 @@ async function startLiveFeed() {
       [{ kinds: FEED_KINDS, since: Math.floor(Date.now() / 1000) }],
       {
         onevent(event) {
-          if (typeof window.notifyNewPost === 'function') window.notifyNewPost(event.kind)
+          if (typeof window.renderLiveNote === 'function') window.renderLiveNote(event)
+          else if (typeof window.notifyNewPost === 'function') window.notifyNewPost(event.kind)
         }
       }
     )

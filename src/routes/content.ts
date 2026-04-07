@@ -863,7 +863,7 @@ content.get('/jobs/:id', async (c) => {
       : { nostr_pubkey: j.providerPubkey }
   }
 
-  // Fetch review: dvmReviews table first, fallback to relay_events Kind 31117
+  // Fetch review: dvmReviews table first, then relay_events Kind 31117/30311 — pick most recent
   let review = null
   const reviewRows = await db.select({
     rating: dvmReviews.rating, content: dvmReviews.content, role: dvmReviews.role,
@@ -875,15 +875,23 @@ content.get('/jobs/:id', async (c) => {
     const rv = reviewRows[0]
     review = { rating: rv.rating, content: rv.content, role: rv.role, reviewer_name: rv.reviewerDisplayName || rv.reviewerUsername, created_at: rv.createdAt }
   }
-  // Fallback: relay_events Kind 31117
+  // Fallback: relay_events Kind 31117 or 30311 (endorsement) — pick most recent
   const reqEvtId = j.requestEventId || ''
-  if (!review && reqEvtId) {
-    const relayReview = await db.select({ contentPreview: relayEvents.contentPreview, tags: relayEvents.tags, eventCreatedAt: relayEvents.eventCreatedAt })
-      .from(relayEvents).where(sql`${relayEvents.kind} = 31117 AND instr(${relayEvents.tags}, ${reqEvtId}) > 0`).limit(1)
-    if (relayReview.length > 0) {
-      const re = relayReview[0]
+  if (reqEvtId) {
+    const { desc: descOrder } = await import('drizzle-orm')
+    const relayReviews = await db.select({ contentPreview: relayEvents.contentPreview, tags: relayEvents.tags, eventCreatedAt: relayEvents.eventCreatedAt })
+      .from(relayEvents)
+      .where(sql`${relayEvents.kind} IN (31117, 30311) AND instr(${relayEvents.tags}, ${reqEvtId}) > 0`)
+      .orderBy(descOrder(relayEvents.eventCreatedAt)).limit(1)
+    if (relayReviews.length > 0) {
+      const re = relayReviews[0]
       const tags = re.tags ? JSON.parse(re.tags) : {}
-      review = { rating: tags.rating ? parseInt(tags.rating) : 5, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: null, created_at: new Date(re.eventCreatedAt * 1000) }
+      const relayRating = tags.rating ? parseInt(tags.rating) : null
+      const relayCreatedAt = new Date(re.eventCreatedAt * 1000)
+      // Use relay event if it's newer than what's in dvmReviews
+      if (!review || relayCreatedAt > new Date(review.created_at)) {
+        review = { rating: relayRating, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: null, created_at: relayCreatedAt }
+      }
     }
   }
 

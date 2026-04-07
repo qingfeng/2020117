@@ -336,8 +336,13 @@ async function loadMore() {
     const items = data.events || data.items || data.data || [];
     const meta = data.meta || {};
 
-    // Collect pubkeys from platform feed for live note filtering
-    items.forEach(function(item) { if (item.pubkey) _platformPubkeys.add(item.pubkey); });
+    // Collect pubkeys/names from platform feed for live note filtering and display
+    items.forEach(function(item) {
+      if (item.pubkey) {
+        _platformPubkeys.add(item.pubkey);
+        if (item.actor_name) _platformNames.set(item.pubkey, item.actor_name);
+      }
+    });
 
     if (currentPage === 1) {
       feed.innerHTML = items.length
@@ -423,6 +428,8 @@ window.loadNewPosts = loadNewPosts;
 const _liveRendered = new Set();
 // Pubkeys seen in the platform HTTP feed — live notes from unknown pubkeys are skipped
 const _platformPubkeys = new Set();
+// Pubkey → display name map, populated from HTTP feed items
+const _platformNames = new Map();
 
 // Render a raw Nostr event directly into the feed (Kind 1 only).
 // Other kinds still use the notification button since they need platform DB data.
@@ -444,7 +451,7 @@ window.renderLiveNote = function(ev) {
     pubkey: ev.pubkey,
     event_id: ev.id,
     event_created_at: ev.created_at,
-    actor_name: isSelf ? (window._nostrName || ev.pubkey.slice(0, 10) + '\u2026') : ev.pubkey.slice(0, 10) + '\u2026',
+    actor_name: isSelf ? (window._nostrName || ev.pubkey.slice(0, 10) + '\u2026') : (_platformNames.get(ev.pubkey) || ev.pubkey.slice(0, 10) + '\u2026'),
     avatar_url: null,
     detail: ev.content,
     pow: 0,

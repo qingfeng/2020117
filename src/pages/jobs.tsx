@@ -778,30 +778,43 @@ router.get('/jobs/:id', async (c) => {
     reviewInfo = { rating: r.rating, content: r.content, role: r.role, reviewerName: r.reviewerDisplayName || r.reviewerUsername || null, createdAt: r.createdAt }
   }
 
-  // Source 2: relay_events Kind 31117 (fallback when reviewer not in users table)
-  if (!reviewInfo && requestEventId) {
-    const relayReview = await db.select({
-      eventId: relayEvents.eventId,
+  // Source 2: relay_events Kind 31117 or 30311 — pick most recent by Nostr event timestamp.
+  // Kind 30311 is replaceable so relay_events always has the latest version.
+  // dvmReviews.createdAt is DB insert time (not Nostr event time), so always prefer
+  // relay_events when it carries a valid rating tag.
+  if (requestEventId) {
+    const { desc: descOrder } = await import('drizzle-orm')
+    const relayReviews = await db.select({
       pubkey: relayEvents.pubkey,
       contentPreview: relayEvents.contentPreview,
       tags: relayEvents.tags,
       eventCreatedAt: relayEvents.eventCreatedAt,
     }).from(relayEvents).where(
-      sqlTag`${relayEvents.kind} = 31117 AND instr(${relayEvents.tags}, ${requestEventId}) > 0`
-    ).limit(1)
-    if (relayReview.length > 0) {
-      const re = relayReview[0]
-      const tagsParsed = re.tags ? JSON.parse(re.tags) : []
-      const tagArr: string[][] = Array.isArray(tagsParsed) ? tagsParsed : []
-      const tagVal = (name: string) => tagArr.find((t: string[]) => t[0] === name)?.[1] || ''
-      const rating = tagVal('rating') ? parseInt(tagVal('rating')) : 5
-      const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
-      reviewInfo = {
-        rating: Math.min(5, Math.max(1, rating)),
-        content: re.contentPreview || null,
-        role: tagVal('role') || 'customer',
-        reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
-        createdAt: new Date(re.eventCreatedAt * 1000),
+      sqlTag`${relayEvents.kind} IN (31117, 30311) AND instr(${relayEvents.tags}, ${requestEventId}) > 0`
+    ).orderBy(descOrder(relayEvents.eventCreatedAt)).limit(1)
+    if (relayReviews.length > 0) {
+      const re = relayReviews[0]
+      // tags is stored as a JSON object (not array) by extractKeyTags
+      const tagsObj: Record<string, string> = re.tags ? JSON.parse(re.tags) : {}
+      const relayRating = tagsObj.rating ? parseInt(tagsObj.rating) : null
+      if (relayRating !== null) {
+        const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
+        reviewInfo = {
+          rating: Math.min(5, Math.max(1, relayRating)),
+          content: re.contentPreview || null,
+          role: tagsObj.role || 'customer',
+          reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
+          createdAt: new Date(re.eventCreatedAt * 1000),
+        }
+      } else if (!reviewInfo) {
+        const reviewerName = await resolveDisplayName(db, c.env, re.pubkey)
+        reviewInfo = {
+          rating: 0,
+          content: re.contentPreview || null,
+          role: tagsObj.role || 'customer',
+          reviewerName: reviewerName || re.pubkey.slice(0, 12) + '...',
+          createdAt: new Date(re.eventCreatedAt * 1000),
+        }
       }
     }
   }

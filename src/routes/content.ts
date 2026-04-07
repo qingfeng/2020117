@@ -887,10 +887,13 @@ content.get('/jobs/:id', async (c) => {
       const re = relayReviews[0]
       const tags = re.tags ? JSON.parse(re.tags) : {}
       const relayRating = tags.rating ? parseInt(tags.rating) : null
-      const relayCreatedAt = new Date(re.eventCreatedAt * 1000)
-      // Use relay event if it's newer than what's in dvmReviews
-      if (!review || relayCreatedAt > new Date(review.created_at)) {
-        review = { rating: relayRating, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: null, created_at: relayCreatedAt }
+      // Kind 30311 is a replaceable event — relay_events always holds the latest version.
+      // dvmReviews.createdAt is DB insert time (not Nostr timestamp), so don't use it for
+      // ordering. Always prefer the relay result when it carries a valid rating.
+      if (relayRating !== null) {
+        review = { rating: relayRating, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: review?.reviewer_name || null, created_at: new Date(re.eventCreatedAt * 1000) }
+      } else if (!review) {
+        review = { rating: null, content: re.contentPreview, role: tags.role || 'customer', reviewer_name: null, created_at: new Date(re.eventCreatedAt * 1000) }
       }
     }
   }

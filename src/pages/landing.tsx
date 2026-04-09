@@ -286,7 +286,8 @@ function renderCard(ev) {
   const replies2 = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
   const reactions2 = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
   const footer2 = (replies2 || reactions2) ? '<div class="post-footer">' + replies2 + reactions2 + '</div>' : '';
-  const reviewJobHref = (ev.kind === 30311 || ev.kind === 31117) ? (ev.ref_event_id ? '/jobs/' + esc(ev.ref_event_id) : (ev.job_id ? '/jobs/' + esc(ev.job_id) : '')) : '';
+  // 31117 = job review → link to the reviewed job; 30311 = endorsement → not a job, no link
+  const reviewJobHref = ev.kind === 31117 ? (ev.ref_event_id ? '/jobs/' + esc(ev.ref_event_id) : (ev.job_id ? '/jobs/' + esc(ev.job_id) : '')) : '';
   return '<div class="post"' + (reviewJobHref ? ' data-href="' + reviewJobHref + '"' : '') + '>' + getAvatar(ev)
     + '<div class="post-right">' + header
     + (detail ? '<div class="post-body-dim">' + esc(detail.slice(0,400)).replace(/([★☆]+)/g, '<span style="color:var(--c-gold)">$1</span>') + '</div>' : '')
@@ -302,8 +303,8 @@ const LIMIT = 30;
 
 function buildFeedUrl() {
   let url = '/api/relay/events?limit=' + LIMIT + '&page=' + currentPage;
-  if (currentFilter === 'jobs') url += '&kind=5100,5200,5250,5300,5302,5303';
-  else if (currentFilter === 'completed') url += '&kind=6100,6200,6250,6300,6302,6303';
+  if (currentFilter === 'jobs') url += '&kind=5001,5002,5050,5100,5250,5300,5301';
+  else if (currentFilter === 'completed') url += '&kind=6001,6002,6050,6100,6250,6300,6301';
   else if (currentFilter === 'notes') url += '&kind=1';
   return url;
 }

@@ -451,7 +451,8 @@ export async function pollDvmRequests(env: Bindings, db: Database): Promise<void
   }
 
   // Also poll common DVM kinds even without local providers (for indexing)
-  for (const k of [5100, 5200, 5250, 5300, 5301, 5302, 5303]) allKinds.add(k)
+  // Official NIP-90 kinds + platform-specific kinds
+  for (const k of [5001, 5002, 5050, 5100, 5200, 5250, 5300, 5301]) allKinds.add(k)
 
   if (allKinds.size === 0) return
 
@@ -1679,13 +1680,16 @@ export async function advanceWorkflow(db: Database, env: Bindings, completedJobI
 
 // --- Relay Event Stream ---
 
-const RELAY_EVENT_KINDS = [0, 1, 6, 7, 30023, 5100, 5200, 5250, 5300, 5301, 5302, 5303, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 7000, 30333, 30311, 31117, 31990]
+const RELAY_EVENT_KINDS = [0, 1, 6, 7, 30023, 5001, 5002, 5050, 5100, 5200, 5250, 5300, 5301, 6001, 6002, 6050, 6100, 6200, 6250, 6300, 6301, 7000, 30333, 30311, 31117, 31990]
 
 const KIND_LABELS: Record<number, string> = {
-  0: 'profile', 5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-  5300: 'text-to-speech', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
-  6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
-  6300: 'result: speech', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
+  0: 'profile',
+  5001: 'summarization', 5002: 'translation', 5050: 'text generation',
+  5100: 'image generation', 5200: 'text-to-image', 5250: 'video generation',
+  5300: 'content discovery', 5301: 'speech-to-text',
+  6001: 'result: summary', 6002: 'result: translation', 6050: 'result: text',
+  6100: 'result: image', 6200: 'result: image', 6250: 'result: video',
+  6300: 'result: content', 6301: 'result: stt',
   7000: 'job feedback', 30023: 'article', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
 }
 

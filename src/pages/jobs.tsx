@@ -353,12 +353,12 @@ router.get('/jobs/:id', async (c) => {
 
   const STATUS_COLORS: Record<string, string> = {
     open: 'var(--c-gold)', processing: 'var(--c-teal)', result_available: 'var(--c-blue)',
-    completed: 'var(--c-accent)', cancelled: 'var(--c-text-muted)', error: 'var(--c-red)',
+    completed: 'var(--c-accent)', rejected: 'var(--c-red)', cancelled: 'var(--c-text-muted)', error: 'var(--c-red)',
   }
 
   const STATUS_LABELS: Record<string, string> = {
     open: t.jobStatusOpen, processing: t.jobStatusProcessing, result_available: t.jobStatusResultAvailable,
-    completed: t.jobStatusCompleted, cancelled: t.jobStatusCancelled, error: t.jobStatusError,
+    completed: t.jobStatusCompleted, rejected: 'Rejected', cancelled: t.jobStatusCancelled, error: t.jobStatusError,
   }
 
   // Accept both platform job ID and Nostr event ID (from relay timeline)

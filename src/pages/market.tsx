@@ -113,7 +113,9 @@ function statusBadge(status) {
   const map = {
     open: '<span class="job-status status-open">open</span>',
     processing: '<span class="job-status status-processing">processing</span>',
+    result_available: '<span class="job-status status-processing">result returned</span>',
     completed: '<span class="job-status status-completed">completed</span>',
+    rejected: '<span class="job-status status-error">rejected</span>',
     error: '<span class="job-status status-error">error</span>',
   };
   return map[status] || '<span class="job-status status-open">' + esc(status) + '</span>';

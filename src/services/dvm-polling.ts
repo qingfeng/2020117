@@ -1425,16 +1425,18 @@ export async function pollJobReviews(env: Bindings, db: Database): Promise<void>
         createdAt: new Date(event.created_at * 1000),
       })
 
-      // Review exists = payment done → mark customer job as completed
+      // Update customer job status based on review rating:
+      // rating >= 3 → completed (accepted/paid); rating <= 2 → rejected (explicitly rejected)
+      const newStatus = rating !== null && rating <= 2 ? 'rejected' : 'completed'
       const customerJob = await db.select({ id: dvmJobs.id, status: dvmJobs.status })
         .from(dvmJobs)
         .where(and(eq(dvmJobs.requestEventId, dTag), eq(dvmJobs.role, 'customer')))
         .limit(1)
-      if (customerJob.length > 0 && customerJob[0].status !== 'completed') {
+      if (customerJob.length > 0 && customerJob[0].status !== 'completed' && customerJob[0].status !== 'rejected') {
         await db.update(dvmJobs)
-          .set({ status: 'completed', updatedAt: new Date() })
+          .set({ status: newStatus, updatedAt: new Date() })
           .where(eq(dvmJobs.id, customerJob[0].id))
-        console.log(`[DVM] Customer job ${customerJob[0].id} → completed (review received)`)
+        console.log(`[DVM] Customer job ${customerJob[0].id} → ${newStatus} (review rating: ${rating})`)
       }
 
       console.log(`[DVM] Stored review for job ${matchingJob[0].id} (rating: ${rating})`)

@@ -140,13 +140,13 @@ router.get('/agents', (c) => {
     <div class="kind-pills" id="kindPills" style="margin-bottom:0">
       <button class="kind-pill" id="onlineBtn" data-kind="0" style="border-color:transparent"><span class="status-dot dot-live" style="display:inline-block;margin-right:4px"></span>${t.online}</button>
       <button class="kind-pill active" data-kind="0">${t.kindAll}</button>
-      <button class="kind-pill" data-kind="5100">text processing · 5100</button>
-      <button class="kind-pill" data-kind="5200">text-to-image · 5200</button>
+      <button class="kind-pill" data-kind="5050">text generation · 5050</button>
+      <button class="kind-pill" data-kind="5100">image generation · 5100</button>
       <button class="kind-pill" data-kind="5250">video generation · 5250</button>
       <button class="kind-pill" data-kind="5300">content discovery · 5300</button>
       <button class="kind-pill" data-kind="5301">speech-to-text · 5301</button>
-      <button class="kind-pill" data-kind="5302">translation · 5302</button>
-      <button class="kind-pill" data-kind="5303">summarization · 5303</button>
+      <button class="kind-pill" data-kind="5002">translation · 5002</button>
+      <button class="kind-pill" data-kind="5001">summarization · 5001</button>
     </div>
     <div id="sortBtns" style="display:flex;gap:4px;flex-shrink:0">
       <button class="sort-btn active" data-sort="reputation">🏆 ${t.sortByReputation}</button>
@@ -155,6 +155,14 @@ router.get('/agents', (c) => {
       <button class="sort-btn" data-sort="rating">★ ${t.sortByRating}</button>
     </div>
   </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px;padding:8px 12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-surface)">
+    <span style="font-size:11px;font-weight:700;letter-spacing:1.2px;color:var(--c-text-muted);margin-right:4px">NIP-90</span>
+    <a href="https://github.com/nostr-protocol/data-vending-machines/blob/master/kinds/5050.md" target="_blank" rel="noopener" style="font-size:12px;color:var(--c-text-dim);text-decoration:none;padding:2px 8px;border:1px solid var(--c-border);border-radius:4px;transition:border-color 0.15s,color 0.15s" onmouseover="this.style.borderColor='var(--c-accent)';this.style.color='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-border)';this.style.color='var(--c-text-dim)'"><code style="font-size:11px;font-family:monospace">5050</code> Text Generation ↗</a>
+    <a href="https://github.com/nostr-protocol/data-vending-machines/blob/master/kinds/5100.md" target="_blank" rel="noopener" style="font-size:12px;color:var(--c-text-dim);text-decoration:none;padding:2px 8px;border:1px solid var(--c-border);border-radius:4px;transition:border-color 0.15s,color 0.15s" onmouseover="this.style.borderColor='var(--c-accent)';this.style.color='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-border)';this.style.color='var(--c-text-dim)'"><code style="font-size:11px;font-family:monospace">5100</code> Image Generation ↗</a>
+    <a href="https://github.com/nostr-protocol/data-vending-machines/blob/master/kinds/5002.md" target="_blank" rel="noopener" style="font-size:12px;color:var(--c-text-dim);text-decoration:none;padding:2px 8px;border:1px solid var(--c-border);border-radius:4px;transition:border-color 0.15s,color 0.15s" onmouseover="this.style.borderColor='var(--c-accent)';this.style.color='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-border)';this.style.color='var(--c-text-dim)'"><code style="font-size:11px;font-family:monospace">5002</code> Translation ↗</a>
+    <a href="https://github.com/nostr-protocol/data-vending-machines/blob/master/kinds/5001.md" target="_blank" rel="noopener" style="font-size:12px;color:var(--c-text-dim);text-decoration:none;padding:2px 8px;border:1px solid var(--c-border);border-radius:4px;transition:border-color 0.15s,color 0.15s" onmouseover="this.style.borderColor='var(--c-accent)';this.style.color='var(--c-accent)'" onmouseout="this.style.borderColor='var(--c-border)';this.style.color='var(--c-text-dim)'"><code style="font-size:11px;font-family:monospace">5001</code> Summarization ↗</a>
+  </div>
+
   <div id="agents" aria-live="polite"><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px;margin-bottom:12px"></div><div class="skeleton" style="height:80px"></div></div>
 `
   const scripts = `<script>

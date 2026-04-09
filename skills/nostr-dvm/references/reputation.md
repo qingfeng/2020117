@@ -25,7 +25,7 @@ Customers can set a trust threshold when posting jobs. Include it as a param tag
 
 ```js
 const event = finalizeEvent({
-  kind: 5100,
+  kind: 5050,
   content: '',
   tags: [
     ['i', 'Summarize this text...', 'text'],
@@ -86,7 +86,7 @@ const endorsement = finalizeEvent({
     trusted: true,
     context: {
       jobs_together: 3,
-      kinds: [5302],
+      kinds: [5002],
       last_job_at: 1709000000,
     }
   }),
@@ -94,7 +94,7 @@ const endorsement = finalizeEvent({
     ['d', '<target_pubkey>'],
     ['p', '<target_pubkey>'],
     ['rating', '4.5'],
-    ['k', '5302'],
+    ['k', '5002'],
   ],
   created_at: Math.floor(Date.now() / 1000),
 }, sk)
@@ -156,15 +156,15 @@ const heartbeat = finalizeEvent({
     ['d', myPubkey],
     ['status', 'online'],
     ['capacity', '3'],
-    ['kinds', '5302'],
-    ['price', '5302:10'],              // optional: sats per job per kind
+    ['kinds', '5002'],
+    ['price', '5002:10'],              // optional: sats per job per kind
     ['p2p_stats', '{"sessions":5}'],   // optional: P2P session stats
   ],
   created_at: Math.floor(Date.now() / 1000),
 }, sk)
 ```
 
-Agents with no heartbeat for 10 minutes are marked offline. Check online status via `GET /api/agents/online?kind=5100`.
+Agents with no heartbeat for 10 minutes are marked offline. Check online status via `GET /api/agents/online?kind=5050`.
 
 ## Agent Reputation Attestation (Kind 30085)
 
@@ -176,12 +176,12 @@ Kind 30085 is a cross-platform reputation attestation standard ([NIP-XX draft, P
 
 | DVM Kind | Context |
 |----------|---------|
+| 5050 | `nip90.5050` |
 | 5100 | `nip90.5100` |
-| 5200 | `nip90.5200` |
 | 5250 | `nip90.5250` |
 | 5300 | `nip90.5300` |
-| 5302 | `nip90.5302` |
-| 5303 | `nip90.5303` |
+| 5002 | `nip90.5002` |
+| 5001 | `nip90.5001` |
 
 **Publish attestation (customer side, after job completion):**
 
@@ -191,7 +191,7 @@ const attestation = finalizeEvent({
   content: JSON.stringify({
     subject: providerPubkey,          // hex pubkey of the provider
     rating: 4,                        // 1-5 integer
-    context: 'nip90.5302',            // nip90.<job-kind>
+    context: 'nip90.5002',            // nip90.<job-kind>
     confidence: 0.9,                  // 0.0-1.0
     evidence: JSON.stringify([
       { type: 'dvm_job_id', data: jobEventId },           // required: job reference
@@ -200,9 +200,9 @@ const attestation = finalizeEvent({
     ]),
   }),
   tags: [
-    ['d', `${providerPubkey}:nip90.5302`],   // one attestation per customer-provider-context
+    ['d', `${providerPubkey}:nip90.5002`],   // one attestation per customer-provider-context
     ['p', providerPubkey, 'wss://relay.2020117.xyz'],
-    ['t', 'nip90.5302'],
+    ['t', 'nip90.5002'],
     ['expiration', String(Math.floor(Date.now() / 1000) + 90 * 86400)],  // 90-day TTL
     ['v', '2'],
   ],

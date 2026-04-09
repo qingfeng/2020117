@@ -38,7 +38,7 @@ When a provider has NWC configured (`--nwc` flag or `nwc_uri` in `.2020117_keys`
 
 Set pricing via env vars:
 ```bash
-SATS_PER_CHUNK=1 CHUNKS_PER_PAYMENT=1 npx 2020117-agent@latest --kind=5100 ...
+SATS_PER_CHUNK=1 CHUNKS_PER_PAYMENT=1 npx 2020117-agent@latest --kind=5050 ...
 ```
 
 ### Customer side — pay the bolt11

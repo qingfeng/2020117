@@ -147,6 +147,7 @@ body{overflow:hidden}
 import { generateSecretKey, getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
 import { bytesToHex, hexToBytes } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
+import * as nip44 from 'https://esm.sh/nostr-tools@2.23.3/nip44'
 import renderMathInElement from 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.mjs'
 
 const RELAY_URL = '${RELAY_URL}'
@@ -673,18 +674,25 @@ async function doSend(identity, text) {
       appendSystemMsg('Switched to Deep mode — real Binance data will be injected')
     }
 
+    // Build sensitive inner tags, then encrypt with NIP-44 to the target provider
+    const targetPubkey = _targetPubkey || PROVIDER_PUBKEY
+    const innerTags = [['i', text, 'text']]
+    if (_model === 'deep') innerTags.push(['param', 'model', 'qwen3.5:9b'])
+    const conversationKey = nip44.getConversationKey(identity.sk, hexToBytes(targetPubkey))
+    const encryptedContent = nip44.encrypt(JSON.stringify(innerTags), conversationKey)
+
+    // Outer tags: only non-sensitive routing info + encrypted marker
     const tags = [
-      ['i', text, 'text'],
+      ['p', targetPubkey],
+      ['encrypted'],
       ['bid', '0'],
       ['relays', RELAY_URL],
     ]
-    if (_targetPubkey) tags.push(['p', _targetPubkey])
-    if (_model === 'deep') tags.push(['model', 'qwen3.5:9b'])
 
     const template = {
       kind: 5100,
       pubkey: identity.pubkey,
-      content: '',
+      content: encryptedContent,
       tags,
       created_at: now,
     }

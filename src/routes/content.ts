@@ -341,6 +341,7 @@ content.get('/relay/events', async (c) => {
       pubkey: r.pubkey, npub, actor_name: actorName, username: user?.username || null,
       avatar_url: user?.avatarUrl || null, action, detail, pow,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
+      target_pubkey: kindNum === 30311 ? (tags.p || null) : null,
       job_event_id: isDvmReq(kindNum) ? r.eventId
         : (isDvmRes(kindNum) || kindNum === 7000 || kindNum === 31117 || kindNum === 30311) ? (tags.e || null) : null,
       note_event_id: noteEventId,

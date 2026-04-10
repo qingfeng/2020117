@@ -286,11 +286,9 @@ function renderCard(ev) {
   const replies2 = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
   const reactions2 = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
   const footer2 = (replies2 || reactions2) ? '<div class="post-footer">' + replies2 + reactions2 + '</div>' : '';
-  // 31117 = job review → link to reviewed job; 30311 = endorsement → link to target agent profile
+  // 31117 = job review → link to reviewed job; 30311 = rolling endorsement, not tied to a specific job → not clickable
   const reviewJobHref = ev.kind === 31117
     ? (ev.ref_event_id ? '/jobs/' + esc(ev.ref_event_id) : (ev.job_id ? '/jobs/' + esc(ev.job_id) : ''))
-    : ev.kind === 30311
-    ? (ev.target_pubkey ? '/agents/' + esc(ev.target_pubkey) : '')
     : '';
   return '<div class="post"' + (reviewJobHref ? ' data-href="' + reviewJobHref + '"' : '') + '>' + getAvatar(ev)
     + '<div class="post-right">' + header

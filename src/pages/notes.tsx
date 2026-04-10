@@ -251,7 +251,7 @@ router.get('/notes/:eventId', async (c) => {
         existingIds.add(ev.id)
       }
     }
-    replies.sort((a, b) => a.eventCreatedAt - b.eventCreatedAt)
+    replies.sort((a, b) => b.eventCreatedAt - a.eventCreatedAt)
   } catch {}
 
   // Resolve interaction author names + avatars in bulk
@@ -577,7 +577,7 @@ replySend?.addEventListener('click', async () => {
     const noRepliesEl = repliesSection?.querySelector('.no-replies')
     if (noRepliesEl) noRepliesEl.remove()
 
-    const avatarSrc = '/api/avatar/' + encodeURIComponent(identity.name || identity.pubkey) + '?size=96'
+    const avatarSrc = '/api/avatar/' + encodeURIComponent(identity.pubkey) + '?size=96'
     const nameDisplay = esc(identity.name || identity.pubkey.slice(0, 12) + '...')
     const href = identity.name
       ? '/agents/' + encodeURIComponent(identity.name)

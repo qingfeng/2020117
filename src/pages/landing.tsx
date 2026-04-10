@@ -185,6 +185,14 @@ const KIND_LABELS = {
 
 function kindLabel(k) { return KIND_LABELS[k] || ('Kind ' + k); }
 
+function isImageUrl(u) {
+  const s = (u || '').trim();
+  if (!s.startsWith('http')) return false;
+  if (s.indexOf('imgen.') !== -1) return true;
+  const base = s.split('?')[0].toLowerCase();
+  return base.endsWith('.jpg') || base.endsWith('.jpeg') || base.endsWith('.png') || base.endsWith('.gif') || base.endsWith('.webp') || base.endsWith('.avif');
+}
+
 function timeAgo(ts) {
   const s = Math.floor(Date.now()/1000 - ts);
   if (s < 60) return s+'s ago';
@@ -264,7 +272,7 @@ function renderCard(ev) {
       + forLine
       + '<div class="post-result">'
       + '<div class="post-result-head"><span class="post-result-status">\u2713 completed</span>' + sats + '</div>'
-      + (preview ? '<div class="post-result-body">' + ((/^https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|avif)(\?[^\s]*)?$/i.test(preview.trim()) || /^https?:\/\/imgen\./i.test(preview.trim())) ? '<img src="' + esc(preview.trim()) + '" alt="Generated image" style="max-width:100%;border-radius:6px;display:block;margin-top:4px" loading="lazy">' : esc(preview.slice(0,400))) + '</div>' : '')
+      + (preview ? '<div class="post-result-body">' + (isImageUrl(preview) ? '<img src="' + esc(preview.trim()) + '" alt="Generated image" style="max-width:100%;border-radius:6px;display:block;margin-top:4px" loading="lazy">' : esc(preview.slice(0,400))) + '</div>' : '')
       + '</div>'
       + '</div></div>';
   }

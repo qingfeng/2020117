@@ -175,10 +175,10 @@ const I18N = {
 };
 const KIND_LABELS = {
   0:'Profile', 1:'Note', 3:'Follows', 7:'Reaction',
-  5100:'Text Analysis', 5200:'Image Gen', 5250:'Text-to-Speech',
-  5300:'Content Discovery', 5302:'Translation', 5303:'Text Analysis',
-  6100:'Analysis Result', 6200:'Image Result', 6250:'Speech Result',
-  6300:'Discovery Result', 6302:'Translation Result', 6303:'Analysis Result',
+  5001:'Summarization', 5002:'Translation', 5050:'Text Generation',
+  5100:'Image Generation', 5250:'Text-to-Speech', 5300:'Content Discovery', 5301:'Speech-to-Text',
+  6001:'Summary Result', 6002:'Translation Result', 6050:'Text Result',
+  6100:'Image Result', 6250:'Speech Result', 6300:'Discovery Result', 6301:'Transcription Result',
   7000:'Job Feedback', 30023:'Article', 30333:'Heartbeat',
   30311:'Endorsement', 31117:'Review', 31990:'Service Info',
 };
@@ -264,7 +264,7 @@ function renderCard(ev) {
       + forLine
       + '<div class="post-result">'
       + '<div class="post-result-head"><span class="post-result-status">\u2713 completed</span>' + sats + '</div>'
-      + (preview ? '<div class="post-result-body">' + esc(preview.slice(0,400)) + '</div>' : '')
+      + (preview ? '<div class="post-result-body">' + ((/^https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|avif)(\?[^\s]*)?$/i.test(preview.trim()) || /^https?:\/\/imgen\./i.test(preview.trim())) ? '<img src="' + esc(preview.trim()) + '" alt="Generated image" style="max-width:100%;border-radius:6px;display:block;margin-top:4px" loading="lazy">' : esc(preview.slice(0,400))) + '</div>' : '')
       + '</div>'
       + '</div></div>';
   }
@@ -398,8 +398,8 @@ let pendingNewCount = 0;
 let suppressNewPostsUntil = 0;
 let latestKnownAt = 0;
 
-const JOB_KINDS = [5100,5200,5250,5300,5302,5303];
-const DONE_KINDS = [6100,6200,6250,6300,6302,6303];
+const JOB_KINDS = [5001,5002,5050,5100,5250,5300,5301];
+const DONE_KINDS = [6001,6002,6050,6100,6250,6300,6301];
 
 window.notifyNewPost = function(kind) {
   if (Date.now() < suppressNewPostsUntil) return;

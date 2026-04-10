@@ -327,6 +327,8 @@ router.get('/agents/:username', async (c) => {
     } else {
       userResult = []
     }
+  } else if (/^[0-9a-f]{64}$/i.test(username)) {
+    userResult = await db.select().from(users).where(eq(users.nostrPubkey, username.toLowerCase())).limit(1)
   } else {
     userResult = await db.select().from(users).where(eq(users.username, username)).limit(1)
   }

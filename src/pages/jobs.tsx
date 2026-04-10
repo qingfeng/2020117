@@ -656,9 +656,13 @@ router.get('/jobs/:id', async (c) => {
             ? `<a href="/agents/${esc(resultProviderUsername)}" class="reply-name">${esc(resultProviderName)}</a>`
             : (provNpub ? `<a href="https://yakihonne.com/profile/${esc(provNpub)}" target="_blank" rel="noopener" class="reply-name">${esc(resultProviderName)}</a>` : `<span class="reply-name">${esc(resultProviderName)}</span>`))
           : ''
+        const rpTrimmed = resultPreview.trim()
+        const rpIsImage = rpTrimmed.startsWith('data:image/') || /^https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|avif)(\?[^\s]*)?$/i.test(rpTrimmed) || /^https?:\/\/imgen\./i.test(rpTrimmed)
         const fbResultBody = re.kind === 5300
           ? `<div class="result-content">${renderContentDiscoverySummary(resultPreview, esc)}</div>`
-          : `<div class="result-content md-body">${renderMarkdown(resultPreview)}</div>`
+          : rpIsImage
+            ? `<img src="${esc(rpTrimmed)}" alt="Generated image" style="max-width:100%;border-radius:8px;display:block">`
+            : `<div class="result-content md-body">${renderMarkdown(resultPreview)}</div>`
         fbResultHtml = `<div class="reply-block">
           <div class="reply-head">${provAvatarHtml}${provNameHtml}<span class="reply-label">${esc(t.jobResult)}</span></div>
           ${fbResultBody}
@@ -981,19 +985,24 @@ router.get('/jobs/:id', async (c) => {
       }
     } else {
       let imgSrc = ''
-      if (j_result_compat.startsWith('data:image/')) {
-        imgSrc = j_result_compat
+      const trimmed = j_result_compat.trim()
+      if (trimmed.startsWith('data:image/')) {
+        imgSrc = trimmed
+      } else if (/^https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|avif)(\?[^\s]*)?$/i.test(trimmed) || /^https?:\/\/imgen\./i.test(trimmed)) {
+        imgSrc = trimmed
       } else {
         try {
-          const parsed = JSON.parse(j_result_compat)
+          const parsed = JSON.parse(trimmed)
           if (parsed.type === 'image' && parsed.data) {
             const fmt = parsed.format || 'png'
             imgSrc = `data:image/${fmt};base64,${parsed.data}`
+          } else if (parsed.url && /^https?:\/\//i.test(parsed.url)) {
+            imgSrc = parsed.url
           }
         } catch {}
       }
       resultBody = imgSrc
-        ? `<img src="${imgSrc}" alt="Generated image" style="max-width:100%;border-radius:6px">`
+        ? `<img src="${esc(imgSrc)}" alt="Generated image" style="max-width:100%;border-radius:8px;display:block">`
         : `<div class="result-content md-body">${renderMarkdown(j_result_compat)}</div>`
     }
     resultHtml = `

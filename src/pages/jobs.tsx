@@ -592,7 +592,8 @@ router.get('/jobs/:id', async (c) => {
           const actorLabel = actorName || a.pubkey.slice(0, 12) + '...'
           const actorUser = await db.select({ username: users.username }).from(users).where(eq(users.nostrPubkey, a.pubkey)).limit(1)
           const actorUsername = actorUser[0]?.username || null
-          const timeA = new Date(a.eventCreatedAt * 1000).toISOString().replace('T', ' ').slice(0, 16)
+          const timeAIso = new Date(a.eventCreatedAt * 1000).toISOString()
+          const timeA = `<time datetime="${timeAIso}">${timeAIso.slice(0, 16).replace('T', ' ')}</time>`
           let label = '', cls = '', reason = ''
           if (a.kind === 7000) {
             const status = atVal('status') || 'unknown'

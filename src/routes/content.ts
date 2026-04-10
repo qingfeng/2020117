@@ -243,12 +243,17 @@ content.get('/relay/events', async (c) => {
 
   const KIND_LABELS: Record<number, string> = {
     0: 'profile', 1: 'note', 6: 'repost', 7: 'reaction',
-    5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
-    6100: 'result: text', 6200: 'result: image', 6250: 'result: video',
-    6300: 'result: content discovery', 6301: 'result: stt', 6302: 'result: translation', 6303: 'result: summary',
+    5001: 'summarization', 5002: 'translation', 5050: 'text generation',
+    5100: 'image generation', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'content discovery', 5301: 'speech-to-text',
+    6001: 'result: summary', 6002: 'result: translation', 6050: 'result: text',
+    6100: 'result: image', 6200: 'result: image', 6250: 'result: video',
+    6300: 'result: content discovery', 6301: 'result: stt',
     7000: 'job feedback', 30023: 'article', 30333: 'heartbeat', 30311: 'endorsement', 31117: 'job review', 31990: 'handler info',
   }
+  // Helper: is this a DVM job request or result kind?
+  const isDvmReq = (k: number) => k === 5001 || k === 5002 || k === 5050 || (k >= 5100 && k <= 5399)
+  const isDvmRes = (k: number) => k === 6001 || k === 6002 || k === 6050 || (k >= 6100 && k <= 6399)
 
   const events = rows.map(r => {
     const user = pubkeyNames.get(r.pubkey)
@@ -283,8 +288,8 @@ content.get('/relay/events', async (c) => {
     else if (kindNum === 1) action = 'posted'
     else if (kindNum === 6) action = 'reposted'
     else if (kindNum === 7) action = `reacted ${preview || '+'}`
-    else if (kindNum >= 5100 && kindNum <= 5303) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
-    else if (kindNum >= 6100 && kindNum <= 6303) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
+    else if (isDvmReq(kindNum)) action = `requested ${KIND_LABELS[kindNum] || 'job'}`
+    else if (isDvmRes(kindNum)) action = `submitted ${KIND_LABELS[kindNum] || 'result'}`
     else if (kindNum === 7000) action = tags.status === 'processing' ? 'started processing' : tags.status === 'success' ? 'settled job' : tags.status === 'error' ? 'rejected result' : `feedback: ${tags.status || 'update'}`
     else if (kindNum === 30023) action = 'published article'
     else if (kindNum === 30333) action = 'heartbeat'
@@ -299,8 +304,8 @@ content.get('/relay/events', async (c) => {
     let detail = ''
     if (kindNum === 0 && profileAbout) detail = profileAbout
     else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
-    else if (kindNum >= 5100 && kindNum <= 5303 && tags.input) detail = tags.input
-    else if (kindNum >= 6100 && kindNum <= 6303) {
+    else if (isDvmReq(kindNum) && tags.input) detail = tags.input
+    else if (isDvmRes(kindNum)) {
       detail = summarizeDvmResult(kindNum, preview)
     }
     else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
@@ -336,8 +341,8 @@ content.get('/relay/events', async (c) => {
       pubkey: r.pubkey, npub, actor_name: actorName, username: user?.username || null,
       avatar_url: user?.avatarUrl || null, action, detail, pow,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
-      job_event_id: (kindNum >= 5100 && kindNum <= 5303) ? r.eventId
-        : (kindNum >= 6100 && kindNum <= 6303 || kindNum === 7000 || kindNum === 31117 || kindNum === 30311) ? (tags.e || null) : null,
+      job_event_id: isDvmReq(kindNum) ? r.eventId
+        : (isDvmRes(kindNum) || kindNum === 7000 || kindNum === 31117 || kindNum === 30311) ? (tags.e || null) : null,
       note_event_id: noteEventId,
       nevent: kindNum === 1 ? eventIdToNevent(r.eventId, ['wss://relay.2020117.xyz'], r.pubkey) : null,
       article_title: articleTitle, article_summary: articleSummary,
@@ -439,12 +444,12 @@ content.get('/relay/events', async (c) => {
   // Enrich DVM events with earnings data from dvm_job table
   // For Kind 6xxx results: tags.e references the request event, look up dvm_job.request_event_id
   // For Kind 5xxx requests: the event_id IS the request event, look up dvm_job.request_event_id
-  const dvmEventIds = events.filter(e => (e.kind >= 5100 && e.kind <= 5303) || (e.kind >= 6100 && e.kind <= 6303) || e.kind === 31117)
+  const dvmEventIds = events.filter(e => isDvmReq(e.kind) || isDvmRes(e.kind) || e.kind === 31117)
   const earningsMap = new Map<string, { earned_sats: number; provider_name: string | null; customer_name: string | null; status: string }>()
 
   if (dvmEventIds.length > 0) {
     // Collect request event IDs: for Kind 5xxx it's event_id, for Kind 6xxx it's ref_event_id (tags.e)
-    const requestEventIds = dvmEventIds.map(e => (e.kind >= 6100 || e.kind === 31117) ? e.ref_event_id : e.event_id).filter(Boolean) as string[]
+    const requestEventIds = dvmEventIds.map(e => (isDvmRes(e.kind) || e.kind === 31117) ? e.ref_event_id : e.event_id).filter(Boolean) as string[]
     if (requestEventIds.length > 0) {
       const jobRows = await db.select({
         requestEventId: dvmJobs.requestEventId,
@@ -494,7 +499,7 @@ content.get('/relay/events', async (c) => {
   type ResultItem = { actor_name: string; detail: string; kind_label: string; earned_sats: number; created_at: number; review?: typeof reviewMap extends Map<string, infer V> ? V : never }
   const resultMap = new Map<string, ResultItem[]>()
   for (const e of events) {
-    if (e.kind >= 6100 && e.kind <= 6303 && e.ref_event_id) {
+    if (isDvmRes(e.kind) && e.ref_event_id) {
       const earnings = earningsMap.get(e.ref_event_id)
       const sats = earnings?.earned_sats || 0
       const review = reviewMap.get(e.ref_event_id)
@@ -511,12 +516,12 @@ content.get('/relay/events', async (c) => {
   }
 
   // For request events missing results in current page, look up from DB
-  const requestIds = events.filter(e => e.kind >= 5100 && e.kind <= 5303).map(e => e.event_id)
+  const requestIds = events.filter(e => isDvmReq(e.kind)).map(e => e.event_id)
   const missingResultIds = requestIds.filter(id => !resultMap.has(id))
   if (missingResultIds.length > 0) {
     for (const reqId of missingResultIds.slice(0, 10)) {
       const resRows = await db.select({ pubkey: relayEvents.pubkey, kind: relayEvents.kind, contentPreview: relayEvents.contentPreview, tags: relayEvents.tags, eventCreatedAt: relayEvents.eventCreatedAt })
-        .from(relayEvents).where(and(sql`${relayEvents.kind} >= 6100 AND ${relayEvents.kind} <= 6303`, sql`instr(${relayEvents.tags}, ${reqId}) > 0`))
+        .from(relayEvents).where(and(sql`(${relayEvents.kind} IN (6001,6002,6050) OR (${relayEvents.kind} >= 6100 AND ${relayEvents.kind} <= 6399))`, sql`instr(${relayEvents.tags}, ${reqId}) > 0`))
         .orderBy(desc(relayEvents.eventCreatedAt)).limit(3)
       if (resRows.length > 0) {
         const items: ResultItem[] = []
@@ -594,13 +599,13 @@ content.get('/relay/events', async (c) => {
   }
 
   // For standalone result events (parent request not on page), look up request input from DB
-  const orphanResults = events.filter(e => e.kind >= 6100 && e.kind <= 6303 && e.ref_event_id && !requestIds.includes(e.ref_event_id))
+  const orphanResults = events.filter(e => isDvmRes(e.kind) && e.ref_event_id && !requestIds.includes(e.ref_event_id))
   const requestInfoMap = new Map<string, { input: string; customer_name: string; kind_label: string }>()
   if (orphanResults.length > 0) {
     const orphanReqIds = [...new Set(orphanResults.map(e => e.ref_event_id!))]
     for (const reqId of orphanReqIds.slice(0, 15)) {
       const reqRows = await db.select({ kind: relayEvents.kind, pubkey: relayEvents.pubkey, tags: relayEvents.tags })
-        .from(relayEvents).where(and(sql`${relayEvents.kind} >= 5100 AND ${relayEvents.kind} <= 5303`, eq(relayEvents.eventId, reqId))).limit(1)
+        .from(relayEvents).where(and(sql`(${relayEvents.kind} IN (5001,5002,5050) OR (${relayEvents.kind} >= 5100 AND ${relayEvents.kind} <= 5399))`, eq(relayEvents.eventId, reqId))).limit(1)
       if (reqRows.length > 0) {
         const rq = reqRows[0]
         const rqTags = rq.tags ? JSON.parse(rq.tags) : {}
@@ -621,25 +626,25 @@ content.get('/relay/events', async (c) => {
     if (e.kind === 31117 && !explicitKindFilter) return false
     if (e.kind === 7000 && !explicitKindFilter) return false
     // Only hide result if its parent request is in the current page
-    if (e.kind >= 6100 && e.kind <= 6303 && e.ref_event_id && requestIds.includes(e.ref_event_id) && !explicitKindFilter) return false
+    if (isDvmRes(e.kind) && e.ref_event_id && requestIds.includes(e.ref_event_id) && !explicitKindFilter) return false
     return true
   })
 
   // Enrich with stats, earnings, results, and reviews
   const enrichedEvents = filteredEvents.map(e => {
     const stats = noteStats.get(e.event_id)
-    const earningsKey = (e.kind >= 6100 && e.kind <= 6303) ? e.ref_event_id : e.event_id
+    const earningsKey = (isDvmRes(e.kind)) ? e.ref_event_id : e.event_id
     const earnings = earningsKey ? earningsMap.get(earningsKey) : undefined
     const earningsData = earnings ? { earned_sats: earnings.earned_sats, provider_name: earnings.provider_name, customer_name: earnings.customer_name, job_status: earnings.status } : {}
     // Attach results to request events
-    const results = (e.kind >= 5100 && e.kind <= 5303) ? resultMap.get(e.event_id) : undefined
+    const results = (isDvmReq(e.kind)) ? resultMap.get(e.event_id) : undefined
     const resultsData = results ? { results } : {}
     // Attach review to standalone result events (not grouped under request)
-    const reviewKey = (e.kind >= 6100 && e.kind <= 6303) ? e.ref_event_id : null
+    const reviewKey = (isDvmRes(e.kind)) ? e.ref_event_id : null
     const review = reviewKey ? reviewMap.get(reviewKey) : undefined
     const reviewData = review ? { review } : {}
     // Attach parent request info to standalone result events
-    const reqInfo = (e.kind >= 6100 && e.kind <= 6303 && e.ref_event_id) ? requestInfoMap.get(e.ref_event_id) : undefined
+    const reqInfo = (isDvmRes(e.kind) && e.ref_event_id) ? requestInfoMap.get(e.ref_event_id) : undefined
     const reqData = reqInfo ? { request_input: reqInfo.input, request_customer: reqInfo.customer_name, request_kind_label: reqInfo.kind_label } : {}
     // Use latest child event time for sorting
     const childTimes = results?.map(r => r.created_at) || []

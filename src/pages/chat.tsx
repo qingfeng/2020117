@@ -273,7 +273,7 @@ async function getRelay() {
   return relay
 }
 
-function subscribeForRequest(r, eventId, thinkingEl) {
+function subscribeForRequest(r, eventId, thinkingEl, resultKind) {
   const since = Math.floor(Date.now() / 1000) - 5
   let done = false
   const stillTimer = setTimeout(() => {
@@ -281,7 +281,7 @@ function subscribeForRequest(r, eventId, thinkingEl) {
   }, 30000)
 
   const sub = r.subscribe(
-    [{ kinds: [7000, 6100], '#e': [eventId], since }],
+    [{ kinds: [7000, resultKind], '#e': [eventId], since }],
     {
       onevent(ev) {
         if (ev.kind === 7000) {
@@ -289,7 +289,7 @@ function subscribeForRequest(r, eventId, thinkingEl) {
           if (status === 'processing') updateThinking(thinkingEl, 'agent-thinking')
           return
         }
-        if (ev.kind === 6100) {
+        if (ev.kind === resultKind) {
           done = true
           clearTimeout(stillTimer)
           clearThinkingTimer(thinkingEl)
@@ -317,7 +317,19 @@ function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+function isImageUrl(u) {
+  const s = (u || '').trim()
+  if (!s.startsWith('http')) return false
+  if (s.indexOf('imgen.') !== -1) return true
+  const base = s.split('?')[0].toLowerCase()
+  return base.endsWith('.jpg') || base.endsWith('.jpeg') || base.endsWith('.png') || base.endsWith('.gif') || base.endsWith('.webp') || base.endsWith('.avif')
+}
+
 function renderText(raw) {
+  const trimmed = (raw || '').trim()
+  if (isImageUrl(trimmed)) {
+    return '<img src="' + esc(trimmed) + '" alt="Generated image" style="max-width:100%;border-radius:8px;display:block">'
+  }
   // Minimal markdown: code blocks, inline code, bold, line breaks
   let s = esc(raw)
   // code blocks (triple-backtick blocks) — use encoded backticks since we esc'd the text
@@ -404,7 +416,7 @@ async function resolvePending(r) {
   return new Promise(resolve => {
     let found = 0
     const sub = r.subscribe(
-      [{ kinds: [6100], '#e': ids, limit: ids.length * 2 }],
+      [{ kinds: [6050, 6100], '#e': ids, limit: ids.length * 2 }],
       {
         onevent(ev) {
           const reqId = ev.tags.find(t => t[0] === 'e')?.[1]
@@ -690,7 +702,7 @@ async function doSend(identity, text) {
     ]
 
     const template = {
-      kind: 5050,
+      kind: _dvmKind,
       pubkey: identity.pubkey,
       content: encryptedContent,
       tags,
@@ -713,7 +725,7 @@ async function doSend(identity, text) {
     addPending(event.id, text)
 
     // Subscribe BEFORE publishing to avoid missing fast replies
-    subscribeForRequest(r, event.id, thinkingEl)
+    subscribeForRequest(r, event.id, thinkingEl, _dvmKind + 1000)
 
     await r.publish(event)
     updateThinking(thinkingEl, 'pow-done')
@@ -866,9 +878,13 @@ async function enterChat(identity) {
 let _identity = null
 let _model = 'fast'   // 'fast' | 'deep'
 let _targetPubkey = ''  // direct-to agent pubkey from ?to= param
+let _dvmKind = 5050     // DVM kind to use, from ?kind= param
 
-// Read ?to= param and show targeted agent banner
-const _toParam = new URLSearchParams(location.search).get('to') || ''
+// Read ?to= and ?kind= params
+const _urlParams = new URLSearchParams(location.search)
+const _toParam = _urlParams.get('to') || ''
+const _kindParam = Number(_urlParams.get('kind') || '0')
+if (_kindParam >= 5000 && _kindParam <= 5999) _dvmKind = _kindParam
 if (_toParam) {
   _targetPubkey = _toParam
   const bar = document.getElementById('agent-bar')

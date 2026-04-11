@@ -301,11 +301,13 @@ content.get('/relay/events', async (c) => {
     const npub = pubkeyToNpub(r.pubkey)
     const actorName = user?.displayName || user?.username || profileName || handlerName || npub.slice(0, 16) + '...'
 
+    const isEncrypted = !!(tags.encrypted === '1')
+
     let detail = ''
     if (kindNum === 0 && profileAbout) detail = profileAbout
     else if (kindNum === 1 && preview) detail = preview.slice(0, 200)
-    else if (isDvmReq(kindNum) && tags.input) detail = tags.input
-    else if (isDvmRes(kindNum)) {
+    else if (isDvmReq(kindNum) && !isEncrypted && tags.input) detail = tags.input
+    else if (isDvmRes(kindNum) && !isEncrypted) {
       detail = summarizeDvmResult(kindNum, preview)
     }
     else if (kindNum === 30023 && articleTitle) detail = articleTitle + (articleSummary ? ' — ' + articleSummary.slice(0, 120) : '')
@@ -339,7 +341,7 @@ content.get('/relay/events', async (c) => {
     return {
       event_id: r.eventId, kind: r.kind, kind_label: KIND_LABELS[r.kind] || `kind ${r.kind}`,
       pubkey: r.pubkey, npub, actor_name: actorName, username: user?.username || null,
-      avatar_url: user?.avatarUrl || null, action, detail, pow,
+      avatar_url: user?.avatarUrl || null, action, detail, pow, is_encrypted: isEncrypted,
       ref_event_id: tags.e || null, ref_nevent: tags.e ? eventIdToNevent(tags.e) : null,
       target_pubkey: kindNum === 30311 ? (tags.p || null) : null,
       job_event_id: isDvmReq(kindNum) ? r.eventId
@@ -601,7 +603,7 @@ content.get('/relay/events', async (c) => {
 
   // For standalone result events (parent request not on page), look up request input from DB
   const orphanResults = events.filter(e => isDvmRes(e.kind) && e.ref_event_id && !requestIds.includes(e.ref_event_id))
-  const requestInfoMap = new Map<string, { input: string; customer_name: string; kind_label: string }>()
+  const requestInfoMap = new Map<string, { input: string; customer_name: string; kind_label: string; encrypted: boolean }>()
   if (orphanResults.length > 0) {
     const orphanReqIds = [...new Set(orphanResults.map(e => e.ref_event_id!))]
     for (const reqId of orphanReqIds.slice(0, 15)) {
@@ -615,6 +617,7 @@ content.get('/relay/events', async (c) => {
           input: rqTags.input || '',
           customer_name: cust?.displayName || cust?.username || pubkeyToNpub(rq.pubkey).slice(0, 16) + '...',
           kind_label: KIND_LABELS[rq.kind] || 'job',
+          encrypted: rqTags.encrypted === '1',
         })
       }
     }
@@ -646,7 +649,7 @@ content.get('/relay/events', async (c) => {
     const reviewData = review ? { review } : {}
     // Attach parent request info to standalone result events
     const reqInfo = (isDvmRes(e.kind) && e.ref_event_id) ? requestInfoMap.get(e.ref_event_id) : undefined
-    const reqData = reqInfo ? { request_input: reqInfo.input, request_customer: reqInfo.customer_name, request_kind_label: reqInfo.kind_label } : {}
+    const reqData = reqInfo ? { request_input: reqInfo.input, request_customer: reqInfo.customer_name, request_kind_label: reqInfo.kind_label, is_encrypted: reqInfo.encrypted || e.is_encrypted } : {}
     // Use latest child event time for sorting
     const childTimes = results?.map(r => r.created_at) || []
     const latestChild = childTimes.length > 0 ? Math.max(...childTimes) : 0

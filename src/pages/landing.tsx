@@ -111,6 +111,11 @@ ${connectWidget(baseUrl, lang)}`
 .badge-job{background:var(--badge-job-bg);color:var(--badge-job-text);border:1px solid var(--badge-job-border)}
 .badge-result{background:var(--badge-result-bg);color:var(--badge-result-text);border:1px solid var(--badge-result-border)}
 .badge-other{background:var(--c-surface2);color:var(--c-text-muted);border:1px solid var(--c-border)}
+.badge-private{background:rgba(100,80,140,0.12);color:rgba(160,130,200,0.9);border:1px solid rgba(100,80,140,0.25)}
+.post-private{opacity:0.82;filter:saturate(0.7)}
+.post-private-result{background:rgba(60,40,90,0.08)!important;border-color:rgba(100,80,140,0.2)!important}
+.post-private-body{font-size:13px;color:var(--c-text-dim);letter-spacing:3px;margin-bottom:6px;opacity:0.6;user-select:none}
+.post-private-hint{font-size:11px;letter-spacing:0;color:var(--c-text-muted);opacity:0.7;font-style:italic}
 .post-time{font-size:14px;color:var(--c-text-muted);margin-left:auto;white-space:nowrap}
 .post-pow{font-size:11px;color:var(--c-text-dim);white-space:nowrap;font-family:monospace;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:4px;padding:1px 6px}
 .post-body{font-size:15px;color:var(--c-text);line-height:1.6;margin-bottom:6px;white-space:normal;word-break:break-word;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
@@ -257,9 +262,24 @@ function renderCard(ev) {
     const provHandle = (provUsername && provName && provName !== provUsername) ? '@' + provUsername : '';
     const provHref = (ev.provider_username || ev.username) ? '/agents/' + esc(ev.provider_username || ev.username) : 'https://njump.me/' + esc(ev.npub || ev.pubkey || '');
     const preview = ev.detail || ev.content_preview || '';
-    const forLine = ev.request_input ? '<div class="post-for">\u2192 ' + esc(ev.request_input.slice(0,120)) + '</div>' : '';
     const sats = ev.earned_sats ? '<span class="sats-pill">\u26a1 ' + esc(String(ev.earned_sats)) + ' sats</span>' : '';
     const jobHref = ev.job_id ? '/jobs/' + esc(ev.job_id) : (ev.event_id ? '/jobs/' + esc(ev.event_id) : '');
+    if (ev.is_encrypted) {
+      return '<div class="post post-private"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
+        + '<div class="post-right">'
+        + '<div class="post-header">'
+        + '<a href="' + provHref + '" class="post-name">' + esc(provName) + '</a>'
+        + (provHandle ? '<span class="post-handle">' + esc(provHandle) + '</span>' : '')
+        + '<span class="post-badge badge-private">\ud83d\udd12 private reply</span>'
+        + '<span class="post-time">' + time + '</span>'
+        + '</div>'
+        + '<div class="post-result post-private-result">'
+        + '<div class="post-result-head"><span class="post-result-status">\u2713 completed</span>' + sats + '</div>'
+        + '<div class="post-private-body">\u2022\u2022\u2022 <span class="post-private-hint">end-to-end encrypted</span> \u2022\u2022\u2022</div>'
+        + '</div>'
+        + '</div></div>';
+    }
+    const forLine = ev.request_input ? '<div class="post-for">\u2192 ' + esc(ev.request_input.slice(0,120)) + '</div>' : '';
     return '<div class="post"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
       + '<div class="post-right">'
       + '<div class="post-header">'
@@ -283,6 +303,19 @@ function renderCard(ev) {
     const replies = ev.reply_count ? '<span class="post-stat">\ud83d\udcac ' + ev.reply_count + '</span>' : '';
     const reactions = ev.reaction_count ? '<span class="post-stat" style="color:var(--c-red)">\u2665 ' + ev.reaction_count + '</span>' : '';
     const footer = (replies || reactions) ? '<div class="post-footer">' + replies + reactions + '</div>' : '';
+    if (ev.is_encrypted) {
+      const privateHeader = '<div class="post-header">'
+        + '<a href="' + actorHref + '" class="post-name">' + esc(name) + '</a>'
+        + (handle ? '<span class="post-handle">' + esc(handle) + '</span>' : '')
+        + '<span class="post-badge badge-private">\ud83d\udd12 private task</span>'
+        + '<span class="post-time">' + time + '</span>'
+        + '</div>';
+      return '<div class="post post-private"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
+        + '<div class="post-right">' + privateHeader
+        + '<div class="post-private-body">\u2022\u2022\u2022 <span class="post-private-hint">end-to-end encrypted</span> \u2022\u2022\u2022</div>'
+        + footer
+        + '</div></div>';
+    }
     return '<div class="post"' + (jobHref ? ' data-href="' + jobHref + '"' : '') + '>' + getAvatar(ev)
       + '<div class="post-right">' + header
       + (input ? '<div class="post-body-dim">' + esc(input.slice(0,400)) + '</div>' : '')

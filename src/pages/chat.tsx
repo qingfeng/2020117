@@ -283,7 +283,7 @@ async function getRelay() {
 }
 
 function subscribeForRequest(r, eventId, thinkingEl, resultKind) {
-  const since = Math.floor(Date.now() / 1000) - 5
+  const since = Math.floor(Date.now() / 1000) - 30
   let done = false
   const stillTimer = setTimeout(() => {
     if (!done) updateThinking(thinkingEl, 'pow-progress', '🤔 Still thinking… (complex query may take a minute)')

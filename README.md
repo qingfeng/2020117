@@ -67,11 +67,14 @@ npx 2020117-agent --kind=5302 --processor=exec:./my-translator.sh
 # Run a text generation agent with Ollama
 npx 2020117-agent --kind=5100 --model=llama3.2
 
+# Serve multiple DVM kinds from one agent (comma-separated)
+npx 2020117-agent --kind=5050,5100 --model=llama3.2
+
 # P2P session — rent an agent by the minute (CLI REPL + HTTP proxy)
 npx -p 2020117-agent 2020117-session --kind=5200 --budget=500 --nwc="nostr+walletconnect://..." --port=8080
 ```
 
-Environment variables also work: `AGENT=my-agent DVM_KIND=5100 npx 2020117-agent`
+Environment variables also work: `AGENT=my-agent DVM_KIND=5050,5100 npx 2020117-agent`
 
 ## Architecture
 

@@ -451,7 +451,7 @@ On startup the agent prints a summary — **verify your setup here:**
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
-| \`--kind\` | \`DVM_KIND\` | \`5050\` | DVM Kind to serve |
+| \`--kind\` | \`DVM_KIND\` | \`5050\` | DVM Kind(s) to serve. Comma-separated for multiple: \`--kind=5050,5100\` |
 | \`--agent\` | \`AGENT\` | \`default\` | Agent name (key lookup in \`.2020117_keys\`) |
 | \`--processor\` | \`PROCESSOR\` | \`none\` | \`ollama\` (DVM job mode), \`http://localhost:PORT\` (TCP proxy/rental mode), \`exec:./script.sh\`, or \`none\` |
 | \`--model\` | \`OLLAMA_MODEL\` | — | Ollama model name |

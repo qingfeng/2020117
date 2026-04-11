@@ -503,7 +503,17 @@ router.get('/jobs/:id', async (c) => {
       const timeStr = `<time datetime="${timeIso}">${timeIso.replace('T', ' ').slice(0, 19)}</time>`
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-      const isEncrypted = tags.encrypted === '1'
+      let isEncrypted = tags.encrypted === '1'
+
+      // For 6xxx result events, also check if the parent request was encrypted
+      if (!isEncrypted && re.kind >= 6000 && re.kind <= 6999 && tags.e) {
+        const parentReqRow = await db.select({ tags: relayEvents.tags })
+          .from(relayEvents).where(eq(relayEvents.eventId, tags.e)).limit(1)
+        if (parentReqRow.length > 0) {
+          const parentTags = parentReqRow[0].tags ? JSON.parse(parentReqRow[0].tags) : {}
+          if (parentTags.encrypted === '1') isEncrypted = true
+        }
+      }
 
       // Fetch full event from relay to get complete input/content
       let fullInput: string | null = isEncrypted ? null : (tags.input || re.contentPreview || null)
@@ -875,19 +885,28 @@ router.get('/jobs/:id', async (c) => {
   // Escape HTML
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+  // Build result section
+  // inputType may be 'text' (default) for old encrypted jobs where backfill failed — treat as encrypted
+  // if input is null: either explicitly encrypted, or a failed backfill that set no input
+  let jobIsEncrypted = j.inputType === 'encrypted' || !j.input
+  // Also check relay_events for the request event's encrypted tag (catches old records where inputType wasn't set correctly)
+  if (!jobIsEncrypted && j.requestEventId) {
+    const reqReRow = await db.select({ tags: relayEvents.tags })
+      .from(relayEvents).where(eq(relayEvents.eventId, j.requestEventId)).limit(1)
+    if (reqReRow.length > 0) {
+      const reqTags = reqReRow[0].tags ? JSON.parse(reqReRow[0].tags) : {}
+      if (reqTags.encrypted === '1') jobIsEncrypted = true
+    }
+  }
+
   // OG meta
   const ogTitle = `${kindLabel} \u2014 ${statusLabel}`
-  const inputPreview = j.input ? esc(j.input.slice(0, 160)) : ''
+  const inputPreview = (!jobIsEncrypted && j.input) ? esc(j.input.slice(0, 160)) : ''
   const ogDesc = inputPreview ? `${customerName}: ${inputPreview}` : `DVM job by ${customerName}`
 
   // Format timestamp (ISO for <time> tag, JS will localize on client)
   const createdDate = j.createdAt instanceof Date ? j.createdAt.toISOString() : new Date(j.createdAt as any).toISOString()
   const localTime = (iso: string) => `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace('T', ' '))}</time>`
-
-  // Build result section
-  // inputType may be 'text' (default) for old encrypted jobs where backfill failed — treat as encrypted
-  // if input is null: either explicitly encrypted, or a failed backfill that set no input
-  const jobIsEncrypted = j.inputType === 'encrypted' || !j.input
 
   // Fetch full content for ALL 6xxx events in the activity log (including rejected ones)
   // Batch into a single relay request so we can display each provider's submission
@@ -949,7 +968,9 @@ router.get('/jobs/:id', async (c) => {
   }
 
   let resultHtml = ''
-  if (resultText) {
+  if (jobIsEncrypted) {
+    resultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
+  } else if (resultText) {
     const j_result_compat = resultText
     let resultBody = ''
     if (j.kind === 5300) {
@@ -1015,8 +1036,6 @@ router.get('/jobs/:id', async (c) => {
       })()}</div>
       ${resultBody}
     </div>`
-  } else if (jobIsEncrypted) {
-    resultHtml = `<div class="section"><div class="encrypted-badge">🔒 ${esc(t.jobEncrypted)}</div></div>`
   }
 
   // Build rejection history section

@@ -319,11 +319,15 @@ function buildFeedUrl() {
   return url;
 }
 
-function setFilter(btn, filter) {
+function setFilter(btn, filter, skipPush) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (filter === currentFilter) return;
   currentFilter = filter;
+  if (!skipPush) {
+    const qs = filter === 'all' ? '' : '?filter=' + filter;
+    history.pushState({ filter }, '', location.pathname + qs);
+  }
   currentPage = 0;
   _hasMore = true;
   _loading = false;
@@ -431,6 +435,27 @@ function loadNewPosts() {
   loadMore();
   scrollTo(0, 0);
 }
+
+// Restore tab from URL on page load
+(function() {
+  const initFilter = new URLSearchParams(location.search).get('filter') || 'all';
+  if (initFilter !== 'all') {
+    currentFilter = initFilter;
+    document.querySelectorAll('.tab-btn').forEach(function(btn) {
+      const m = btn.getAttribute('onclick') && btn.getAttribute('onclick').match(/'([^']+)'\)/);
+      btn.classList.toggle('active', !!(m && m[1] === initFilter));
+    });
+  }
+})();
+
+window.addEventListener('popstate', function(e) {
+  const filter = (e.state && e.state.filter) || new URLSearchParams(location.search).get('filter') || 'all';
+  const btn = Array.from(document.querySelectorAll('.tab-btn')).find(function(b) {
+    const m = b.getAttribute('onclick') && b.getAttribute('onclick').match(/'([^']+)'\)/);
+    return m && m[1] === filter;
+  });
+  if (btn) setFilter(btn, filter, true);
+});
 
 loadStats();
 loadMore();

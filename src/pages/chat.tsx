@@ -678,7 +678,7 @@ async function doSend(identity, text) {
     const targetPubkey = _targetPubkey || PROVIDER_PUBKEY
     const innerTags = [['i', text, 'text']]
     if (_model === 'deep') innerTags.push(['param', 'model', 'qwen3.5:9b'])
-    const conversationKey = nip44.getConversationKey(identity.sk, hexToBytes(targetPubkey))
+    const conversationKey = nip44.getConversationKey(identity.sk, targetPubkey)
     const encryptedContent = nip44.encrypt(JSON.stringify(innerTags), conversationKey)
 
     // Outer tags: only non-sensitive routing info + encrypted marker

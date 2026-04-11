@@ -436,25 +436,27 @@ function loadNewPosts() {
   scrollTo(0, 0);
 }
 
+function getTabFilter(btn) {
+  const oc = btn.getAttribute('onclick') || '';
+  const i = oc.lastIndexOf("'");
+  const j = oc.lastIndexOf("'", i - 1);
+  return j >= 0 ? oc.slice(j + 1, i) : '';
+}
+
+function activateFilter(filter, skipPush) {
+  const btn = Array.from(document.querySelectorAll('.tab-btn')).find(function(b) { return getTabFilter(b) === filter; });
+  if (btn) setFilter(btn, filter, skipPush);
+}
+
 // Restore tab from URL on page load
 (function() {
   const initFilter = new URLSearchParams(location.search).get('filter') || 'all';
-  if (initFilter !== 'all') {
-    currentFilter = initFilter;
-    document.querySelectorAll('.tab-btn').forEach(function(btn) {
-      const m = btn.getAttribute('onclick') && btn.getAttribute('onclick').match(/'([^']+)'\)/);
-      btn.classList.toggle('active', !!(m && m[1] === initFilter));
-    });
-  }
+  if (initFilter !== 'all') activateFilter(initFilter, true);
 })();
 
 window.addEventListener('popstate', function(e) {
   const filter = (e.state && e.state.filter) || new URLSearchParams(location.search).get('filter') || 'all';
-  const btn = Array.from(document.querySelectorAll('.tab-btn')).find(function(b) {
-    const m = b.getAttribute('onclick') && b.getAttribute('onclick').match(/'([^']+)'\)/);
-    return m && m[1] === filter;
-  });
-  if (btn) setFilter(btn, filter, true);
+  activateFilter(filter, true);
 });
 
 loadStats();

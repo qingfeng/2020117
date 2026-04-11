@@ -10,6 +10,7 @@ const router = new Hono<AppContext>()
 
 const RELAY_URL = 'wss://relay.2020117.xyz'
 const PROVIDER_PUBKEY = 'ebfa498817513f4696b1bbda67d2a42d011e8cd42369d59ebf984788612abf05'
+const IMAGE_PROVIDER_PUBKEY = '98537463e624c7cf427d7abb69b43cda32e806b37ceee4aa57e0f27e2b6eb25e'
 const POW_DVM = 10   // Kind 5xxx — DVM request
 const POW_PROFILE = 20  // Kind 0 — social kind
 
@@ -152,8 +153,16 @@ import renderMathInElement from 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist
 
 const RELAY_URL = '${RELAY_URL}'
 const PROVIDER_PUBKEY = '${PROVIDER_PUBKEY}'
+const IMAGE_PROVIDER_PUBKEY = '${IMAGE_PROVIDER_PUBKEY}'
 const POW_DVM = ${POW_DVM}
 const POW_PROFILE = ${POW_PROFILE}
+
+function detectImageIntent(text) {
+  const t = text.toLowerCase()
+  const zhImgWords = ['画', '绘', '生成图', '图片', '图像', '照片', '插画', '壁纸', '海报', '头像']
+  const enImgWords = ['draw', 'paint', 'generate image', 'create image', 'make image', 'picture of', 'photo of', 'portrait of', 'illustration', 'wallpaper', 'render', 'sketch', 'artwork']
+  return zhImgWords.some(w => t.includes(w)) || enImgWords.some(w => t.includes(w))
+}
 
 // ─────────────────────────────────────────────────────────
 // NWC auto-payment (NIP-47)
@@ -686,10 +695,16 @@ async function doSend(identity, text) {
       appendSystemMsg('Switched to Deep mode — real Binance data will be injected')
     }
 
+    // Auto-detect image intent when kind not explicitly set via URL param
+    const _urlKind = Number(new URLSearchParams(location.search).get('kind') || '0')
+    const isImageRequest = _urlKind === 5100 || (!_urlKind && !_targetPubkey && detectImageIntent(text))
+    const effectiveKind = isImageRequest ? 5100 : _dvmKind
+    const effectiveResultKind = effectiveKind + 1000
+
     // Build sensitive inner tags, then encrypt with NIP-44 to the target provider
-    const targetPubkey = _targetPubkey || PROVIDER_PUBKEY
+    const targetPubkey = _targetPubkey || (isImageRequest ? IMAGE_PROVIDER_PUBKEY : PROVIDER_PUBKEY)
     const innerTags = [['i', text, 'text']]
-    if (_model === 'deep') innerTags.push(['param', 'model', 'qwen3.5:9b'])
+    if (_model === 'deep' && !isImageRequest) innerTags.push(['param', 'model', 'qwen3.5:9b'])
     const conversationKey = nip44.getConversationKey(identity.sk, targetPubkey)
     const encryptedContent = nip44.encrypt(JSON.stringify(innerTags), conversationKey)
 
@@ -702,7 +717,7 @@ async function doSend(identity, text) {
     ]
 
     const template = {
-      kind: _dvmKind,
+      kind: effectiveKind,
       pubkey: identity.pubkey,
       content: encryptedContent,
       tags,
@@ -725,7 +740,7 @@ async function doSend(identity, text) {
     addPending(event.id, text)
 
     // Subscribe BEFORE publishing to avoid missing fast replies
-    subscribeForRequest(r, event.id, thinkingEl, _dvmKind + 1000)
+    subscribeForRequest(r, event.id, thinkingEl, effectiveResultKind)
 
     await r.publish(event)
     updateThinking(thinkingEl, 'pow-done')

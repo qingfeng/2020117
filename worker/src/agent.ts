@@ -444,7 +444,7 @@ function subscribeDvmResults(label: string) {
       })
     },
   )
-  console.log(`[${label}] Subscribed to DVM results (Kind ${resultKind}) via relay`)
+  console.log(`[${label}] Subscribed to DVM results (Kind ${resultKinds.join(',')}) via relay`)
 }
 
 async function handleDvmResult(label: string, event: NostrEvent) {

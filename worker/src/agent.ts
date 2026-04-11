@@ -68,7 +68,8 @@ if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 // --- Config from env ---
 
-const KIND = Number(process.env.DVM_KIND) || 5050
+const KINDS: number[] = (process.env.DVM_KIND || '5050').split(',').map(s => Number(s.trim())).filter(Boolean)
+const KIND = KINDS[0]  // primary kind (for result subscriptions, registration, etc.)
 const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
 const P2P_ONLY = process.env.P2P_ONLY === 'true' || process.env.P2P_ONLY === '1'
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1
@@ -165,7 +166,7 @@ async function main() {
 
   // 1. Create and verify processor
   state.processor = await createProcessor()
-  console.log(`[${label}] kind=${KIND} processor=${state.processor.name} maxJobs=${MAX_CONCURRENT}`)
+  console.log(`[${label}] kind=${KINDS.join(',')} processor=${state.processor.name} maxJobs=${MAX_CONCURRENT}`)
   if (SUB_KIND) {
     console.log(`[${label}] Pipeline: sub-task kind=${SUB_KIND} (bid=${SUB_BID}${SUB_PROVIDER ? `, provider=${SUB_PROVIDER}` : ''})`)
   } else if (state.processor.name === 'none') {
@@ -283,7 +284,7 @@ async function setupNostr(label: string) {
   // 9. Start heartbeat (Kind 30333 to relay)
   const pricing: Record<string, number> = {}
   const priceSats = SATS_PER_CHUNK * CHUNKS_PER_PAYMENT
-  if (priceSats > 0) pricing[String(KIND)] = priceSats
+  if (priceSats > 0) KINDS.forEach(k => { pricing[String(k)] = priceSats })
 
   state.stopHeartbeat = startNostrHeartbeat(label, state.sovereignKeys, state.relayPool, {
     pricing,
@@ -300,7 +301,7 @@ async function setupNostr(label: string) {
   console.log(`═══════════════════════════════════════════════`)
   console.log(`  Agent ready: ${agentName}`)
   console.log(`  Pubkey:      ${keys.pubkey}`)
-  console.log(`  Kind:        ${KIND}`)
+  console.log(`  Kind:        ${KINDS.join(',')}`)
   console.log(`  Relays:      ${relays}`)
   console.log(`  Lightning:   ${LIGHTNING_ADDRESS || '(not set)'}`)
   console.log(`  NWC wallet:  ${state.nwcParsed ? 'connected' : '(not set)'}`)
@@ -320,7 +321,7 @@ async function publishAiInfo(label: string) {
     supported_models: state.processor?.name ? [state.processor.name] : [],
     default_model: state.processor?.name || 'default',
     dvm_compatible: true,
-    dvm_kinds: [KIND],
+    dvm_kinds: KINDS,
     pricing_hints: {
       currency: 'BTC',
       sats_per_prompt: SATS_PER_CHUNK * CHUNKS_PER_PAYMENT,
@@ -383,8 +384,8 @@ async function publishHandlerInfo(label: string) {
   const event = signEvent({
     kind: 31990,
     tags: [
-      ['d', `${agentName}-${KIND}`],
-      ['k', String(KIND)],
+      ['d', `${agentName}-${KINDS.join('-')}`],
+      ...KINDS.map(k => ['k', String(k)]),
     ],
     content: JSON.stringify(content),
   }, state.sovereignKeys.privkey)
@@ -413,16 +414,16 @@ function subscribeDvmRequests(label: string) {
   if (dvmSubscribed) return  // prevent double-subscribe (sovereign + platform both call this)
   dvmSubscribed = true
 
-  // Subscribe to all DVM requests of our kind (broadcast + directed)
+  // Subscribe to all DVM requests of our kind(s) (broadcast + directed)
   state.relayPool.subscribe(
-    { kinds: [KIND] },
+    { kinds: KINDS },
     (event: NostrEvent) => {
       handleDvmRequest(label, event).catch(e => {
         console.error(`[${label}] DVM request error: ${e.message}`)
       })
     },
   )
-  console.log(`[${label}] Subscribed to DVM requests (Kind ${KIND}) via relay`)
+  console.log(`[${label}] Subscribed to DVM requests (Kind ${KINDS.join(',')}) via relay`)
 }
 
 // --- Customer: subscribe to DVM results and auto-pay ---
@@ -434,9 +435,9 @@ function subscribeDvmResults(label: string) {
   dvmResultSubscribed = true
 
   // Subscribe to Kind 6xxx results directed to us (#p = our pubkey)
-  const resultKind = KIND + 1000
+  const resultKinds = KINDS.map(k => k + 1000)
   state.relayPool.subscribe(
-    { kinds: [resultKind], '#p': [state.sovereignKeys.pubkey] },
+    { kinds: resultKinds, '#p': [state.sovereignKeys.pubkey] },
     (event: NostrEvent) => {
       handleDvmResult(label, event).catch(e => {
         console.error(`[${label}] DVM result handler error: ${e.message}`)
@@ -699,7 +700,7 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
     console.log(`[${label}] DVM result: ${result.length} chars`)
 
     // Send result (Kind 6xxx = request kind + 1000)
-    const resultKind = KIND + 1000
+    const resultKind = event.kind + 1000
     // Prefer the bid the customer declared in the job; fall back to local fixed price.
     // bid tag is in the outer (unencrypted) event tags per NIP-90.
     const bidMsats = Number(event.tags.find(t => t[0] === 'bid')?.[1] || '0')
@@ -807,7 +808,7 @@ function startNostrHeartbeat(
       ['d', keys.pubkey],
       ['status', 'online'],
       ['capacity', String(getAvailableCapacity())],
-      ['kinds', String(KIND)],
+      ['kinds', KINDS.join(',')],
     ]
 
     // Add pricing tag (format: "5100:50,5200:100")

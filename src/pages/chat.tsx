@@ -60,6 +60,8 @@ body{overflow:hidden}
 .bubble code{background:var(--c-surface2);border:1px solid var(--c-border);padding:1px 5px;border-radius:3px;font-size:12px;font-family:'JetBrains Mono',monospace}
 .bubble pre{background:var(--c-surface2);border:1px solid var(--c-border);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px;margin:8px 0;font-family:'JetBrains Mono',monospace;white-space:pre-wrap}
 .bubble pre code{background:none;border:none;padding:0}
+.img-wrap{position:relative;margin:4px 0}
+.img-loading-hint{font-size:12px;color:var(--c-text-muted);margin-bottom:6px;font-style:italic}
 
 /* ── Agent bar ── */
 .agent-bar{padding:8px 20px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;gap:10px;font-size:13px;background:var(--c-surface);flex-shrink:0}
@@ -337,7 +339,15 @@ function isImageUrl(u) {
 function renderText(raw) {
   const trimmed = (raw || '').trim()
   if (isImageUrl(trimmed)) {
-    return '<img src="' + esc(trimmed) + '" alt="Generated image" style="max-width:100%;border-radius:8px;display:block">'
+    return '<div class="img-wrap"><div class="img-loading-hint">🖼 Loading image\u2026</div><img src="' + esc(trimmed) + '" alt="Generated image" style="max-width:100%;border-radius:8px;display:block" onload="this.previousSibling.style.display=\\'none\\'" onerror="this.previousSibling.textContent=\\'Image failed to load\\'"></div>'
+  }
+  // Also detect image URL embedded in text (e.g. with trailing newline or extra text)
+  const httpIdx = trimmed.indexOf('http')
+  if (httpIdx !== -1) {
+    const urlPart = trimmed.slice(httpIdx).split(/\\s/)[0]
+    if (urlPart && isImageUrl(urlPart) && trimmed.replace(urlPart, '').trim() === '') {
+      return '<div class="img-wrap"><div class="img-loading-hint">🖼 Loading image\u2026</div><img src="' + esc(urlPart) + '" alt="Generated image" style="max-width:100%;border-radius:8px;display:block" onload="this.previousSibling.style.display=\\'none\\'" onerror="this.previousSibling.textContent=\\'Image failed to load\\'"></div>'
+    }
   }
   // Minimal markdown: code blocks, inline code, bold, line breaks
   let s = esc(raw)

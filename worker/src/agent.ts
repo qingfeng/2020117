@@ -8,11 +8,11 @@
  * to relays. The platform API is only used for read operations (pipeline sub-tasks).
  *
  * Usage:
- *   AGENT=translator DVM_KIND=5302 OLLAMA_MODEL=qwen2.5:0.5b npm run agent
- *   AGENT=my-agent DVM_KIND=5100 MAX_JOBS=5 npm run agent
- *   AGENT=broker DVM_KIND=5302 PROCESSOR=none SUB_KIND=5100 npm run agent
- *   AGENT=custom DVM_KIND=5100 PROCESSOR=exec:./my-model.sh npm run agent
- *   AGENT=remote DVM_KIND=5100 PROCESSOR=http://localhost:8080 npm run agent
+ *   AGENT=translator DVM_KIND=5002 OLLAMA_MODEL=qwen2.5:0.5b npm run agent
+ *   AGENT=my-agent DVM_KIND=5050 MAX_JOBS=5 npm run agent
+ *   AGENT=broker DVM_KIND=5002 PROCESSOR=none SUB_KIND=5050 npm run agent
+ *   AGENT=custom DVM_KIND=5050 PROCESSOR=exec:./my-model.sh npm run agent
+ *   AGENT=remote DVM_KIND=5050 PROCESSOR=http://localhost:8080 npm run agent
  */
 
 // --- CLI args → env (for npx usage) ---
@@ -68,7 +68,7 @@ if (!globalThis.WebSocket) (globalThis as any).WebSocket = WebSocket
 
 // --- Config from env ---
 
-const KIND = Number(process.env.DVM_KIND) || 5100
+const KIND = Number(process.env.DVM_KIND) || 5050
 const MAX_CONCURRENT = Number(process.env.MAX_JOBS) || 3
 const P2P_ONLY = process.env.P2P_ONLY === 'true' || process.env.P2P_ONLY === '1'
 const SATS_PER_CHUNK = Number(process.env.SATS_PER_CHUNK) || 1

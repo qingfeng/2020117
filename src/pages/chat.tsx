@@ -690,7 +690,7 @@ async function doSend(identity, text) {
     ]
 
     const template = {
-      kind: 5100,
+      kind: 5050,
       pubkey: identity.pubkey,
       content: encryptedContent,
       tags,

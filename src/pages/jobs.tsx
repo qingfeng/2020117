@@ -837,8 +837,17 @@ router.get('/jobs/:id', async (c) => {
 
   // Derive effective status for display
   if (reviewInfo) {
-    effectiveStatus = 'completed'
+    // Low rating (≤2) without payment = customer rejected the result
+    const noPaid = !j.paidMsats || j.paidMsats === 0
+    if (reviewInfo.rating > 0 && reviewInfo.rating <= 2 && noPaid) {
+      effectiveStatus = 'rejected'
+    } else {
+      effectiveStatus = 'completed'
+    }
   } else if (j.result && effectiveStatus === 'processing') {
+    effectiveStatus = 'result_available'
+  } else if (effectiveStatus === 'completed' && (!j.paidMsats || j.paidMsats === 0)) {
+    // Provider record marked 'completed' (they sent result) but no actual payment — show result_available
     effectiveStatus = 'result_available'
   }
   const statusColor = STATUS_COLORS[effectiveStatus] || 'var(--c-text-muted)'
@@ -858,7 +867,7 @@ router.get('/jobs/:id', async (c) => {
     }).from(relayEvents).where(
       and(
         sqlTag`instr(${relayEvents.tags}, ${requestEventId}) > 0`,
-        sqlTag`${relayEvents.kind} IN (1, 7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`,
+        sqlTag`(${relayEvents.kind} IN (1, 7, 7000, 31117) OR (${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999))`,
       )
     ).orderBy(relayEvents.eventCreatedAt).limit(20)
   }

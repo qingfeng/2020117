@@ -448,7 +448,7 @@ content.get('/relay/events', async (c) => {
   // For Kind 6xxx results: tags.e references the request event, look up dvm_job.request_event_id
   // For Kind 5xxx requests: the event_id IS the request event, look up dvm_job.request_event_id
   const dvmEventIds = events.filter(e => isDvmReq(e.kind) || isDvmRes(e.kind) || e.kind === 31117)
-  const earningsMap = new Map<string, { earned_sats: number; provider_name: string | null; customer_name: string | null; status: string }>()
+  const earningsMap = new Map<string, { role: string | null; earned_sats: number; provider_name: string | null; customer_name: string | null; status: string }>()
 
   if (dvmEventIds.length > 0) {
     // Collect request event IDs: for Kind 5xxx it's event_id, for Kind 6xxx it's ref_event_id (tags.e)
@@ -456,6 +456,7 @@ content.get('/relay/events', async (c) => {
     if (requestEventIds.length > 0) {
       const jobRows = await db.select({
         requestEventId: dvmJobs.requestEventId,
+        role: dvmJobs.role,
         status: dvmJobs.status,
         bidMsats: dvmJobs.bidMsats,
         priceMsats: dvmJobs.priceMsats,
@@ -470,11 +471,20 @@ content.get('/relay/events', async (c) => {
         if (sats > 0) {
           const provUser = job.providerPubkey ? pubkeyNames.get(job.providerPubkey) : null
           const custUser = job.customerPubkey ? pubkeyNames.get(job.customerPubkey) : null
+          const existing = earningsMap.get(job.requestEventId)
+          // Customer-role records take priority: they reflect the true customer-facing status.
+          // Provider 'completed' only means "I sent my result", not "customer paid and approved".
+          // Also: if provider record shows 'completed' but no actual payment, demote to 'result_available'.
+          if (existing && existing.role === 'customer' && job.role === 'provider') continue
+          const displayStatus = (job.role === 'provider' && job.status === 'completed' && !job.paidMsats)
+            ? 'result_available'
+            : job.status
           earningsMap.set(job.requestEventId, {
+            role: job.role,
             earned_sats: sats,
             provider_name: provUser?.displayName || provUser?.username || null,
             customer_name: custUser?.displayName || custUser?.username || null,
-            status: job.status,
+            status: displayStatus,
           })
         }
       }

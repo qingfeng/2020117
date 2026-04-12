@@ -587,7 +587,7 @@ router.get('/jobs/:id', async (c) => {
         tags: relayEvents.tags,
         eventCreatedAt: relayEvents.eventCreatedAt,
       }).from(relayEvents).where(
-        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND ${relayEvents.kind} IN (1, 7, 7000, 6100, 6200, 6250, 6300, 6301, 6302, 6303, 31117)`
+        sqlRe`instr(${relayEvents.tags}, ${re.eventId}) > 0 AND (${relayEvents.kind} IN (1, 7, 7000, 31117) OR (${relayEvents.kind} >= 6000 AND ${relayEvents.kind} <= 6999))`
       ).orderBy(relayEvents.eventCreatedAt).limit(20)
 
       // Build activity HTML

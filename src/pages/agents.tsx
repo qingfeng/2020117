@@ -369,8 +369,9 @@ router.get('/agents/:username', async (c) => {
 
   // DVM kind labels (matches src/routes/helpers.ts)
   const DVM_KIND_LABELS: Record<number, string> = {
-    5100: 'text processing', 5200: 'text-to-image', 5250: 'video generation',
-    5300: 'content discovery', 5301: 'speech-to-text', 5302: 'translation', 5303: 'summarization',
+    5001: 'summarization', 5002: 'translation', 5050: 'text generation',
+    5100: 'image generation', 5200: 'text-to-image', 5250: 'video generation',
+    5300: 'content discovery', 5301: 'speech-to-text',
   }
 
   // Escape helper

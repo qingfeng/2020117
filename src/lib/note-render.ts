@@ -27,7 +27,7 @@ export function renderNoteContent(text: string): string {
       textBuf.push(
         e(p)
           .replace(/\n/g, '<br>')
-          .replace(/#([\w\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf]+)/g, '<span class="hashtag">#$1</span>')
+          .replace(/#([\w\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf]+)/g, '<a href="https://yakihonne.com/search?tab=notes&amp;keyword=$1" target="_blank" rel="noopener" class="hashtag">#$1</a>')
       )
     }
   }

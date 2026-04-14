@@ -149,7 +149,7 @@ for(const p of parts){
     if(IMG.test(p)){imgs.push(p);}
     else{const d=p.length>55?p.slice(0,55)+'\\u2026':p;tb.push('<a href="'+esc(p)+'" target="_blank" rel="noopener" class="note-link">'+esc(d)+'</a>');}
   }else{
-    tb.push(esc(p).replace(/\\n/g,'<br>').replace(/#([\\w\\u4e00-\\u9fff\\u3040-\\u30ff\\u3400-\\u4dbf]+)/g,'<span class="hashtag">#$1</span>'));
+    tb.push(esc(p).replace(/\\n/g,'<br>').replace(/#([\\w\\u4e00-\\u9fff\\u3040-\\u30ff\\u3400-\\u4dbf]+)/g,'<a href="https://yakihonne.com/search?tab=notes&keyword=$1" target="_blank" rel="noopener" class="hashtag">#$1</a>'));
   }
 }
 const th=tb.join('').replace(/^(<br>)+|(<br>)+$/g,'').trim();

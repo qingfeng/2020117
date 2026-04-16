@@ -216,7 +216,7 @@ type OkCallback = { resolve: (ok: boolean) => void; timer: ReturnType<typeof set
 export class NostrRelay {
   private ws: WebSocket | null = null
   private url: string
-  private subs = new Map<string, (event: NostrEvent) => void>()
+  private subs = new Map<string, { filters: Record<string, unknown>; handler: (event: NostrEvent) => void }>()
   private eoseCallbacks = new Map<string, () => void>()
   private pendingOk = new Map<string, OkCallback>()
   private _connected = false
@@ -265,17 +265,22 @@ export class NostrRelay {
   private async reconnect() {
     try {
       await this.connect()
-      // Re-subscribe after reconnect
-      for (const [id, handler] of this.subs) {
-        // Can't re-send original filters, but the subscription handler is preserved
-        // Caller should re-subscribe if needed
+      // Re-send all active subscriptions to the relay
+      for (const [id, { filters }] of this.subs) {
+        this.ws!.send(JSON.stringify(['REQ', id, filters]))
       }
-    } catch {}
+      if (this.subs.size > 0) {
+        console.log(`[NostrRelay] Reconnected to ${this.url}, restored ${this.subs.size} subscription(s)`)
+      }
+    } catch (e: any) {
+      console.error(`[NostrRelay] Reconnect failed for ${this.url}: ${e.message}`)
+    }
   }
 
   private handleMessage(msg: any[]) {
     if (msg[0] === 'EVENT') {
-      const handler = this.subs.get(msg[1])
+      const sub = this.subs.get(msg[1])
+      const handler = sub?.handler
       if (handler) handler(msg[2] as NostrEvent)
     } else if (msg[0] === 'OK') {
       const cb = this.pendingOk.get(msg[1])
@@ -315,7 +320,7 @@ export class NostrRelay {
     if (!this.ws || !this._connected) throw new Error('Not connected')
 
     const id = randomBytes(4).toString('hex')
-    this.subs.set(id, handler)
+    this.subs.set(id, { filters, handler })
     if (onEose) this.eoseCallbacks.set(id, onEose)
     this.ws.send(JSON.stringify(['REQ', id, filters]))
 
@@ -324,6 +329,7 @@ export class NostrRelay {
       close: () => {
         this.subs.delete(id)
         this.eoseCallbacks.delete(id)
+
         if (this.ws && this._connected) {
           try { this.ws.send(JSON.stringify(['CLOSE', id])) } catch {}
         }

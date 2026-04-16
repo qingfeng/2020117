@@ -617,7 +617,16 @@ async function handleDvmRequest(label: string, event: NostrEvent) {
   // Dedup: skip already-seen events
   if (!markSeen(event.id)) return
 
-  if (!acquireSlot()) return
+  if (!acquireSlot()) {
+    console.warn(`[${label}] DVM request ${event.id.slice(0, 8)} dropped — agent at capacity (${state.activeJobs}/${MAX_CONCURRENT})`)
+    const errorEvent = signEvent({
+      kind: 7000,
+      tags: [['p', event.pubkey], ['e', event.id], ['status', 'error']],
+      content: 'Agent at capacity, please retry later',
+    }, state.sovereignKeys.privkey)
+    await state.relayPool.publish(errorEvent).catch(() => {})
+    return
+  }
 
   try {
     // Step 1: p-tag filter — if request is directed (has p tags) but not to us, skip

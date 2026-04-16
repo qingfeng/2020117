@@ -136,11 +136,16 @@ a.post-stat:hover{color:var(--c-accent)}
 #composer-right{flex:1;display:flex;flex-direction:column;gap:8px}
 #composer-text{width:100%;min-height:72px;resize:vertical;border:1px solid var(--c-border);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;background:var(--c-bg);color:var(--c-text);line-height:1.5;transition:border-color 0.15s;box-sizing:border-box}
 #composer-text:focus{outline:none;border-color:var(--c-accent)}
-.composer-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px}
-#composer-status{font-size:13px;color:var(--c-text-muted);flex:1}
+.composer-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+#composer-status{font-size:13px;color:var(--c-text-muted);flex:1;min-width:0}
 #composer-send{padding:7px 18px;background:var(--c-accent);color:#fff;border:none;border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.15s}
 #composer-send:hover{opacity:0.85}
 #composer-send:disabled{opacity:0.5;cursor:default}
+.composer-mode{display:flex;border:1px solid var(--c-border);border-radius:6px;overflow:hidden;flex-shrink:0}
+.composer-mode-btn{padding:5px 12px;font-size:12px;font-weight:600;border:none;background:none;color:var(--c-text-muted);cursor:pointer;font-family:inherit;transition:background 0.15s,color 0.15s}
+.composer-mode-btn.active{background:var(--c-surface);color:var(--c-text)}
+#composer-dvm-opts{display:none;gap:8px;align-items:center}
+#composer-kind-select{padding:5px 8px;border:1px solid var(--c-border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--c-surface);color:var(--c-text);cursor:pointer}
 #composer-login{display:none;padding:14px 20px;border-bottom:1px solid var(--c-border);font-size:14px;color:var(--c-text-muted)}
 #composer-login a{color:var(--c-accent);text-decoration:none}
 #composer-login a:hover{text-decoration:underline}
@@ -152,6 +157,19 @@ a.post-stat:hover{color:var(--c-accent)}
     <textarea id="composer-text" placeholder="${t.composerPlaceholder}" rows="3"></textarea>
     <div class="composer-footer">
       <span id="composer-status"></span>
+      <div class="composer-mode">
+        <button class="composer-mode-btn active" id="btn-mode-note" onclick="setComposerMode('note')">Note</button>
+        <button class="composer-mode-btn" id="btn-mode-dvm" onclick="setComposerMode('dvm')">DVM Task</button>
+      </div>
+      <div id="composer-dvm-opts">
+        <select id="composer-kind-select">
+          <option value="5050">Text Generation</option>
+          <option value="5001">Summarization</option>
+          <option value="5002">Translation</option>
+          <option value="5100">Image Generation</option>
+          <option value="5300">Content Discovery</option>
+        </select>
+      </div>
       <button id="composer-send">${t.composerPost}</button>
     </div>
   </div>
@@ -534,9 +552,24 @@ window.renderLiveNote = function(ev) {
 import { getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
 import { hexToBytes, bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
+import * as nip44 from 'https://esm.sh/nostr-tools@2.23.3/nip44'
 
 const RELAY_URL = 'wss://relay.2020117.xyz'
 const POW_DIFFICULTY = 20
+const POW_DVM = 10
+const PROVIDER_PUBKEY = 'ebfa498817513f4696b1bbda67d2a42d011e8cd42369d59ebf984788612abf05'
+const IMAGE_PROVIDER_PUBKEY = '98537463e624c7cf427d7abb69b43cda32e806b37ceee4aa57e0f27e2b6eb25e'
+
+let _composerMode = 'note'
+function setComposerMode(mode) {
+  _composerMode = mode
+  document.getElementById('btn-mode-note').classList.toggle('active', mode === 'note')
+  document.getElementById('btn-mode-dvm').classList.toggle('active', mode === 'dvm')
+  document.getElementById('composer-dvm-opts').style.display = mode === 'dvm' ? 'flex' : 'none'
+  document.getElementById('composer-text').placeholder = mode === 'dvm' ? 'Describe the task…' : '${t.composerPlaceholder}'
+  document.getElementById('composer-send').textContent = mode === 'dvm' ? 'Send Task' : '${t.composerPost}'
+}
+window.setComposerMode = setComposerMode
 
 function leadingZeroBits(hex) {
   let n = 0
@@ -639,15 +672,59 @@ async function publishNote(text) {
   }
 }
 
+async function publishDvmTask(text) {
+  const sendBtn = document.getElementById('composer-send')
+  const statusEl = document.getElementById('composer-status')
+  const textarea = document.getElementById('composer-text')
+  const kind = Number(document.getElementById('composer-kind-select').value)
+  const targetPubkey = kind === 5100 ? IMAGE_PROVIDER_PUBKEY : PROVIDER_PUBKEY
+  sendBtn.disabled = true
+  sendBtn.textContent = 'Mining…'
+  statusEl.textContent = ''
+  let relay
+  try {
+    const ck = nip44.getConversationKey(identity.sk, targetPubkey)
+    const encryptedContent = nip44.encrypt(JSON.stringify([['i', text, 'text']]), ck)
+    const template = {
+      kind,
+      pubkey: identity.pubkey,
+      content: encryptedContent,
+      tags: [['p', targetPubkey], ['encrypted'], ['bid', '0'], ['relays', RELAY_URL]],
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    const mined = await minePoW(template, POW_DVM, n => {
+      statusEl.textContent = '⛏ ' + n + ' hashes…'
+    })
+    statusEl.textContent = ''
+    sendBtn.textContent = 'Sending…'
+    const event = finalizeEvent(mined, identity.sk)
+    relay = await Relay.connect(RELAY_URL)
+    await relay.publish(event)
+    textarea.value = ''
+    statusEl.textContent = '✓ Task sent · ' + event.id.slice(0, 8)
+    setTimeout(() => { statusEl.textContent = '' }, 5000)
+  } catch (e) {
+    statusEl.textContent = '✗ ' + (e.message || 'Failed')
+  } finally {
+    if (relay) relay.close()
+    sendBtn.disabled = false
+    sendBtn.textContent = 'Send Task'
+  }
+}
+
 if (identity) {
   document.getElementById('composer-send').addEventListener('click', () => {
     const text = document.getElementById('composer-text').value.trim()
-    if (text) publishNote(text)
+    if (!text) return
+    if (_composerMode === 'dvm') publishDvmTask(text)
+    else publishNote(text)
   })
   document.getElementById('composer-text').addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       const text = e.target.value.trim()
-      if (text) publishNote(text)
+      if (!text) return
+      if (_composerMode === 'dvm') publishDvmTask(text)
+      else publishNote(text)
     }
   })
 }

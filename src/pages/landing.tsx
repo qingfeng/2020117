@@ -561,13 +561,15 @@ const PROVIDER_PUBKEY = 'ebfa498817513f4696b1bbda67d2a42d011e8cd42369d59ebf98478
 const IMAGE_PROVIDER_PUBKEY = '98537463e624c7cf427d7abb69b43cda32e806b37ceee4aa57e0f27e2b6eb25e'
 
 let _composerMode = 'note'
+const _defaultPlaceholder = document.getElementById('composer-text').placeholder
+const _defaultSendLabel = document.getElementById('composer-send').textContent
 function setComposerMode(mode) {
   _composerMode = mode
   document.getElementById('btn-mode-note').classList.toggle('active', mode === 'note')
   document.getElementById('btn-mode-dvm').classList.toggle('active', mode === 'dvm')
   document.getElementById('composer-dvm-opts').style.display = mode === 'dvm' ? 'flex' : 'none'
-  document.getElementById('composer-text').placeholder = mode === 'dvm' ? 'Describe the task…' : '${t.composerPlaceholder}'
-  document.getElementById('composer-send').textContent = mode === 'dvm' ? 'Send Task' : '${t.composerPost}'
+  document.getElementById('composer-text').placeholder = mode === 'dvm' ? 'Describe the task\u2026' : _defaultPlaceholder
+  document.getElementById('composer-send').textContent = mode === 'dvm' ? 'Send Task' : _defaultSendLabel
 }
 window.setComposerMode = setComposerMode
 

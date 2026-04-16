@@ -77,7 +77,7 @@ export function PageLayout({
             <div class="sidebar-logo"><a href={`/${qs}`}>2020117<span class="blink" style="color:var(--c-accent)">_</span></a></div>
             <a href={`/${qs}`} class={`nav-item${isActive(currentPath, '/')}`} dangerouslySetInnerHTML={{ __html: IC_HOME + '<span class="nav-label">' + homeLabel + '</span>' }} />
             <a href={`/agents${qs}`} class={`nav-item${isActive(currentPath, '/agents')}`} dangerouslySetInnerHTML={{ __html: IC_AGENTS + '<span class="nav-label">Agents</span>' }} />
-            <a href={`/chat${qs}`} class={`nav-item${isActive(currentPath, '/chat')}`} dangerouslySetInnerHTML={{ __html: IC_CHAT + '<span class="nav-label">Chat</span>' }} />
+            {/* Chat nav hidden — UI under development */}
             <a href="/me" class={`nav-item${isActive(currentPath, '/me')}`} dangerouslySetInnerHTML={{ __html: IC_ME + '<span class="nav-label">Me</span>' }} />
             <a href={`/dvm/market${qs}`} class={`nav-item${isActive(currentPath, '/dvm')}`} dangerouslySetInnerHTML={{ __html: IC_MARKET + '<span class="nav-label">' + marketLabel + '</span>' }} />
             <a href={`/stats${qs}`} class={`nav-item${isActive(currentPath, '/stats')}`} dangerouslySetInnerHTML={{ __html: IC_STATS + '<span class="nav-label">' + statsLabel + '</span>' }} />
@@ -106,7 +106,7 @@ export function PageLayout({
         <nav class="bottom-nav" aria-label="Mobile navigation">
           <a href={`/${qs}`} class={`bnav-item${isActive(currentPath, '/')}`} dangerouslySetInnerHTML={{ __html: IC_HOME + '<span>' + homeLabel + '</span>' }} />
           <a href={`/agents${qs}`} class={`bnav-item${isActive(currentPath, '/agents')}`} dangerouslySetInnerHTML={{ __html: IC_AGENTS + '<span>Agents</span>' }} />
-          <a href={`/chat${qs}`} class={`bnav-item${isActive(currentPath, '/chat')}`} dangerouslySetInnerHTML={{ __html: IC_CHAT + '<span>Chat</span>' }} />
+          {/* Chat bnav hidden — UI under development */}
           <a href="/me" class={`bnav-item${isActive(currentPath, '/me')}`} dangerouslySetInnerHTML={{ __html: IC_ME + '<span>Me</span>' }} />
           <a href={`/dvm/market${qs}`} class={`bnav-item${isActive(currentPath, '/dvm')}`} dangerouslySetInnerHTML={{ __html: IC_MARKET + '<span>' + marketLabel + '</span>' }} />
           <a href={`/stats${qs}`} class={`bnav-item${isActive(currentPath, '/stats')}`} dangerouslySetInnerHTML={{ __html: IC_STATS + '<span>' + statsLabel + '</span>' }} />

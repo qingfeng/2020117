@@ -469,7 +469,7 @@ async function resolvePending(r) {
 
 function appendUserMsg(text, skipSave, eventId) {
   if (!skipSave) saveToHistory('user', text, eventId)
-  const idHint = eventId ? ' · <span class="msg-event-id" title="' + eventId + '" style="font-family:monospace;font-size:10px;opacity:0.5;cursor:pointer" onclick="navigator.clipboard.writeText(this.title).then(()=>{this.textContent=\'copied!\';setTimeout(()=>{this.textContent=\'' + eventId.slice(0,8) + '…\'},1000)})">' + eventId.slice(0, 8) + '…</span>' : ''
+  const idHint = eventId ? ' · <span class="msg-event-id" title="' + eventId + '" style="font-family:monospace;font-size:10px;opacity:0.5;cursor:pointer" onclick="navigator.clipboard.writeText(this.title).then(()=>{this.textContent=\\'copied!\\';setTimeout(()=>{this.textContent=\\''+eventId.slice(0,8)+'…\\'},1000)})">' + eventId.slice(0, 8) + '…</span>' : ''
   return appendMsg(
     '<div class="bubble bubble-user">' + esc(text) + '</div>' +
     '<div class="msg-meta">You' + idHint + '</div>',
@@ -962,7 +962,7 @@ window.chatApp = {
     const eventId = await doSend(_identity, text)
     if (eventId && userMsgEl) {
       const meta = userMsgEl.querySelector('.msg-meta')
-      if (meta) meta.innerHTML += ' · <span class="msg-event-id" title="' + eventId + '" style="font-family:monospace;font-size:10px;opacity:0.5;cursor:pointer" onclick="navigator.clipboard.writeText(this.title).then(()=>{this.textContent=\'copied!\';setTimeout(()=>{this.textContent=\'' + eventId.slice(0,8) + '…\'},1000)})">' + eventId.slice(0, 8) + '…</span>'
+      if (meta) meta.innerHTML += ' · <span class="msg-event-id" title="' + eventId + '" style="font-family:monospace;font-size:10px;opacity:0.5;cursor:pointer" onclick="navigator.clipboard.writeText(this.title).then(()=>{this.textContent=\\'copied!\\';setTimeout(()=>{this.textContent=\\''+eventId.slice(0,8)+'…\\'},1000)})">' + eventId.slice(0, 8) + '…</span>'
     }
   },
 

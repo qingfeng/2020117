@@ -552,8 +552,6 @@ window.renderLiveNote = function(ev) {
 import { getPublicKey, finalizeEvent, getEventHash } from 'https://esm.sh/nostr-tools@2.23.3/pure'
 import { hexToBytes, bytesToHex } from 'https://esm.sh/nostr-tools@2.23.3/utils'
 import { Relay } from 'https://esm.sh/nostr-tools@2.23.3/relay'
-import * as nip44 from 'https://esm.sh/nostr-tools@2.23.3/nip44'
-
 const RELAY_URL = 'wss://relay.2020117.xyz'
 const POW_DIFFICULTY = 20
 const POW_DVM = 10
@@ -685,13 +683,11 @@ async function publishDvmTask(text) {
   statusEl.textContent = ''
   let relay
   try {
-    const ck = nip44.getConversationKey(identity.sk, targetPubkey)
-    const encryptedContent = nip44.encrypt(JSON.stringify([['i', text, 'text']]), ck)
     const template = {
       kind,
       pubkey: identity.pubkey,
-      content: encryptedContent,
-      tags: [['p', targetPubkey], ['encrypted'], ['bid', '0'], ['relays', RELAY_URL]],
+      content: '',
+      tags: [['i', text, 'text'], ['p', targetPubkey], ['bid', '0'], ['relays', RELAY_URL]],
       created_at: Math.floor(Date.now() / 1000),
     }
     const mined = await minePoW(template, POW_DVM, n => {

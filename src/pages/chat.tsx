@@ -434,6 +434,8 @@ async function resolvePending(r) {
 
   return new Promise(resolve => {
     let found = 0
+    let remaining = ids.length
+    let eosed = false
     const sub = r.subscribe(
       [{ kinds: [6050, 6100], '#e': ids, limit: ids.length * 2 }],
       {
@@ -444,23 +446,24 @@ async function resolvePending(r) {
           if (!item) return
           removePending(reqId)
           found++
+          remaining--
           const amountTag = ev.tags.find(t => t[0] === 'amount')
           const bolt11 = amountTag?.[2] || ''
           const amountSats = bolt11 ? Math.floor(Number(amountTag?.[1] || '0') / 1000) : 0
           const providerModel = ev.tags.find(t => t[0] === 'model')?.[1] || ''
           appendAgentMsg(ev.content, amountSats, bolt11, false, reqId, ev.pubkey, providerModel)
+          if (remaining <= 0) { try { sub.close() } catch {} resolve() }
         },
         oneose() {
-          sub.close()
-          if (found === 0 && ids.length > 0) {
-            appendSystemMsg('Still waiting for ' + (ids.length) + ' response(s) — agent is processing…')
-          }
-          resolve()
+          eosed = true
+          if (remaining <= 0) { try { sub.close() } catch {} resolve(); return }
+          // Results not yet on relay — keep subscription open for live push
+          appendSystemMsg('Still waiting for ' + remaining + ' response(s) — agent is processing…')
         }
       }
     )
-    // Safety timeout if relay doesn't send EOSE
-    setTimeout(() => { try { sub.close() } catch {} resolve() }, 8000)
+    // Safety timeout: close after 10 minutes if still unresolved
+    setTimeout(() => { try { sub.close() } catch {} resolve() }, 10 * 60 * 1000)
   })
 }
 
